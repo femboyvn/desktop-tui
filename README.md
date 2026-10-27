@@ -101,6 +101,17 @@ padding = [0, 0]
 background_color = { r = 30, g = 30, b = 30 }
 ```
 
+## Development
+
+Read [CONTRIBUTE.md](CONTRIBUTE.md) for contributor setup and pull request guidance.
+Use [HOW_TO_RUN.md](HOW_TO_RUN.md) to build and launch the app and
+[HOW_TO_TEST.md](HOW_TO_TEST.md) to verify a change.
+Start with [AGENTS.md](AGENTS.md) for the development and Git workflow. See
+[CODEBASE.md](CODEBASE.md) for setup and architecture,
+[CODING_CONVENTION.md](CODING_CONVENTION.md) for coding conventions, and
+[HOW_TO_IMPLEMENT_A_FUNCTION.md](HOW_TO_IMPLEMENT_A_FUNCTION.md) for implementation
+and verification steps.
+
 ## Star history
 
 <a href="https://www.star-history.com/#julien-cpsn/desktop-tui&Date">
