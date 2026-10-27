@@ -1,12 +1,15 @@
 Desktop-TUI 🖥️
 ===
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-![GitHub Release](https://img.shields.io/github/v/release/julien-cpsn/desktop-tui?link=https%3A%2F%2Fgithub.com%2FJulien-cpsn%2Fdesktop-tuiC%2Freleases%2Flatest)
-[![Crates.io](https://repology.org/badge/version-for-repo/crates_io/desktop-tui.svg)](https://crates.io/crates/desktop-tui)
+This checkout is maintained for private, independent development in
+`femboyvn/desktop-tui`. Changes and reviews stay in that repository; development
+does not include contributions to the original parent project or public forks.
+Verify that the remote is private and detached before pushing, as described in
+[AGENTS.md](AGENTS.md). Cargo package publishing is disabled.
 
 > [!WARNING]
-> This is an experimental project made in 2 days. It is not meant to be used as is nor to become the new desktop environnement standard. Feel free to fork and send PRs
+> This is an experimental terminal desktop. Review the current limitations in
+> [CODEBASE.md](CODEBASE.md) before relying on it.
 
 A desktop environment without graphics (tmux-like).
 
@@ -26,28 +29,30 @@ Features:
 
 ## How to use
 
-### Install
+### Install from this checkout
+
+Use the private checkout as the installation source:
 
 ```shell
-cargo install desktop-tui
+cargo install --path . --locked
 ```
 
 ### Compile
 
 ```shell
-cargo build
+cargo build --locked
 ```
 
 ```shell
-cargo build --release
+cargo build --locked --release
 ```
 
 ### Run
 
-You can replace `cargo run --` with `desktop-tui`
+You can replace `cargo run --locked --` with the locally installed `desktop-tui`.
 
 ```shell
-cargo run -- <shortcut_folder_path>
+cargo run --locked -- ./shortcuts
 ```
 
 If no path is provided, desktop-tui will try using theses paths:
@@ -103,7 +108,7 @@ background_color = { r = 30, g = 30, b = 30 }
 
 ## Development
 
-Read [CONTRIBUTE.md](CONTRIBUTE.md) for contributor setup and pull request guidance.
+Read [CONTRIBUTE.md](CONTRIBUTE.md) for private development and internal review guidance.
 Use [HOW_TO_RUN.md](HOW_TO_RUN.md) to build and launch the app and
 [HOW_TO_TEST.md](HOW_TO_TEST.md) to verify a change.
 Start with [AGENTS.md](AGENTS.md) for the development and Git workflow. See
@@ -111,16 +116,6 @@ Start with [AGENTS.md](AGENTS.md) for the development and Git workflow. See
 [CODING_CONVENTION.md](CODING_CONVENTION.md) for coding conventions, and
 [HOW_TO_IMPLEMENT_A_FUNCTION.md](HOW_TO_IMPLEMENT_A_FUNCTION.md) for implementation
 and verification steps.
-
-## Star history
-
-<a href="https://www.star-history.com/#julien-cpsn/desktop-tui&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=julien-cpsn/desktop-tui&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=julien-cpsn/desktop-tui&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=julien-cpsn/desktop-tui&type=Date" />
- </picture>
-</a>
 
 ## License
 
