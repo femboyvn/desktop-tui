@@ -3,14 +3,24 @@
 Desktop-TUI is an experimental terminal desktop that launches command-line apps
 inside movable AppCUI windows. This repository is one Rust 2024 package with a
 single binary entry point, `src/main.rs`. It has no library target, workspace
-members beyond itself, CI workflow, or automated tests at present.
+members beyond itself, or CI workflow. Desktop input regression tests live in
+`src/desktop.rs`.
+
+Development is intended to remain private and independent of the original parent
+project. Keep work local or in an owner-approved private repository; do not send
+contributions, issues, or pull requests to the parent or public forks, or sync
+development with them. Follow [AGENTS.md](AGENTS.md) to verify a destination's
+visibility and fork status before any authorized push. This policy does not
+establish the current server-side repository settings. `publish = false` in
+[Cargo.toml](Cargo.toml) disables Cargo package publishing; it does not control Git
+hosting visibility. Preserve the inherited MIT license and attribution.
 
 Read [AGENTS.md](AGENTS.md) for the working and Git workflow,
 [CODING_CONVENTION.md](CODING_CONVENTION.md) for editing conventions, and
 [HOW_TO_IMPLEMENT_A_FUNCTION.md](HOW_TO_IMPLEMENT_A_FUNCTION.md) for implementation
 and verification steps.
 The focused command guides are [HOW_TO_RUN.md](HOW_TO_RUN.md) and
-[HOW_TO_TEST.md](HOW_TO_TEST.md); contribution expectations are in
+[HOW_TO_TEST.md](HOW_TO_TEST.md); private development and handoff expectations are in
 [CONTRIBUTE.md](CONTRIBUTE.md).
 
 ## Setup and commands
@@ -45,7 +55,7 @@ install the Rust toolchain itself. It is not required for the standard Cargo wor
 | `cargo check --locked` | Type-check the binary without producing the executable. |
 | `cargo build --locked` | Build the debug executable in `target/debug/`. |
 | `cargo build --locked --release` | Build with the size-focused release profile. |
-| `cargo test --locked` | Compile and run tests; the current tree contains none. |
+| `cargo test --locked` | Compile and run the unit tests. |
 | `cargo clippy --locked --all-targets` | Check Rust code, including test targets, for lint diagnostics. |
 | `cargo fmt --all -- --check` | Invoke rustfmt; formatting is deliberately disabled by configuration. |
 | `cargo run --locked -- ./shortcuts` | Start the interactive desktop with the repository examples. |
@@ -103,6 +113,8 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 8. `close_command` requests termination and closes both channels before closing
    the window. The desktop Exit command invokes it on reachable window handles,
    closes the desktop, and `main` exits the process after the UI loop returns.
+   The desktop denies AppCUI's Escape close request so an Escape prefix from an
+   Alt sequence cannot exit the application.
 
 ## Configuration contract
 

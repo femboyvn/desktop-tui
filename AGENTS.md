@@ -4,6 +4,21 @@ This file applies to the whole repository. Follow the user's task and any more
 specific `AGENTS.md` in the directory you change. Keep these documents aligned
 with the code when architecture, commands, or conventions change.
 
+## Private project policy
+
+Develop this project independently and keep its work private. Do not contribute
+changes, open issues or pull requests, push branches, or synchronize work with the
+original parent project or public forks. Preserve the existing license and
+attribution.
+
+The intended repository is `femboyvn/desktop-tui`. Use only its owner-approved
+private remote for any authorized push or internal review. Before pushing,
+verify the destination owner/repository, private visibility, and that it is
+independent of the original parent's fork network.
+Remote names, local configuration, and this policy do not establish server-side
+privacy. Keep work local if the destination cannot be verified. Create an
+internal issue or pull request only when the user requests one.
+
 ## Read before working
 
 1. Read [CODEBASE.md](CODEBASE.md) for setup, module ownership, and runtime flow.
@@ -13,8 +28,8 @@ with the code when architecture, commands, or conventions change.
 4. Read [README.md](README.md) and the relevant source and sample shortcuts for
    user-facing behavior. The source and Cargo configuration are authoritative
    when prose has drifted; update the affected documentation with the change.
-5. Read [CONTRIBUTE.md](CONTRIBUTE.md) for contributor setup, issue reports, and
-   pull request expectations.
+5. Read [CONTRIBUTE.md](CONTRIBUTE.md) for private development setup, internal
+   handoffs, and review expectations.
 6. Use [HOW_TO_RUN.md](HOW_TO_RUN.md) for build/run instructions and
    [HOW_TO_TEST.md](HOW_TO_TEST.md) for automated and manual verification.
 
@@ -61,7 +76,7 @@ agent host without local skill discovery, open the relevant `SKILL.md` directly.
 
 1. Inspect `git status --short --branch`, `git diff`, `git diff --cached`, and
    `git log -5 --oneline` before editing. Record existing changes and keep them
-   out of your patch. Never discard, stash, or overwrite another contributor's
+   out of your patch. Never discard, stash, or overwrite another developer's
    work to obtain a clean tree.
 2. Use a short-lived branch from the agreed base, such as `docs/agent-onboarding`,
    `feat/terminal-search`, or `fix/resize-bounds`. Inspect the current branch first;
@@ -81,11 +96,14 @@ agent host without local skill discovery, open the relevant `SKILL.md` directly.
    the convention for new work. Explain a non-obvious reason in the body.
 6. Avoid rewriting published history. Do not force-push, reset destructively,
    clean untracked files, amend another person's commit, or rebase shared work
-   without explicit authorization. Sync with the agreed base before integration;
-   resolve conflicts deliberately and repeat affected checks.
+   without explicit authorization. Integrate only against the agreed local or
+   approved private base; resolve conflicts deliberately and repeat affected
+   checks. Do not fetch or merge from the original parent as a routine sync step.
 7. Leave a reviewable patch by default. Commit, push, merge, publish, or tag only
-   when requested or covered by the agreed workflow. A PR description should state
-   the problem, resulting behavior, validation, and any remaining limitations.
+   when requested or covered by the agreed private workflow. Apply the private
+   project policy before any push or external write. An internal handoff or a
+   user-requested private review should state the problem, resulting behavior,
+   validation, and any remaining limitations; a pull request is optional.
 
 ## Verification
 
@@ -99,10 +117,10 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-Run targeted unit tests during development, then the full test command. There
-are currently no unit or integration tests, so a successful zero-test run proves
-compilation of the test target only. Add focused regression tests for changed
-logic. See the implementation guide for test placement and manual UI checks.
+Run targeted unit tests during development, then the full test command. Desktop
+input regression coverage lives in `src/desktop.rs`; a zero-test filtered run
+proves compilation of the test target only. Add focused regression tests for
+changed logic. See the implementation guide for test placement and manual UI checks.
 
 Clippy may report pre-existing warnings; distinguish those from warnings introduced
 by the patch. Do not silently suppress diagnostics or impose `-D warnings` as an

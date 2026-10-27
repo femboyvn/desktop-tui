@@ -2,16 +2,17 @@
 
 Use this guide from the repository root. Start with [AGENTS.md](AGENTS.md) for
 the shared-worktree and Git rules, [HOW_TO_RUN.md](HOW_TO_RUN.md) for setup and
-controlled shortcuts, and [CONTRIBUTE.md](CONTRIBUTE.md) for pull request reports.
+controlled shortcuts, and [CONTRIBUTE.md](CONTRIBUTE.md) for internal handoffs and
+requested private reviews.
 The module map and implementation limits are in [CODEBASE.md](CODEBASE.md).
 
 ## Choose checks that exercise the change
 
-The current package is binary-only and has no unit or integration tests, CI
-workflow, or configured Markdown linter. `cargo test --locked` currently reports
-zero tests: success proves that the test target compiles, not that the desktop
-works. Add focused regression tests for changed logic and perform the relevant
-terminal checks for rendering, input, dialogs, resizing, or process lifecycle.
+The current package is binary-only, with desktop input regression tests in
+`src/desktop.rs`. It has no integration tests, CI workflow, or configured Markdown
+linter. A filtered run with zero tests proves that the test target compiles, not
+that the desktop works. Add focused regression tests for changed logic and perform
+the relevant terminal checks for rendering, input, dialogs, resizing, or process lifecycle.
 
 For documentation-only changes, read the complete text and new files, verify
 relative links and referenced paths, and check whitespace. Compilation is needed
@@ -100,7 +101,7 @@ menu item to launch it. Check only the matrix rows relevant to the patch.
 | Area | Exercise and record |
 | --- | --- |
 | Startup and menus | Launch with the explicit directory, start a known command, hide/show, close, and reopen it. Confirm responsiveness and arrangement if affected. |
-| Keyboard and focus | Type into the focused child; check affected arrows, navigation, modifiers, or function keys. Move focus and confirm input goes to the intended control. Check Ctrl+C termination separately. |
+| Keyboard and focus | On an empty desktop, press Alt combinations and Escape; confirm the app stays open and Desktop > Exit still works. Type into the focused child; check affected arrows, navigation, modifiers, or function keys. Move focus and confirm input goes to the intended control. Check Ctrl+C termination separately. |
 | ANSI and rendering | Use controlled text/color/cursor output. Check the affected sequences, chunk boundaries, non-ASCII text, and surface edges against the intended result. Record existing emulator limits separately. |
 | Resize | Resize both the child window and outer terminal, including small sizes. Check canvas bounds, cursor, colors, and child dimensions with active output and while quiet. Current resize synchronization occurs on child stdout. |
 | Placeholder dialogs | Exercise file and folder selection, cancellation, and paths containing spaces using explicit argument arrays. Confirm arguments reach the child intact and cancellation prevents launch. |
@@ -124,5 +125,7 @@ Report commands actually run and their outcomes, tests that ran, new versus
 existing warnings, manual scenarios exercised, and any blocked or remaining
 checks with reasons. Include the OS, terminal, toolchain, relevant shortcut, and
 revision for a reproducible UI failure. State whether the work is committed.
+Keep evidence local or within the owner-approved private destination; do not send
+reports, issues, or pull requests to the original parent project or public forks.
 A headless build cannot establish interactive correctness, and no CI result is
 available in this repository to substitute for these checks.

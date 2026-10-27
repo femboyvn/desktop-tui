@@ -1,9 +1,13 @@
-# Contributing
+# Private development guide
 
-Contributions to Desktop-TUI can include bug fixes, features, shortcut examples,
-tests, and documentation. This is an experimental project; keep each change
-focused and explain the behavior it improves. Discuss a substantial redesign or
-breaking change in an issue before investing in its implementation.
+This project is developed independently for private use. Keep changes and review
+material local or in an owner-approved private repository. Do not send changes,
+issues, or pull requests to the original parent project or public forks, and do
+not synchronize development with them. Preserve the existing license and
+attribution in [LICENSE](LICENSE).
+
+Use this guide for internal development. Keep each change focused and agree on
+a substantial redesign or breaking change with the owner before implementing it.
 
 ## Find your starting point
 
@@ -17,13 +21,15 @@ breaking change in an issue before investing in its implementation.
 - [AGENTS.md](AGENTS.md): agent instructions, shared-worktree practices, and the
   detailed Git and verification workflow.
 
-## Report a bug or propose a feature
+## Record a bug or propose a feature internally
 
-Check existing issues and pull requests for related work first. For a bug, include
-the expected and actual behavior, reproduction steps, relevant shortcut TOML,
-operating system, terminal, Rust version, and repository revision. Include useful
-error output or a screenshot when it clarifies a rendering problem. Remove private
-paths, credentials, and unrelated configuration before sharing examples.
+Check local notes or existing authorized private records for related work first.
+For a bug, include the expected and actual behavior, reproduction steps, relevant
+shortcut TOML, operating system, terminal, Rust version, and repository revision.
+Include useful error output or a screenshot when it clarifies a rendering
+problem. Keep the report within the approved private destination and remove
+credentials and unrelated configuration from examples. Create an internal issue
+only when the owner requests one.
 
 For a feature, describe the use case, desired behavior, and any effect on existing
 shortcuts, keyboard handling, or window behavior. Explain compatibility changes
@@ -31,9 +37,12 @@ explicitly so reviewers can assess them.
 
 ## Set up a checkout
 
-Fork and clone the repository if you do not have write access, or use an existing
-checkout. Confirm which repository and branch the pull request should target;
-do not assume that a remote named `origin` is the upstream project.
+Use an existing checkout or clone the intended private repository,
+`femboyvn/desktop-tui`, after its setup is verified. Do not create a public fork.
+Before any authorized push, verify the destination owner and repository, private
+visibility, and independence from the original parent's fork network. A remote
+named `origin` does not establish those properties. Keep work local when they
+cannot be verified; this guide does not confirm the current server-side settings.
 
 Use a Unix-like environment, a Rust toolchain supporting edition 2024, Cargo,
 and a native compiler/linker. The child-terminal dependency uses Unix PTYs.
@@ -66,10 +75,12 @@ shortcut directory containing a program available on your system.
 4. Review the complete patch, including new files. Stage explicit paths or hunks
    and inspect `git diff --cached` and `git diff --cached --check` before committing.
    Use an imperative subject with a prefix such as `fix:`, `feat:`, or `docs:`.
-5. Sync with the target branch before integration and repeat affected checks after
-   conflict resolution. Avoid rewriting shared history. Push your task branch and
-   open a pull request when the change is ready for review. Agents should follow
-   the authorization and handoff rules in `AGENTS.md` before committing or pushing.
+5. Integrate against the agreed local or approved private base and repeat affected
+   checks after conflict resolution. Avoid rewriting shared history. Leave a
+   reviewable local patch by default; commit or push only when requested or
+   covered by the agreed private workflow. Open an internal pull request only
+   when the user requests one. Follow the destination verification,
+   authorization, and handoff rules in `AGENTS.md`.
 
 ## Verify the change
 
@@ -83,11 +94,11 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-There are currently no automated tests or CI workflow. A zero-test success only
-confirms that the test target compiles. New unit tests belong in the owning source
-file under `#[cfg(test)]`; the package has no library target for integration tests
-to import. Test observable behavior and relevant boundaries rather than repeating
-the implementation.
+Desktop input regression tests live in `src/desktop.rs`; there is no CI workflow.
+A filtered run with zero tests only confirms that the test target compiles.
+New unit tests belong in the owning source file under `#[cfg(test)]`; the package
+has no library target for integration tests to import. Test observable behavior
+and relevant boundaries rather than repeating the implementation.
 
 `rustfmt.toml` deliberately disables formatting, so a successful format check
 does not enforce style. Match nearby formatting manually. Distinguish existing
@@ -101,11 +112,12 @@ when changing dependencies or release configuration. For documentation-only edit
 review content, local links, referenced paths, and whitespace, including new files.
 No runtime tests are needed for prose-only changes.
 
-## Submit a pull request
+## Hand off the change or request private review
 
-Use a descriptive title and explain:
+Report the change to the owner. When an internal review is requested, use only
+the approved private destination and a descriptive title. Include:
 
-- The problem or use case, with a related issue link when one exists.
+- The problem or use case, with a related private record when one exists.
 - The resulting behavior and any compatibility impact.
 - The checks actually run and their outcomes, including relevant manual checks.
 - Any remaining limitations or checks you could not perform.
@@ -113,4 +125,4 @@ Use a descriptive title and explain:
 Include a small reproduction or before/after screenshot for a visual change when
 useful. Keep the diff focused so it can be reviewed independently. Address review
 feedback with the same verification discipline and rerun affected checks after
-updates. The repository's existing license is in [LICENSE](LICENSE).
+updates. State whether the work is committed and whether anything was pushed.
