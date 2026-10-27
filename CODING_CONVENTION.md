@@ -94,9 +94,9 @@ implementation. Cover the boundary cases relevant to the change. Keep tests
 deterministic and independent of installed TUI apps, real dialogs, wall-clock
 timing, and shared working-directory/environment mutations.
 
-No tests or CI are currently configured. `cargo test --locked` with zero tests
-does not prove runtime correctness. Use the commands and relevant manual checks
-in [HOW_TO_IMPLEMENT_A_FUNCTION.md](HOW_TO_IMPLEMENT_A_FUNCTION.md), and report
+Desktop input regression tests live in `src/desktop.rs`; no CI is configured.
+A filtered run with zero tests does not prove runtime correctness. Use the commands
+and relevant manual checks in [HOW_TO_IMPLEMENT_A_FUNCTION.md](HOW_TO_IMPLEMENT_A_FUNCTION.md), and report
 pre-existing warnings or blocked checks separately. Documentation-only edits need
 link, content, and whitespace review, without adding tests that mirror prose.
 The consolidated automated and manual check reference is

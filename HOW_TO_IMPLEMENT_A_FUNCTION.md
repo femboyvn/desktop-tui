@@ -37,8 +37,8 @@ interface. Avoid redesigning the whole application to introduce one function.
 
 ## 3. Add a meaningful regression test
 
-The package is binary-only and currently has no tests. Put unit tests at the end
-of the owning file; a child `tests` module can access private helpers with
+The package is binary-only. Put unit tests at the end of the owning file;
+a child `tests` module can access private helpers with
 `use super::...`. Do not assume a `tests/` integration test can import a
 `desktop_tui` library: there is no library target.
 
@@ -117,7 +117,8 @@ patch and record outcomes:
 - Resize the window and the outer terminal; check the canvas, child dimensions,
   colors, and cursor. Exercise arrangement options if desktop layout changed.
 - For input changes, check the affected keys/modifiers and verify Ctrl+C still
-  follows the intended termination behavior.
+  follows the intended termination behavior. On an empty desktop, check Alt
+  combinations and Escape, then confirm Desktop > Exit still closes the app.
 - For lifecycle changes, check normal child exit, a missing executable, menu
   Close, Ctrl+C, and Desktop Exit. Check for leftover children using the process
   tools available on the host.

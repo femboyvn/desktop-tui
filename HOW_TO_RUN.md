@@ -101,6 +101,8 @@ Shortcuts are menu entries, not startup jobs. Use their **Hide/Show** and
 **Close** commands, the **Tilling** menu for arrangement, and **Desktop > Exit**
 to leave. With the child control focused, Ctrl+C requests child termination and
 closes its window; it does not follow ordinary shell interrupt semantics.
+Escape on the desktop keeps the application open, including when a terminal
+delivers it separately as the prefix of an Alt key sequence.
 
 ## Configure commands and diagnose problems
 

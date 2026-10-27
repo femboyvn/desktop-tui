@@ -94,11 +94,11 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-There are currently no automated tests or CI workflow. A zero-test success only
-confirms that the test target compiles. New unit tests belong in the owning source
-file under `#[cfg(test)]`; the package has no library target for integration tests
-to import. Test observable behavior and relevant boundaries rather than repeating
-the implementation.
+Desktop input regression tests live in `src/desktop.rs`; there is no CI workflow.
+A filtered run with zero tests only confirms that the test target compiles.
+New unit tests belong in the owning source file under `#[cfg(test)]`; the package
+has no library target for integration tests to import. Test observable behavior
+and relevant boundaries rather than repeating the implementation.
 
 `rustfmt.toml` deliberately disables formatting, so a successful format check
 does not enforce style. Match nearby formatting manually. Distinguish existing

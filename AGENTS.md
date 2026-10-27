@@ -117,10 +117,10 @@ cargo fmt --all -- --check
 git diff --check
 ```
 
-Run targeted unit tests during development, then the full test command. There
-are currently no unit or integration tests, so a successful zero-test run proves
-compilation of the test target only. Add focused regression tests for changed
-logic. See the implementation guide for test placement and manual UI checks.
+Run targeted unit tests during development, then the full test command. Desktop
+input regression coverage lives in `src/desktop.rs`; a zero-test filtered run
+proves compilation of the test target only. Add focused regression tests for
+changed logic. See the implementation guide for test placement and manual UI checks.
 
 Clippy may report pre-existing warnings; distinguish those from warnings introduced
 by the patch. Do not silently suppress diagnostics or impose `-D warnings` as an

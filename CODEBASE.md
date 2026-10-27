@@ -3,7 +3,8 @@
 Desktop-TUI is an experimental terminal desktop that launches command-line apps
 inside movable AppCUI windows. This repository is one Rust 2024 package with a
 single binary entry point, `src/main.rs`. It has no library target, workspace
-members beyond itself, CI workflow, or automated tests at present.
+members beyond itself, or CI workflow. Desktop input regression tests live in
+`src/desktop.rs`.
 
 Development is intended to remain private and independent of the original parent
 project. Keep work local or in an owner-approved private repository; do not send
@@ -54,7 +55,7 @@ install the Rust toolchain itself. It is not required for the standard Cargo wor
 | `cargo check --locked` | Type-check the binary without producing the executable. |
 | `cargo build --locked` | Build the debug executable in `target/debug/`. |
 | `cargo build --locked --release` | Build with the size-focused release profile. |
-| `cargo test --locked` | Compile and run tests; the current tree contains none. |
+| `cargo test --locked` | Compile and run the unit tests. |
 | `cargo clippy --locked --all-targets` | Check Rust code, including test targets, for lint diagnostics. |
 | `cargo fmt --all -- --check` | Invoke rustfmt; formatting is deliberately disabled by configuration. |
 | `cargo run --locked -- ./shortcuts` | Start the interactive desktop with the repository examples. |
@@ -112,6 +113,8 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 8. `close_command` requests termination and closes both channels before closing
    the window. The desktop Exit command invokes it on reachable window handles,
    closes the desktop, and `main` exits the process after the UI loop returns.
+   The desktop denies AppCUI's Escape close request so an Escape prefix from an
+   Alt sequence cannot exit the application.
 
 ## Configuration contract
 
