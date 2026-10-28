@@ -3,20 +3,22 @@ use crate::config::preferences::TerminalPalette;
 use crate::config::{BackgroundColor, TerminalOptions, WindowOptions, WindowSize};
 use crate::runtime::TerminalParser;
 use anyhow::anyhow;
+use crate::runtime::processes::{self, ProcessGuard};
 use appcui::dialogs::{Location, OpenFileDialogFlags, SelectFolderDialogFlags};
 use appcui::graphics::{Color, Size, Surface};
 use appcui::prelude::window::Flags;
 use appcui::prelude::{
     Alignment, Canvas, EventProcessStatus, Handle, LayoutBuilder, OnResize, TimerEvents, Window,
-    canvas,
+    canvas, WindowEvents, ActionRequest,
 };
 use async_channel::Sender;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
 use std::time::Duration;
 use virtual_terminal::{Command, Input, Output};
 
-#[Window(events = TimerEvents)]
+#[Window(events = [TimerEvents, WindowEvents])]
 pub struct TuiWindow {
     pub canvas: Handle<Canvas>,
     pub terminal_parser: TerminalParser,
@@ -24,6 +26,10 @@ pub struct TuiWindow {
     pub horizontal_adjustment: u32,
     pub vertical_adjustment: u32,
     pending_terminal_size: Option<Size>,
+    process: ProcessGuard,
+    closing: bool,
+    launch_command: String,
+    pending_error: Option<String>,
 }
 
 impl TuiWindow {
@@ -38,6 +44,16 @@ impl TuiWindow {
     where
         S: AsRef<OsStr>,
         I: IntoIterator<Item = S>,
+    {
+        Self::new_with_document(app_name, program, args, window_options, terminal_options, palette, None)
+    }
+
+    /// The document path is appended after template resolution and never interpreted as a template.
+    pub fn new_with_document<S, I>(
+        app_name: &str, program: S, args: I, window_options: WindowOptions,
+        terminal_options: TerminalOptions, palette: &TerminalPalette, document: Option<&Path>,
+    ) -> anyhow::Result<Self>
+    where S: AsRef<OsStr>, I: IntoIterator<Item = S>,
     {
         let window_size = window_options.size.unwrap_or(WindowSize {
             width: 100,
@@ -92,28 +108,15 @@ impl TuiWindow {
             window_flags,
         );
 
-        let mut modified_program =
-            replace_file_path(program.as_ref().to_str().unwrap().to_string())?;
-        modified_program = replace_folder_path(modified_program)?;
-        let mut modified_args: Vec<String> = Vec::new();
-
-        for arg in args {
-            let mut modified_arg = replace_file_path(arg.as_ref().to_str().unwrap().to_string())?;
-            modified_arg = replace_folder_path(modified_arg)?;
-            modified_args.push(modified_arg);
-        }
-
-        let cmd = Command::new(modified_program)
-            .args(modified_args)
+        let mut configured = vec![program.as_ref().to_owned()];
+        configured.extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
+        let (modified_program, mut modified_args) = resolve_templates(configured)?;
+        append_document(&mut modified_args, document);
+        let launch_command = modified_program.to_string_lossy().into_owned();
+        let cmd = Command::new(modified_program).args(modified_args)
             .terminal_size((inner_size.width as usize, inner_size.height as usize));
-
-        let rx = cmd.out_rx();
         let tx = cmd.in_tx();
-
-        tx.send_blocking(Input::Resize((
-            inner_size.width as usize,
-            inner_size.height as usize,
-        )))?;
+        let (process, rx) = processes::start(cmd);
 
         let default_background_color = match terminal_options.background_color {
             None => None,
@@ -133,6 +136,7 @@ impl TuiWindow {
             horizontal_adjustment: horizontal_adjustment as u32,
             vertical_adjustment: vertical_adjustment as u32,
             pending_terminal_size: None,
+            process, closing: false, launch_command, pending_error: None,
         };
 
         tui_win.canvas = tui_win.add(Canvas::new(
@@ -157,8 +161,6 @@ impl TuiWindow {
         timer.start(Duration::from_millis(25));
 
         tui_win.custom_keyboard_control = tui_win.add(CustomKeyboardControl::new(tx, rx));
-
-        tokio::spawn(cmd.run());
 
         Ok(tui_win)
     }
@@ -185,18 +187,35 @@ impl TuiWindow {
         send_pending_resize(&mut self.pending_terminal_size, &control.tx);
     }
 
-    pub fn close_command(&mut self) {
-        let custom_keyboard_control = self.custom_keyboard_control;
-        let control = self.control_mut(custom_keyboard_control).unwrap();
-        control.tx.send_blocking(Input::Terminate).ok();
-        control.tx.close();
-        control.rx.close();
-        self.close();
+    pub fn is_closing(&self) -> bool { self.pending_error.is_none() && (self.closing || self.process.finished()) }
+
+    fn cleanup(&mut self) {
+        if self.closing { return; }
+        self.closing = true;
+        self.process.close();
+        let handle = self.custom_keyboard_control;
+        if let Some(control) = self.control_mut(handle) {
+            control.tx.close();
+            control.rx.close();
+        }
     }
+    fn show_launch_error(&self, error: &str) {
+        dialogs::error("Unable to run application", &format!("{}\n{error}\nInstall this program separately and ensure its executable is on PATH, or update the shortcut command.", self.launch_command));
+    }
+    pub fn close_command(&mut self) { self.pending_error = None; self.cleanup(); self.close(); }
+}
+impl WindowEvents for TuiWindow {
+    fn on_cancel(&mut self) -> ActionRequest { self.cleanup(); ActionRequest::Allow }
 }
 
 impl TimerEvents for TuiWindow {
     fn on_update(&mut self, _: u64) -> EventProcessStatus {
+        if self.is_visible() && let Some(error) = self.pending_error.take() {
+            self.show_launch_error(&error);
+            self.close_command();
+            return EventProcessStatus::Processed;
+        }
+        if self.closing { return EventProcessStatus::Ignored; }
         self.sync_terminal_size();
         let (should_close, rx_clone) = {
             let ckc = self.control(self.custom_keyboard_control).unwrap();
@@ -223,13 +242,17 @@ impl TimerEvents for TuiWindow {
                     EventProcessStatus::Processed
                 }
                 Output::Error(error) => {
-                    dialogs::error("An error occurred", &error);
-
-                    self.close();
+                    if self.is_visible() {
+                        self.show_launch_error(&error);
+                        self.close_command();
+                    } else {
+                        self.pending_error = Some(error);
+                        self.cleanup();
+                    }
                     EventProcessStatus::Processed
                 }
                 Output::Terminated(_) => {
-                    self.close();
+                    self.close_command();
                     EventProcessStatus::Processed
                 }
             },
@@ -238,39 +261,59 @@ impl TimerEvents for TuiWindow {
     }
 }
 
-fn replace_file_path(arg: String) -> anyhow::Result<String> {
-    match arg.contains("<FILE_PATH>") {
-        false => Ok(arg),
-        true => match dialogs::open(
-            "Select file",
-            "",
-            Location::Path(Path::new(env!("HOME"))),
-            None,
-            OpenFileDialogFlags::Icons | OpenFileDialogFlags::CheckIfFileExists,
-        ) {
-            None => Err(anyhow!("No file selected")),
-            Some(file_path) => Ok(arg.replace("<FILE_PATH>", file_path.to_str().unwrap())),
-        },
-    }
+fn resolve_templates(mut configured: Vec<OsString>) -> anyhow::Result<(OsString, Vec<OsString>)> {
+    let contains = |token: &[u8]| configured.iter().any(|arg| arg.as_bytes().windows(token.len()).any(|window| window == token));
+    let home = directories::UserDirs::new().map(|dirs| dirs.home_dir().to_owned()).unwrap_or_else(|| "/".into());
+    let file = if contains(b"<FILE_PATH>") {
+        Some(dialogs::open("Select file", "", Location::Path(&home), None,
+            OpenFileDialogFlags::Icons | OpenFileDialogFlags::CheckIfFileExists).ok_or_else(|| anyhow!("No file selected"))?)
+    } else { None };
+    let folder = if contains(b"<FOLDER_PATH>") {
+        Some(dialogs::select_folder("Select folder", Location::Path(&home), SelectFolderDialogFlags::Icons)
+            .ok_or_else(|| anyhow!("No folder selected"))?)
+    } else { None };
+    configured = configured.iter().map(|arg| expand_argument(arg, file.as_deref(), folder.as_deref())).collect();
+    let program = configured.remove(0);
+    Ok((program, configured))
 }
-
-fn replace_folder_path(arg: String) -> anyhow::Result<String> {
-    match arg.contains("<FOLDER_PATH>") {
-        false => Ok(arg),
-        true => match dialogs::select_folder(
-            "Select folder",
-            Location::Path(Path::new(env!("HOME"))),
-            SelectFolderDialogFlags::Icons,
-        ) {
-            None => Err(anyhow!("No folder selected")),
-            Some(file_path) => Ok(arg.replace("<FOLDER_PATH>", file_path.to_str().unwrap())),
-        },
+fn expand_argument(arg: &OsStr, file: Option<&Path>, folder: Option<&Path>) -> OsString {
+    let mut bytes = arg.as_bytes();
+    let mut result = Vec::new();
+    while !bytes.is_empty() {
+        let replacement = [(b"<FILE_PATH>".as_slice(), file), (b"<FOLDER_PATH>".as_slice(), folder)]
+            .into_iter().find(|(token, path)| path.is_some() && bytes.starts_with(token));
+        if let Some((token, Some(path))) = replacement {
+            result.extend_from_slice(path.as_os_str().as_bytes());
+            bytes = &bytes[token.len()..];
+        } else {
+            result.push(bytes[0]);
+            bytes = &bytes[1..];
+        }
     }
+    OsString::from_vec(result)
+}
+fn append_document(args: &mut Vec<OsString>, document: Option<&Path>) {
+    if let Some(path) = document { args.push(path.as_os_str().to_owned()); }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn template_paths_are_opaque_and_document_argument_is_appended_once() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let file = std::path::PathBuf::from(std::ffi::OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff, b' ', b'<', b'F', b'O', b'L', b'D', b'E', b'R', b'_', b'P', b'A', b'T', b'H', b'>']));
+        let folder = std::path::PathBuf::from("/tmp/folder");
+        let expanded = expand_argument(OsStr::new("--file=<FILE_PATH>:<FOLDER_PATH>"), Some(&file), Some(&folder));
+        let mut expected = b"--file=".to_vec();
+        expected.extend_from_slice(file.as_os_str().as_bytes());
+        expected.extend_from_slice(b":/tmp/folder");
+        assert_eq!(expanded.as_bytes(), expected);
+        let mut args = vec![expand_argument(OsStr::new("--option"), None, None)];
+        append_document(&mut args, Some(&file));
+        assert_eq!(args.len(), 2);
+        assert_eq!(args[1], file.as_os_str());
+    }
     #[test]
     fn terminal_resize_is_retried_after_input_queue_drains() {
         let (tx, rx) = async_channel::bounded(1);

@@ -1,4 +1,5 @@
 name = "ATAC"
+category = "Utility"
 
 command = "/home/julien/.cargo/bin/atac"
 args = ["--dry-run"]

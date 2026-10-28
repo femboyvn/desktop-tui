@@ -1,4 +1,5 @@
 name = "Resources"
+category = "Utility"
 
 command = "btop"
 args = []

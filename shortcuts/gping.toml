@@ -1,4 +1,5 @@
 name = "Internet state"
+category = "Utility"
 
 command = "gping"
 args = ["8.8.8.8"]

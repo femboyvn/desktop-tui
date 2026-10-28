@@ -28,7 +28,6 @@ impl OnKeyPressed for CustomKeyboardControl {
         }
 
         if key.modifier == KeyModifier::Ctrl && key.code == KeyCode::C {
-            self.tx.send_blocking(Input::Terminate).ok();
             self.should_exit = true;
         }
         else {

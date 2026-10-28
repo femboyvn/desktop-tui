@@ -24,6 +24,8 @@ Features:
   - [x] Handle and display application error
 - [x] Change tilling options
 - [x] Can let the user select a file or a folder to use its path as a command argument
+- [x] Categorized Application menu with starter launchers
+- [x] Native File Browser and Image Viewer
 - [x] Clock
 - [x] Offline Help and saved desktop/terminal palettes
 - [x] Linux screen lock, shutdown, and restart controls
@@ -79,6 +81,8 @@ Example `helix.toml` shortcut file:
 ```toml
 # Window name
 name = "Text editor"
+# Optional; omitted categories appear under User
+category = "Utility"
 
 # Command to execute
 command = "hx"
@@ -117,6 +121,64 @@ padding = [0, 0]
 # Optional
 background_color = { r = 30, g = 30, b = 30 }
 ```
+
+## Applications and files
+
+The top bar starts with **Desktop | Application | Tilling**. Application groups
+launchers under **System**, **Utility**, **User**, and **Games**, followed by
+additional named categories in alphabetical order. Empty categories show a
+disabled **No apps yet**. Selecting a launcher starts its window or restores
+and focuses the existing instance. External app menus keep Start, Hide/Show,
+Close, and configured additional commands; **Apps** groups those menus when
+space is limited. Additional commands open independent windows.
+
+Five starters are available even with an empty shortcut directory:
+
+| Category | Application | Executable |
+| --- | --- | --- |
+| System | File Browser | Native |
+| System | Terminal | `sh` |
+| Utility | System Performance | `btm` ([bottom](https://github.com/ClementTsang/bottom)) |
+| Utility | Image Viewer | Native |
+| Utility | Text editor | `nano` |
+
+External tools must be installed separately and available on PATH. A shortcut
+named Terminal, System Performance, or Text editor replaces that external
+starter, including its command, options, and category. A missing category
+places a shortcut in User. File Browser and Image Viewer have their own native
+identities even when custom shortcuts use the same names. No games are bundled.
+
+**File Browser** starts in your home directory. Enter an absolute or relative
+path in the path field and press Enter, or open a directory in the listing.
+Use **Up** (Alt+U), **Refresh** (Alt+R), and **Hidden** (Alt+H). Directories appear
+first, then entries sorted by name; columns show type, byte size, and local
+modification time. Directory reads happen in the background. Failed reads leave
+the previous listing available. Filesystem names are preserved as OS paths;
+non-UTF-8 bytes appear as replacement characters only in labels.
+
+Open a PNG, JPEG, WebP, GIF, or BMP from the browser to view it. Other regular
+files open in the configured Text editor in independent document windows. Each
+selected absolute path is appended as one argument after resolving the editor's
+configured command/argument templates. Spaces, Unicode, raw OS filename bytes,
+and literal placeholder text in that selected path are preserved. An already
+running editor remains open. Special files are not opened.
+
+**Image Viewer** opens through Application > Utility > Image Viewer and its
+file picker, or from File Browser. It shows the filename, oriented dimensions,
+and zoom in its title. Ctrl+O opens another image; **F** fits, **1** selects
+actual size, **+/-** zoom by 1.25, and arrows or mouse dragging pan. One source
+pixel occupies half a terminal cell vertically at actual size. Explicit zoom
+is limited to 5–400%; Fit can go below 5% to fit a large image in a small window.
+Aspect ratio and orientation are preserved, and transparency uses the current
+window theme background. Animated formats show their first frame. Input is
+limited to 32 MiB and 16 megapixels, with decoder allocation limits. Decoding
+and viewport preparation run in a bounded worker that reuses decoded pixels.
+
+Native windows and document windows participate in tiling, palette updates,
+Terminal Lock visibility restoration, and Desktop > Exit. Closing and reopening
+a native app creates a fresh worker; results from its previous instance are
+discarded. File mutations, image editing, and animation playback are outside
+this version.
 
 ## Development
 

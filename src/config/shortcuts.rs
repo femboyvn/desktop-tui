@@ -9,6 +9,9 @@ nest! {
     pub struct Shortcut {
         pub name: String,
 
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub category: Option<String>,
+
         pub command: String,
 
         #[serde(default)]
@@ -117,6 +120,15 @@ pub fn parse_shortcut_dir(
 mod tests {
     use super::*;
     use crate::test_support::TestDir;
+    #[test]
+    fn optional_category_preserves_legacy_shortcuts() {
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shortcuts/helix.toml")).lines()
+            .filter(|line| !line.starts_with("category =")).collect::<Vec<_>>().join("\n");
+        let legacy: Shortcut = toml::from_str(&source).unwrap();
+        assert!(!toml::to_string(&legacy).unwrap().contains("category ="));
+        let categorized: Shortcut = toml::from_str(&format!("category = \"Utility\"\n{source}")).unwrap();
+        assert!(toml::to_string(&categorized).unwrap().contains("category = \"Utility\""));
+    }
     #[test]
     fn excludes_only_the_application_settings_file() {
         let dir = TestDir::new();

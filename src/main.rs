@@ -15,7 +15,6 @@ use appcui::backend::Type;
 use appcui::prelude::App;
 use clap::Parser;
 use std::fs;
-use std::process::exit;
 use std::sync::Arc;
 
 #[tokio::main]
@@ -45,11 +44,13 @@ async fn main() -> anyhow::Result<()> {
             runner,
         ))
         .app_bar()
+        .timers_count(255)
         .theme(theme)
         .color_schema(false)
         .build()?;
 
     app.run();
 
-    exit(0);
+    runtime::processes::finish_shutdown().await;
+    Ok(())
 }

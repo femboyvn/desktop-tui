@@ -1,4 +1,5 @@
 name = "Clock"
+category = "Utility"
 
 command = "tenki"
 args = []

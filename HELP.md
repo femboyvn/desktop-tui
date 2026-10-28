@@ -7,10 +7,55 @@ or the mouse wheel to scroll. Drag the divider to resize the panes.
 
 ## Launching applications
 
-Open an application's menu in the top bar and choose Start.
+Open Application in the top bar, choose a category, then an app.
+Selecting it again restores and focuses its existing window.
+System, Utility, User, and Games are always present; extra categories
+follow alphabetically. Empty categories show No apps yet.
+
+File Browser, Terminal (sh), System Performance (btm / bottom),
+Image Viewer, and Text editor (nano) are available with an empty
+shortcut folder. External tools must be installed separately.
+Shortcuts with the same external starter names replace them.
+Native browser/viewer identities remain separate.
+
+External app menus also offer Start, Hide/Show, and Close.
 Additional commands appear below Close; they can open a file or
 folder picker when a shortcut uses `<FILE_PATH>` or
-`<FOLDER_PATH>`. Choose Close to stop that application's process.
+`<FOLDER_PATH>`. Additional commands open separate windows.
+Choose Close to stop the primary application process.
+
+## File Browser
+
+Application > System > File Browser starts in your home directory.
+Enter an absolute or relative path, or open a folder in the listing.
+Up (Alt+U) opens the parent, Refresh (Alt+R) reloads, and Hidden
+(Alt+H) toggles dot files. Directories sort before files; columns
+show name, type, byte size, and local modification time. Failed
+background reads leave the previous listing usable.
+
+Open supported images in Image Viewer. Other regular files open in
+independent Text editor document windows, preserving any running
+editor. The selected absolute path is one OS argument, appended
+after configured templates are resolved. Display labels may replace
+invalid UTF-8 bytes; navigation and launch arguments retain them.
+File Browser does not modify files or open special files.
+
+## Image Viewer
+
+Application > Utility > Image Viewer opens a file picker. Ctrl+O
+opens another file. F fits, 1 shows actual size, +/- zoom by 1.25,
+and arrows or mouse dragging pan. Explicit zoom is 5–400%; Fit can
+use less than 5% for large images. At actual size, each character
+cell displays one source pixel horizontally and two vertically.
+The title shows filename, oriented dimensions, and zoom.
+
+PNG, JPEG, WebP, GIF, and BMP are supported. Animated files show
+the first frame. Aspect ratio and image orientation are preserved;
+transparency uses the current theme background. Decoding and
+viewport preparation happen in a bounded background worker. Files
+are limited to 32 MiB and 16 megapixels. Corrupt, unsupported, or
+oversized images show an error; Ctrl+O can open another file.
+There is no image editing or animation playback.
 
 ## Window controls
 
@@ -32,7 +77,7 @@ yourself.
 
 ## Keyboard shortcuts
 
-Click Desktop, Tilling, or an application name in the top bar to
+Click Desktop, Application, Tilling, or an application name in the top bar to
 open its menu. Arrow keys navigate an open menu; Enter selects an
 item. Tab and Shift+Tab move between dialog controls. Escape
 closes menus and cancels dialogs. Ctrl+Tab switches Preference
@@ -47,7 +92,9 @@ Without one, shortcuts are read from the application configuration
 folder (normally `~/.config/desktop-tui` on Linux, or
 `$XDG_CONFIG_HOME/desktop-tui`). Shortcut TOML files describe
 commands, arguments, taskbar order, window controls, size,
-padding, and an optional terminal background override. See the
+padding, and an optional terminal background override. An optional
+top-level category (for example `category = "Utility"`) controls
+the Application menu grouping; omitted categories use User. See the
 README for a complete example.
 
 ## Preferences
@@ -67,7 +114,7 @@ foreground/background and all 16 normal and bright ANSI colors.
 Reset to Femboy replaces only the colors with light pink, white,
 plum, and lavender defaults; password settings are preserved. Save validates every role, writes
 preferences.toml in the application configuration folder, and
-immediately recolors the desktop and all running terminal windows,
+immediately recolors the desktop, native windows, and terminal windows,
 including hidden windows. Cancel or Escape discards the draft. A
 failed save keeps the active palette and saved password unchanged.
 
@@ -154,7 +201,8 @@ The lock screen hides desktop menus and app windows. Enter the
 same password and choose Unlock or press Enter to return. Escape
 and closing controls cannot dismiss the locked screen. Incorrect
 attempts require a one-second wait. Ctrl+U clears password input.
-Visible windows return after unlocking; previously hidden windows
+Native windows and editor documents are included. Visible windows
+return after unlocking; previously hidden windows
 stay hidden. Applications keep their content and running processes.
 
 This protects the current TUI session. It does not lock Linux or

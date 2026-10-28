@@ -116,6 +116,10 @@ menu item to launch it. Check only the matrix rows relevant to the patch.
 | Window movement and colors | Open Help and a terminal with bold/plain colored text. Drag each window repeatedly over the desktop and other windows, then close or hide it. Check that exposed cells and text retain their colors with active and quiet terminal output. |
 | Resize | Resize both the child window and outer terminal, including small sizes. Check canvas bounds, cursor, colors, and child dimensions with active output and while quiet. Resize synchronization runs on the window timer, including while output is quiet. |
 | Placeholder dialogs | Exercise file and folder selection, cancellation, and paths containing spaces using explicit argument arrays. Confirm arguments reach the child intact and cancellation prevents launch. |
+| Application menu | At 80×24 and a larger size, check Desktop / Application / Tilling order, all four standard categories, disabled empty entries, additional categories, starter overrides, and Apps overflow with the panel enabled and disabled. Start, hide, and select again to confirm focus restoration. |
+| Native image viewer | Open each supported format; check EXIF orientation, transparency across a palette change, first frame of animation, fit/actual/zoom bounds, arrows, dragging, and outer/window resize. Test invalid/missing/unsupported images and both size limits. Close during decode and reopen another file. |
+| Native file browser | Navigate home, relative/absolute paths, Up, Refresh, hidden files, unreadable folders, and large directories. Open images and multiple editor documents. Use spaces, Unicode, non-UTF-8 names, and literal placeholder text; confirm each selected path reaches the editor as one argument and a running editor remains open. |
+| Mixed window lifecycle | Tile native and terminal/document windows together; change theme and Terminal Lock with some hidden. Restore the original visibility. Close and reopen native windows, close individual documents, then Exit and check for leftover child processes. |
 | Child lifecycle | Exercise normal exit, a missing executable, menu Close, Ctrl+C, and Desktop Exit. Observe errors and responsiveness, and use the host's process tools to check for leftover children. |
 
 Ctrl+C with the child control focused requests termination and closes its window;
@@ -140,3 +144,9 @@ Keep evidence local or within the owner-approved project destination; do not sen
 reports, issues, or pull requests to the original parent project or other forks.
 A headless build cannot establish interactive correctness, and no CI result is
 available in this repository to substitute for these checks.
+
+For this feature, also run `cargo build --locked --release`. Automated coverage
+for catalogs is in `src/config/catalog.rs`; image, filesystem, worker, and process
+coverage is in `src/runtime/`; native navigation tests are in `src/ui/native/`.
+The AppCUI debug backend exercises UI integration without starting the interactive
+desktop. Real-terminal smoke checks above remain necessary for visual/input approval.

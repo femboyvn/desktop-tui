@@ -142,7 +142,8 @@ mod tests {
                 .source
                 .contains("offline")
         );
-        ListBoxEvents::on_current_item_changed(&mut help, category, 2);
+        let window_controls = help.topics.iter().position(|topic| topic.title == "Window controls").unwrap();
+        ListBoxEvents::on_current_item_changed(&mut help, category, window_controls);
         let details_handle = help.details;
         let details = help.control_mut(details_handle).unwrap();
         assert!(details.source.contains("Drag the title bar"));

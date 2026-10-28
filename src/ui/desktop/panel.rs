@@ -219,12 +219,12 @@ pub struct BarLayout {
     pub grouped_apps: bool,
 }
 pub fn bar_layout(width: usize, desired_status: usize, app_widths: &[usize]) -> BarLayout {
-    // Desktop + Tilling + separator = 19. AppCUI requires more than five
+    // Desktop + Application + Tilling + separator = 32. AppCUI requires more than five
     // free columns even when every item is placed on the left.
     let available = width.saturating_sub(6);
     let grouped_apps = !app_widths.is_empty()
-        && 19 + app_widths.iter().sum::<usize>() + desired_status > available;
-    let menu_width = 19
+        && 32 + app_widths.iter().sum::<usize>() + desired_status > available;
+    let menu_width = 32
         + if grouped_apps {
             6
         } else {
@@ -311,16 +311,16 @@ mod tests {
 
     #[test]
     fn bar_groups_applications_before_status_can_hide_their_menus() {
-        let normal = bar_layout(80, 30, &[10, 8]);
+        let normal = bar_layout(100, 30, &[10, 8]);
         assert!(!normal.grouped_apps);
         assert_eq!(normal.status_width, 30);
         let crowded = bar_layout(80, 45, &[20, 20, 20]);
         assert!(crowded.grouped_apps);
-        assert_eq!(crowded.status_width, 45);
-        for width in 32..160 {
+        assert_eq!(crowded.status_width, 36);
+        for width in 44..160 {
             let layout = bar_layout(width, 100, &[20, 20, 20]);
             assert!(layout.grouped_apps);
-            assert!(layout.status_width + 19 + 6 + 6 <= width);
+            assert!(layout.status_width + 32 + 6 + 6 <= width);
         }
         assert_eq!(bar_layout(80, 0, &[]).status_width, 0);
     }

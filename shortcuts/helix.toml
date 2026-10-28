@@ -1,5 +1,6 @@
 # Window name
 name = "Text editor"
+category = "Utility"
 
 # Command to execute
 command = "hx"

@@ -5,3 +5,4 @@ pub(crate) mod terminal;
 mod theme;
 
 pub(crate) use theme::build_theme;
+pub(crate) mod native;

@@ -73,6 +73,10 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | --- | --- |
 | [src/main.rs](src/main.rs) | Module declarations, Tokio runtime, configuration directory selection, shortcut parsing, AppCUI setup and event loop. |
 | [src/args.rs](src/args.rs) | Clap-derived `Args`; optional positional `shortcut_dir: Option<PathBuf>`. |
+| [src/config/catalog.rs](src/config/catalog.rs) | Starter merge, application IDs, categories, and native/external catalog entries. |
+| [src/runtime/latest.rs](src/runtime/latest.rs), [src/runtime/images.rs](src/runtime/images.rs), [src/runtime/files.rs](src/runtime/files.rs) | Bounded latest-request workers, image decode/geometry/render preparation, and directory enumeration. |
+| [src/runtime/processes.rs](src/runtime/processes.rs) | Managed PTY runner, independent PID observation, asynchronous process-tree cleanup, and shutdown task draining. |
+| [src/ui/native/](src/ui/native/) | Native Image Viewer and File Browser windows and controls. |
 | [src/config/shortcuts.rs](src/config/shortcuts.rs) | Serde types generated through `nestify::nest!`; `parse_shortcut_dir` loads, deduplicates, and sorts shortcuts. |
 | [src/ui/desktop/view.rs](src/ui/desktop/view.rs) | `MyDesktop`, app-bar menus, shortcut-to-window handles, launch/show/hide/close commands, arrangement, preferences/locking integration, and panel updates. |
 | [src/ui/terminal/window.rs](src/ui/terminal/window.rs) | `TuiWindow`, child command/channels, canvas updates, resize synchronization, shutdown, file/folder selection. |
@@ -110,14 +114,20 @@ modules and expose shared types and entry points through crate-scoped re-exports
 2. `parse_shortcut_dir` recursively walks the selected directory, deserializes
    matching files, excludes the exact settings file, drops duplicate shortcut names,
    and sorts by taskbar position.
-3. `MyDesktop::on_start` creates Desktop/Tilling menus and one app menu per
+3. `MyDesktop::new` merges external starters without replacing user shortcuts.
+   `on_start` creates Desktop/Application/Tilling menus and one external app menu per
    shortcut, then starts a 100 ms desktop timer for clock/panel updates and pending system
-   actions. Linux readings refresh in the background. Apps start on menu commands.
+   actions. Linux readings refresh in the background. Apps start on menu commands; native IDs and immutable external indices dispatch
+   independently of categories or labels. The application requests 255 AppCUI timer
+   slots for native windows and independently opened documents.
 4. `MyDesktop::create_window` passes the selected command, args, and window/terminal
    options to `TuiWindow::new`. Placeholder dialogs resolve `<FILE_PATH>` and
-   `<FOLDER_PATH>` in both the executable and individual arguments before launch.
+   `<FOLDER_PATH>` in both the executable and individual arguments before launch,
+   preserving OS path bytes. Selected editor document paths are appended as opaque
+   arguments after that resolution.
 5. `TuiWindow::new` configures a `virtual_terminal::Command`, creates a canvas and
-   keyboard control, starts a 25 ms UI timer, and spawns `cmd.run()` on Tokio.
+   keyboard control, starts a 25 ms UI timer, and starts a managed runner on Tokio. Its supervisor observes PID messages
+   independently of UI polling and forwards output through a bounded channel.
    Program and arguments are passed separately; the repository does not implicitly
    invoke a shell. A shell is used only when the shortcut explicitly names one.
 6. Keyboard events on the focused control become `Input::Data` messages. Ctrl+C
@@ -127,9 +137,11 @@ modules and expose shared types and entry points through crate-scoped re-exports
    parser updates the canvas surface. The timer synchronizes size changes to the
    child, canvas, and parser even while output is quiet, retrying a queued resize
    when the input channel is full. Errors and child termination close the window.
-8. `close_command` requests termination and closes both channels before closing
-   the window. The desktop Exit command invokes it on reachable window handles,
-   closes the desktop, and `main` exits the process after the UI loop returns.
+8. Titlebar closure, Ctrl+C, menu Close, and Desktop Exit share idempotent
+   cleanup. A supervisor uses bmart (also used by virtual-terminal) to stop the
+   child process tree asynchronously and retains the runner until child wait
+   completes. Desktop Exit includes native windows and document handles; `main`
+   drains managed runner tasks after the UI loop releases its controls.
    The desktop denies AppCUI's Escape close request so an Escape prefix from an
    Alt sequence cannot exit the application.
 
@@ -139,6 +151,10 @@ The complete user example lives in [README.md](README.md). Source definitions in
 `src/config/shortcuts.rs` govern deserialization:
 
 - `name` and `command` are required; top-level `args` defaults to an empty vector.
+- Optional top-level `category` defaults to User when absent or blank. System,
+  Utility, User, and Games precede alphabetically ordered additional categories.
+  Native File Browser/Image Viewer entries remain separate from custom shortcuts;
+  names matching Terminal, System Performance, or Text editor override starters.
 - The `taskbar`, `window`, and `terminal` tables are required. Taskbar position is
   optional; `additional_commands` defaults to empty. Each additional command has
   a required name, executable, and argument list.
@@ -161,7 +177,10 @@ These describe the current implementation, not promises to preserve defects:
 - AppCUI attribute macros generate base fields, command enums, and event wiring.
   Imports and trait implementations that look unused can participate in generated
   code; inspect macro usage before removing them.
-- Shortcut indices connect menu vectors and `app_windows`. Closed windows can
+- Immutable shortcut indices connect external menu vectors and `app_windows`;
+  categorized launch commands map menu handles to application IDs. Native windows
+  use typed handles; editor documents and extra commands have separate terminal
+  handles. Closed windows can
   leave stale handles; callers check whether a handle still resolves. Keep these
   relationships intact when changing launch or close behavior.
 - Window geometry mixes signed padding, unsigned sizes, and narrower canvas size
@@ -175,3 +194,27 @@ These describe the current implementation, not promises to preserve defects:
   explicitly when extending ANSI or Unicode handling.
 - Several error paths currently use `unwrap`, `expect`, or `.ok()`. Their presence
   is not a rule to copy into new fallible code. See the coding conventions.
+
+## Native application workers
+
+Each native window owns a latest-request worker with one active job, one pending
+request, and one result. New requests replace pending work and invalidate older
+results. Closing cancels pending work without joining from a callback; worker
+state is separate for each window instance. Image workers cache decoded pixels
+and prepare only the visible region, compositing alpha before AppCUI's true-color
+SmallBlocks renderer prepares a surface. PNG/JPEG/WebP/GIF/BMP decoders are the
+only enabled image crate format features; image input is capped at 32 MiB,
+dimensions at 16 million pixels, and decoder max_alloc configured to 128 MiB where supported. WebP chunk extents
+and embedded frame dimensions are checked separately before decoder construction
+because that decoder does not enforce the allocation option. Fit uses
+half-cell pixel geometry; explicit zoom is 5–400%, while Fit may be smaller.
+Viewport preparation is bounded to 2048 × 1024 character cells.
+
+File Browser enumerates and sorts directories outside callbacks, then inserts up
+to 256 rows per tick. Original PathBuf values drive navigation and document
+arguments; lossy text is used only for labels and the editable path display.
+Native windows and all tracked terminal instances participate in arrangement,
+palette updates, Terminal Lock visibility snapshots, and desktop shutdown.
+
+Native timer callbacks defer result polling while hidden, including during Terminal
+Lock. Failed terminal launch dialogs are also deferred until the window is visible.

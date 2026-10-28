@@ -4,10 +4,12 @@ use super::help::help_window;
 use super::panel::{self, BarLayout};
 use crate::config::preferences::Preferences;
 use crate::config::Shortcut;
+use crate::config::catalog::{self, AppId};
 use crate::platform::linux::{StatusMonitor, SystemAction, SystemActionRunner, SystemActions};
 use crate::ui::locking::{LockSetupDialog, TerminalLockScreen};
 use crate::ui::preferences::PreferencesDialog;
 use crate::ui::terminal::TuiWindow;
+use crate::ui::native::{self, ImageWindow, BrowserWindow};
 use crate::ui::build_theme;
 use appcui::prelude::appbar::MenuButton;
 use appcui::prelude::menu::{Command, SingleChoice};
@@ -21,7 +23,7 @@ use std::time::{Duration, Instant};
 #[Desktop(
     events = [AppBarEvents, MenuEvents, DesktopEvents, TimerEvents],
     overwrite = OnPaint+OnResize,
-    commands = [Help, Preference, TerminalLock, ScreenLock, Shutdown, Restart, Exit, NoArrange, Cascade, Vertical, Horizontal, Grid, AppVisibilityToggle, OpenApp, CloseApp, AppCommand, SelectApp, None]
+    commands = [Help, Preference, TerminalLock, ScreenLock, Shutdown, Restart, Exit, NoArrange, Cascade, Vertical, Horizontal, Grid, AppVisibilityToggle, OpenApp, CloseApp, AppCommand, SelectApp, LaunchApplication, None]
 )]
 pub struct MyDesktop {
     pub preferences: Preferences,
@@ -31,16 +33,29 @@ pub struct MyDesktop {
     terminal_locked: bool,
     pub arrange_method: Option<desktop::ArrangeWindowsMethod>,
     pub desktop_menu: Handle<MenuButton>,
+    application_menu: Handle<MenuButton>,
+    application_commands: Vec<(Handle<Command>, AppId)>,
+    additional_commands: Vec<(Handle<Command>, usize, String, Vec<String>)>,
     pub arrange_menu: Handle<MenuButton>,
     pub separator: Handle<appbar::Separator>,
+    visibility_items: Vec<Handle<Command>>,
     pub app_menues: Vec<Handle<Menu>>,
     pub app_menu_buttons: Vec<Handle<MenuButton>>,
     pub shortcuts: Vec<Shortcut>,
     pub app_windows: HashMap<usize, Handle<TuiWindow>>,
+    image_window: Handle<ImageWindow>,
+    browser_window: Handle<BrowserWindow>,
+    document_windows: Vec<Handle<TuiWindow>>,
     pub status_label: Handle<appbar::Label>,
     status: StatusMonitor,
     apps_button: Handle<MenuButton>,
     app_selectors: Vec<Handle<Command>>,
+}
+
+struct LockVisibility {
+    terminals: Vec<(Handle<TuiWindow>, bool)>,
+    image: Option<(Handle<ImageWindow>, bool)>,
+    browser: Option<(Handle<BrowserWindow>, bool)>,
 }
 
 impl MyDesktop {
@@ -51,6 +66,7 @@ impl MyDesktop {
         startup_warning: Option<String>,
         runner: Arc<dyn SystemActionRunner>,
     ) -> Self {
+        let shortcuts = catalog::with_starters(shortcuts);
         Self {
             base: Desktop::new(),
             preferences,
@@ -62,10 +78,17 @@ impl MyDesktop {
             desktop_menu: Handle::None,
             separator: Handle::None,
             arrange_menu: Handle::None,
+            application_menu: Handle::None,
+            application_commands: Vec::new(),
+            additional_commands: Vec::new(),
+            visibility_items: vec![Handle::None; shortcuts.len()],
             app_menues: vec![Handle::None; shortcuts.len()],
             app_menu_buttons: vec![Handle::None; shortcuts.len()],
             app_windows: HashMap::new(),
             status_label: Handle::None,
+            image_window: Handle::None,
+            browser_window: Handle::None,
+            document_windows: Vec::new(),
             status: StatusMonitor::default(),
             apps_button: Handle::None,
             app_selectors: Vec::new(),
@@ -75,11 +98,13 @@ impl MyDesktop {
 
     pub fn apply_preferences(&mut self, preferences: Preferences) {
         App::set_theme(build_theme(&preferences.desktop));
-        for handle in self.app_windows.values().copied().collect::<Vec<_>>() {
+        for handle in self.terminal_handles() {
             if let Some(window) = self.window_mut(handle) {
                 window.apply_palette(&preferences.terminal);
             }
         }
+        let image = self.image_window;
+        if let Some(window) = self.window_mut(image) { window.apply_background(preferences.desktop.surface); }
         self.preferences = preferences;
         self.refresh_panel();
     }
@@ -131,24 +156,38 @@ impl MyDesktop {
         }
     }
 
-    fn hide_for_terminal_lock(&mut self) -> Vec<(Handle<TuiWindow>, bool)> {
+    fn terminal_handles(&self) -> Vec<Handle<TuiWindow>> {
+        self.app_windows.values().copied().chain(self.document_windows.iter().copied()).collect()
+    }
+    fn hide_for_terminal_lock(&mut self) -> LockVisibility {
         self.terminal_locked = true;
-        let mut visibility = Vec::new();
-        for handle in self.app_windows.values().copied().collect::<Vec<_>>() {
+        let mut visibility = LockVisibility { terminals: Vec::new(), image: None, browser: None };
+        for handle in self.terminal_handles() {
             if let Some(window) = self.window_mut(handle) {
-                visibility.push((handle, window.is_visible()));
+                visibility.terminals.push((handle, window.is_visible()));
                 window.set_visible(false);
             }
         }
+        let image = self.image_window;
+        if let Some(window) = self.window_mut(image) {
+            visibility.image = Some((image, window.is_visible()));
+            window.set_visible(false);
+        }
+        let browser = self.browser_window;
+        if let Some(window) = self.window_mut(browser) {
+            visibility.browser = Some((browser, window.is_visible()));
+            window.set_visible(false);
+        }
         visibility
     }
-
-    fn restore_after_terminal_unlock(&mut self, visibility: Vec<(Handle<TuiWindow>, bool)>) {
-        for (handle, visible) in visibility {
-            if let Some(window) = self.window_mut(handle) {
-                window.set_visible(visible);
-            }
+    fn restore_after_terminal_unlock(&mut self, visibility: LockVisibility) {
+        for (handle, visible) in visibility.terminals {
+            if let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         }
+        if let Some((handle, visible)) = visibility.image
+            && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
+        if let Some((handle, visible)) = visibility.browser
+            && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         self.terminal_locked = false;
         self.refresh_panel();
     }
@@ -192,6 +231,76 @@ impl MyDesktop {
         if let Err(error) = self.system_actions.request(action, confirmed) {
             dialogs::error("System request failed", &error);
         }
+    }
+
+    fn open_image(&mut self, path: Option<PathBuf>) {
+        let handle = self.image_window;
+        if let Some(window) = self.window_mut(handle)
+            && !window.is_closing() {
+            if let Some(path) = path { window.open(path); }
+            window.set_visible(true);
+            window.request_focus();
+            return;
+        }
+        let Some(path) = path.or_else(native::select_image) else { return; };
+        match ImageWindow::new(path, self.preferences.desktop.surface) {
+            Ok(window) => self.image_window = self.add_window(window),
+            Err(error) => dialogs::error("Cannot open Image Viewer", &format!("{error:#}")),
+        }
+    }
+    fn open_browser(&mut self) {
+        let handle = self.browser_window;
+        if let Some(window) = self.window_mut(handle)
+            && !window.is_closing() {
+            window.set_visible(true);
+            window.request_focus();
+            return;
+        }
+        match BrowserWindow::new() {
+            Ok(window) => self.browser_window = self.add_window(window),
+            Err(error) => dialogs::error("Cannot open File Browser", &format!("{error:#}")),
+        }
+    }
+    fn open_document(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        let editor = self.shortcuts.iter().find(|shortcut| shortcut.name == "Text editor")
+            .ok_or_else(|| anyhow::anyhow!("Configure a Text editor shortcut to open this file."))?;
+        let window = TuiWindow::new_with_document(
+            &format!("Text editor — {}", path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()),
+            editor.command.clone(), editor.args.clone(), editor.window.clone(), editor.terminal.clone(),
+            &self.preferences.terminal, Some(&path),
+        )?;
+        let handle = self.add_window(window);
+        self.document_windows.push(handle);
+        Ok(())
+    }
+
+    fn launch_application(&mut self, id: AppId) {
+        match id {
+            AppId::External(index) => {
+                let shortcut = self.shortcuts[index].clone();
+                self.launch_external(index, shortcut.command, shortcut.args);
+            }
+            AppId::ImageViewer => self.open_image(None),
+            AppId::FileBrowser => self.open_browser(),
+        }
+    }
+
+    fn update_visibility_caption(&mut self, index: usize) {
+        if let (Some(menu), Some(item)) = (self.app_menues.get(index).copied(), self.visibility_items.get(index).copied())
+            && let Some(item) = self.menuitem_mut(menu, item) { item.set_caption("Hide"); }
+    }
+    fn launch_external(&mut self, index: usize, command: String, args: Vec<String>) {
+        if let Some(handle) = self.app_windows.get(&index).copied()
+            && let Some(window) = self.window_mut(handle)
+            && !window.is_closing() {
+            window.set_visible(true);
+            window.request_focus();
+            self.update_visibility_caption(index);
+            return;
+        }
+        if let Err(error) = self.create_window(index, command, args) {
+            dialogs::error("Unable to launch application", &format!("{error:#}"));
+        } else { self.update_visibility_caption(index); }
     }
 
     pub fn create_window(
@@ -265,6 +374,24 @@ impl DesktopEvents for MyDesktop {
             self.appbar()
                 .add(MenuButton::new("Desktop", desktop_menu, 1, Side::Left));
 
+        let apps = catalog::applications(&shortcuts);
+        let mut application_menu = Menu::new();
+        for category in catalog::categories(&apps) {
+            let mut submenu = Menu::new();
+            let entries: Vec<_> = apps.iter().filter(|app| app.category == category).collect();
+            if entries.is_empty() {
+                let mut empty = Command::new("No apps yet", Key::None, Commands::None);
+                empty.set_enabled(false);
+                submenu.add(empty);
+            }
+            for app in entries {
+                let item = submenu.add(Command::new(&app.name.replace('&', "&&"), Key::None, Commands::LaunchApplication));
+                self.application_commands.push((item, app.id));
+            }
+            application_menu.add(menu::SubMenu::new(&category.replace('&', "&&"), submenu));
+        }
+        self.application_menu = self.appbar().add(MenuButton::new("Application", application_menu, 2, Side::Left));
+
         let mut tilling_menu = Menu::new();
 
         tilling_menu.add(SingleChoice::new(
@@ -295,9 +422,9 @@ impl DesktopEvents for MyDesktop {
 
         let arrange_menu_button =
             self.appbar()
-                .add(MenuButton::new("Tilling", tilling_menu, 2, Side::Left));
+                .add(MenuButton::new("Tilling", tilling_menu, 3, Side::Left));
 
-        let separator = self.appbar().add(appbar::Separator::new(3, Side::Left));
+        let separator = self.appbar().add(appbar::Separator::new(4, Side::Left));
         let mut apps = Menu::new();
         self.app_selectors.clear();
 
@@ -305,13 +432,13 @@ impl DesktopEvents for MyDesktop {
         let mut app_menu_buttons = vec![Handle::<MenuButton>::None; shortcuts.len()];
         for (index, shortcut) in shortcuts.iter().enumerate() {
             self.app_selectors.push(apps.add(Command::new(
-                &shortcut.name,
+                &shortcut.name.replace('&', "&&"),
                 Key::None,
                 Commands::SelectApp,
             )));
             let mut menu = Menu::new();
 
-            menu.add(Command::new(
+            self.visibility_items[index] = menu.add(Command::new(
                 "Hide",
                 Key::None,
                 Commands::AppVisibilityToggle,
@@ -324,21 +451,22 @@ impl DesktopEvents for MyDesktop {
             }
 
             for command in &shortcut.taskbar.additional_commands {
-                menu.add(Command::new(&command.name, Key::None, Commands::AppCommand));
+                let item = menu.add(Command::new(&command.name.replace('&', "&&"), Key::None, Commands::AppCommand));
+                self.additional_commands.push((item, index, command.command.clone(), command.args.clone()));
             }
 
             app_menues[index] = self.register_menu(menu);
             app_menu_buttons[index] = self.appbar().add(MenuButton::with_handle(
-                &shortcut.name,
+                &shortcut.name.replace('&', "&&"),
                 app_menues[index],
-                (5usize + index).min(255) as u8,
+                (6usize + index).min(255) as u8,
                 Side::Left,
             ));
         }
 
         self.apps_button = self
             .appbar()
-            .add(MenuButton::new("Apps", apps, 4, Side::Left));
+            .add(MenuButton::new("Apps", apps, 5, Side::Left));
 
         self.desktop_menu = desktop_menu_button;
         self.arrange_menu = arrange_menu_button;
@@ -388,6 +516,7 @@ impl AppBarEvents for MyDesktop {
             app_bar.show(self.status_label);
         }
         app_bar.show(self.desktop_menu);
+        app_bar.show(self.application_menu);
         app_bar.show(self.arrange_menu);
         app_bar.show(self.separator);
 
@@ -407,6 +536,11 @@ impl MenuEvents for MyDesktop {
             return;
         }
         match command {
+            Commands::LaunchApplication => {
+                if let Some(id) = self.application_commands.iter().find(|entry| entry.0 == item).map(|entry| entry.1) {
+                    self.launch_application(id);
+                }
+            }
             Commands::SelectApp => {
                 if let Some(index) = self
                     .app_selectors
@@ -436,97 +570,50 @@ impl MenuEvents for MyDesktop {
             Commands::Shutdown => self.request_system_action(SystemAction::Shutdown),
             Commands::Restart => self.request_system_action(SystemAction::Restart),
             Commands::Exit => {
-                for window in self.app_windows.clone().values() {
-                    if let Some(win) = self.window_mut(*window) {
+                for handle in self.terminal_handles() {
+                    if let Some(win) = self.window_mut(handle) {
                         win.close_command();
                     }
                 }
 
+                let handle = self.image_window;
+                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
+                let handle = self.browser_window;
+                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
                 self.close()
             }
             Commands::OpenApp
             | Commands::CloseApp
             | Commands::AppVisibilityToggle
             | Commands::AppCommand => {
-                let mut app = None;
-
-                for (index, app_menu) in self.app_menues.iter().enumerate() {
-                    if &menu == app_menu {
-                        app = Some(index);
+                let Some(index) = self.app_menues.iter().position(|handle| *handle == menu) else { return; };
+                let handle = self.app_windows.get(&index).copied().unwrap_or(Handle::None);
+                match command {
+                    Commands::OpenApp => self.launch_application(AppId::External(index)),
+                    Commands::CloseApp => {
+                        if let Some(window) = self.window_mut(handle) { window.close_command(); }
+                        self.app_windows.remove(&index);
                     }
-                }
-
-                if let Some(index) = app {
-                    let win_handle = match self.app_windows.get(&index) {
-                        Some(win_handle) => Some(*win_handle),
-                        None => {
-                            match command {
-                                Commands::OpenApp => {
-                                    let command = self.shortcuts[index].command.clone();
-                                    let args = self.shortcuts[index].args.clone();
-                                    self.create_window(index, command, args).ok();
-                                }
-                                Commands::AppCommand => {
-                                    let shortcut = self.shortcuts[index].clone();
-                                    let item = self.menuitem_mut(menu, item).unwrap();
-
-                                    for command in shortcut.taskbar.additional_commands {
-                                        if item.caption() == command.name {
-                                            self.create_window(
-                                                index,
-                                                command.command,
-                                                command.args,
-                                            )
-                                            .ok();
-                                            break;
-                                        }
-                                    }
-                                }
-                                _ => {}
-                            }
-
-                            None
+                    Commands::AppVisibilityToggle => {
+                        if let Some(window) = self.window_mut(handle) {
+                            let visible = !window.is_visible();
+                            window.set_visible(visible);
+                            if visible { window.request_focus(); }
+                            if let Some(item) = self.menuitem_mut(menu, item) { item.set_caption(if visible { "Hide" } else { "Show" }); }
                         }
-                    };
-
-                    let mut visibility_item = None;
-
-                    if let Some(win_handle) = win_handle {
-                        if let Some(window) = self.window_mut(win_handle) {
-                            match command {
-                                Commands::AppVisibilityToggle => match window.is_visible() {
-                                    true => {
-                                        window.set_visible(false);
-                                        visibility_item = Some("Show");
-                                    }
-                                    false => {
-                                        window.set_visible(true);
-                                        visibility_item = Some("Hide");
-                                    }
-                                },
-                                Commands::OpenApp => {}
-                                Commands::CloseApp => {
-                                    window.close_command();
-                                    self.app_windows.remove(&index);
-                                }
-                                _ => {}
-                            }
-                        } else {
-                            match command {
-                                Commands::OpenApp => {
-                                    let command = self.shortcuts[index].command.clone();
-                                    let args = self.shortcuts[index].args.clone();
-                                    self.create_window(index, command, args).ok();
-                                }
-                                _ => {}
+                    }
+                    Commands::AppCommand => {
+                        // Command handles, rather than captions, select additional commands.
+                        let extra = self.additional_commands.iter().find(|entry| entry.0 == item).cloned();
+                        if let Some((_, _, command, args)) = extra {
+                            let shortcut = self.shortcuts[index].clone();
+                            match TuiWindow::new(&shortcut.name, command, args, shortcut.window, shortcut.terminal, &self.preferences.terminal) {
+                                Ok(window) => { let handle = self.add_window(window); self.document_windows.push(handle); }
+                                Err(error) => dialogs::error("Unable to launch command", &format!("{error:#}")),
                             }
                         }
                     }
-
-                    if let Some(name) = visibility_item {
-                        let item = self.menuitem_mut(menu, item).unwrap();
-                        item.set_caption(name);
-                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -562,6 +649,14 @@ impl TimerEvents for MyDesktop {
         if self.terminal_locked {
             return EventProcessStatus::Ignored;
         }
+        let handle = self.browser_window;
+        let open_path = self.window_mut(handle).and_then(BrowserWindow::take_open_path);
+        if let Some(path) = open_path {
+            if crate::runtime::files::is_image(&path) { self.open_image(Some(path)); }
+            else if let Err(error) = self.open_document(path) { dialogs::error("Cannot open file", &format!("{error:#}")); }
+        }
+        let documents = std::mem::take(&mut self.document_windows);
+        self.document_windows = documents.into_iter().filter(|handle| self.windowt(*handle).is_some()).collect();
         let settings = &self.preferences.panel;
         self.status.poll(
             Instant::now(),
@@ -595,6 +690,93 @@ mod tests {
     use crate::test_support::{TestDir, UI_LOCK};
     use virtual_terminal::{Input, Output};
     #[test]
+    fn application_dispatch_restores_native_windows_and_mixed_lock_visibility() {
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = TestDir::new();
+        let image = dir.path().join("image.png");
+        ::image::RgbaImage::from_pixel(4, 6, ::image::Rgba([20,40,60,128])).save(&image).unwrap();
+        let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
+        DesktopEvents::on_start(&mut desktop);
+        assert_eq!(desktop.application_commands.len(), 5);
+        let browser_command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::FileBrowser).unwrap().0;
+        MenuEvents::on_command(&mut desktop, Handle::None, browser_command, Commands::LaunchApplication);
+        let browser = desktop.browser_window;
+        desktop.window_mut(browser).unwrap().set_visible(false);
+        MenuEvents::on_command(&mut desktop, Handle::None, browser_command, Commands::LaunchApplication);
+        assert!(desktop.browser_window == browser);
+        assert!(desktop.window_mut(browser).unwrap().is_visible());
+        desktop.open_image(Some(image.clone()));
+        let viewer = desktop.image_window;
+        desktop.launch_application(AppId::ImageViewer);
+        assert!(desktop.image_window == viewer);
+        desktop.window_mut(viewer).unwrap().set_visible(false);
+        let visibility = desktop.hide_for_terminal_lock();
+        assert!(!desktop.window_mut(browser).unwrap().is_visible());
+        assert!(!desktop.window_mut(viewer).unwrap().is_visible());
+        let mut preferences = desktop.preferences.clone();
+        preferences.desktop.surface = Rgb(1,2,3);
+        desktop.apply_preferences(preferences);
+        desktop.restore_after_terminal_unlock(visibility);
+        assert!(desktop.window_mut(browser).unwrap().is_visible());
+        assert!(!desktop.window_mut(viewer).unwrap().is_visible());
+        desktop.arrange_windows(desktop::ArrangeWindowsMethod::Grid);
+        desktop.window_mut(viewer).unwrap().shutdown();
+        desktop.open_image(Some(image));
+        assert!(desktop.image_window != viewer);
+        desktop.window_mut(browser).unwrap().shutdown();
+        assert!(desktop.window_mut(browser).is_none_or(|window| window.is_closing()));
+        desktop.open_browser();
+        let new_browser = desktop.browser_window;
+        let closing = desktop.window_mut(new_browser).map(|window| window.is_closing());
+        assert!(new_browser != browser, "old: {browser:?}, new: {new_browser:?}, closing: {closing:?}");
+        MenuEvents::on_command(&mut desktop, Handle::None, Handle::None, Commands::Exit);
+        app.run();
+        runtime.block_on(crate::runtime::processes::finish_shutdown());
+    }
+    #[test]
+    fn document_windows_preserve_existing_editor_and_pass_opaque_os_argument() {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let dir = TestDir::new();
+        let mut name = "space 文 <FILE_PATH> ".as_bytes().to_vec();
+        name.push(0xff);
+        let path = dir.path().join(std::ffi::OsString::from_vec(name));
+        std::fs::write(&path, b"document").unwrap();
+        let capture = dir.path().join("argv");
+        let mut editor: Shortcut = toml::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shortcuts/helix.toml"))).unwrap();
+        editor.command = "/bin/sh".into();
+        editor.args = vec!["-c".into(), "if [ $# -ge 2 ]; then printf '%s' \"$2\" > \"$1\"; fi; printf A; read answer".into(), "editor".into(), capture.to_string_lossy().into_owned()];
+        let mut desktop = MyDesktop::new(vec![editor], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"Paint.Enable(false)").timers_count(32).build().unwrap();
+        desktop.launch_application(AppId::External(0));
+        let original = desktop.app_windows[&0];
+        pump_until(desktop.window_mut(original).unwrap(), 'A');
+        desktop.window_mut(original).unwrap().set_visible(false);
+        desktop.launch_application(AppId::External(0));
+        assert!(desktop.app_windows[&0] == original);
+        assert!(desktop.window_mut(original).unwrap().is_visible());
+        desktop.open_document(path.clone()).unwrap();
+        desktop.open_document(path.clone()).unwrap();
+        let documents = desktop.document_windows.clone();
+        assert_eq!(documents.len(), 2);
+        for handle in &documents { pump_until(desktop.window_mut(*handle).unwrap(), 'A'); }
+        assert_eq!(std::fs::read(capture).unwrap(), path.as_os_str().as_bytes());
+        let visibility = desktop.hide_for_terminal_lock();
+        for handle in &documents { assert!(!desktop.window_mut(*handle).unwrap().is_visible()); }
+        desktop.restore_after_terminal_unlock(visibility);
+        for handle in &documents { assert!(desktop.window_mut(*handle).unwrap().is_visible()); }
+        WindowEvents::on_cancel(desktop.window_mut(documents[0]).unwrap());
+        assert!(!desktop.window_mut(original).unwrap().is_closing());
+        MenuEvents::on_command(&mut desktop, Handle::None, Handle::None, Commands::Exit);
+        app.run();
+        runtime.block_on(crate::runtime::processes::finish_shutdown());
+    }
+    #[test]
     fn resizing_regroups_and_restores_apps_with_panel_enabled_or_disabled() {
         let _ui_lock = UI_LOCK.lock().unwrap();
         let dir = TestDir::new();
@@ -611,8 +793,8 @@ mod tests {
         // These are the frames of fresh desktops started directly at each size.
         // A resize must produce the same reachable menus as a fresh desktop.
         for (enabled, wide, narrow) in [
-            (false, 0xC20267277BB8D639u64, 0xD9D452254B0140u64),
-            (true, 0xDBF44FED245B6A1Fu64, 0x23B98BF63E9CD826u64),
+            (false, 0xA3C33CEAEE6C04AEu64, 0xC0528C85BDE1E01Eu64),
+            (true, 0xAAE8D348FD1290B8u64, 0x84EA3C8F227E8EE8u64),
         ] {
             let mut shortcuts = Vec::new();
             for name in [
@@ -644,9 +826,9 @@ mod tests {
             desktop.status = StatusMonitor::new(Arc::new(OfflineStatus));
             desktop.status.snapshot.network = crate::platform::linux::NetworkStatus::Offline;
             let script = format!(
-                "Paint('initial')\nCheckHash({wide:#X})\nResize(80,24)\nPaint('narrow')\nCheckHash({narrow:#X})\nResize(100,24)\nPaint('wide restored')\nCheckHash({wide:#X})"
+                "Paint('initial')\nCheckHash({wide:#X})\nResize(80,24)\nPaint('narrow')\nCheckHash({narrow:#X})\nResize(200,24)\nPaint('wide restored')\nCheckHash({wide:#X})"
             );
-            let app = App::debug(100, 24, &script)
+            let app = App::debug(200, 24, &script)
                 .desktop(desktop)
                 .app_bar()
                 .build()

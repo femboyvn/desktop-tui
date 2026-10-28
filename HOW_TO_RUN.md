@@ -66,7 +66,8 @@ an explicit shortcut directory is used. Typical locations are:
 
 No sample shortcuts are copied into the default directory. Platform-specific
 configuration paths do not establish runtime support beyond the Unix PTY
-requirement. An empty directory gives a desktop without application menus.
+requirement. An empty directory still provides the five starter apps through Application.
+External starters (`sh`, `btm`, and `nano`) require separately installed tools.
 
 ## Try a controlled command
 
@@ -118,7 +119,7 @@ commands in a shortcut's menu use their own executable and argument array.
 
 | Symptom | Check |
 | --- | --- |
-| No application menus | Confirm the directory and TOML files exist. Traversal errors can be skipped, so a missing directory may look empty. Names are deduplicated. |
+| Custom launcher missing | Check Application > User or the configured category. Confirm the folder and TOML files exist; traversal errors can be skipped. Names are deduplicated. |
 | Startup reports a TOML error | Compare the file with the complete example: `name`, `command`, all three tables, and the three window booleans are required. |
 | A command fails to start | Check that its executable is installed and available on `PATH`, or give its path. `--help` does not validate shortcut executables. |
 | Output or resizing looks wrong | Reproduce with a controlled command and record terminal size. The emulator supports only part of ANSI; resize synchronization runs on the window timer, including while output is quiet. |
@@ -128,3 +129,7 @@ Use [HOW_TO_TEST.md](HOW_TO_TEST.md) for checks and reporting. Follow
 [CODING_CONVENTION.md](CODING_CONVENTION.md) and
 [HOW_TO_IMPLEMENT_A_FUNCTION.md](HOW_TO_IMPLEMENT_A_FUNCTION.md) when changing
 the behavior rather than working around it in a shortcut.
+
+Native apps are available under **Application > System > File Browser** and
+**Application > Utility > Image Viewer**. See [README.md](README.md#applications-and-files)
+for supported image formats, limits, controls, and Text editor document handling.

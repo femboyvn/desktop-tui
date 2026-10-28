@@ -1,4 +1,5 @@
 name = "Bluetooth"
+category = "System"
 
 command = "bluetui"
 args = []
