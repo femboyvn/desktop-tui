@@ -1,9 +1,10 @@
-# Private development guide
+# Personal development guide
 
-This project is developed independently for private use. Keep changes and review
-material local or in an owner-approved private repository. Do not send changes,
-issues, or pull requests to the original parent project or public forks, and do
-not synchronize development with them. Preserve the existing license and
+This project is the owner's personal, independently maintained version. Personal
+use does not require private repository visibility. Keep changes and review
+material local or in the owner-approved `femboyvn/desktop-tui` repository. Do not
+send changes, issues, or pull requests to the original parent project or other
+forks, and do not synchronize development with them. Preserve the existing license and
 attribution in [LICENSE](LICENSE).
 
 Use this guide for internal development. Keep each change focused and agree on
@@ -23,11 +24,11 @@ a substantial redesign or breaking change with the owner before implementing it.
 
 ## Record a bug or propose a feature internally
 
-Check local notes or existing authorized private records for related work first.
+Check local notes or existing project records for related work first.
 For a bug, include the expected and actual behavior, reproduction steps, relevant
 shortcut TOML, operating system, terminal, Rust version, and repository revision.
 Include useful error output or a screenshot when it clarifies a rendering
-problem. Keep the report within the approved private destination and remove
+problem. Keep the report within the approved project destination and remove
 credentials and unrelated configuration from examples. Create an internal issue
 only when the owner requests one.
 
@@ -37,12 +38,13 @@ explicitly so reviewers can assess them.
 
 ## Set up a checkout
 
-Use an existing checkout or clone the intended private repository,
-`femboyvn/desktop-tui`, after its setup is verified. Do not create a public fork.
-Before any authorized push, verify the destination owner and repository, private
-visibility, and independence from the original parent's fork network. A remote
-named `origin` does not establish those properties. Keep work local when they
-cannot be verified; this guide does not confirm the current server-side settings.
+Use an existing checkout or clone the intended personal repository,
+`femboyvn/desktop-tui`, after its setup is verified. Do not create another fork.
+Before any authorized push, verify the destination owner and repository and
+independence from the original parent's fork network. A remote named `origin`
+does not establish those properties. Keep work local when they
+cannot be verified. Public repository visibility is permitted; do not change
+visibility as part of routine development.
 
 Use a Unix-like environment, a Rust toolchain supporting edition 2024, Cargo,
 and a native compiler/linker. The child-terminal dependency uses Unix PTYs.
@@ -75,10 +77,10 @@ shortcut directory containing a program available on your system.
 4. Review the complete patch, including new files. Stage explicit paths or hunks
    and inspect `git diff --cached` and `git diff --cached --check` before committing.
    Use an imperative subject with a prefix such as `fix:`, `feat:`, or `docs:`.
-5. Integrate against the agreed local or approved private base and repeat affected
+5. Integrate against the agreed local or approved project base and repeat affected
    checks after conflict resolution. Avoid rewriting shared history. Leave a
    reviewable local patch by default; commit or push only when requested or
-   covered by the agreed private workflow. Open an internal pull request only
+   covered by the agreed project workflow. Open a project pull request only
    when the user requests one. Follow the destination verification,
    authorization, and handoff rules in `AGENTS.md`.
 
@@ -112,12 +114,12 @@ when changing dependencies or release configuration. For documentation-only edit
 review content, local links, referenced paths, and whitespace, including new files.
 No runtime tests are needed for prose-only changes.
 
-## Hand off the change or request private review
+## Hand off the change or request project review
 
 Report the change to the owner. When an internal review is requested, use only
-the approved private destination and a descriptive title. Include:
+the approved project destination and a descriptive title. Include:
 
-- The problem or use case, with a related private record when one exists.
+- The problem or use case, with a related project record when one exists.
 - The resulting behavior and any compatibility impact.
 - The checks actually run and their outcomes, including relevant manual checks.
 - Any remaining limitations or checks you could not perform.

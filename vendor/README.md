@@ -1,0 +1,58 @@
+# Local AppCUI dependency
+
+`appcui/` contains AppCUI 0.4.6 from the cached crates.io package, retaining
+its original source, manifest metadata, authorship, and README. The package
+declares the MIT license in `appcui/Cargo.toml`; Desktop-TUI's own license is
+unchanged.
+
+Provenance:
+
+- Package: `appcui` 0.4.6.
+- Crates.io archive SHA-256: `b176effec313893928db922fd976c08b39f081f9da88dfa02c959cda99ced645`.
+- Packaged VCS revision: `3e78f52da9cd2ff0d85716c13ac57d9cba874203`, directory `appcui`.
+
+Cargo uses this local copy through the path dependency in the root manifest.
+Modified packaged sources:
+
+- `src/backend/crossterm/implementation.rs`: the rendering fix described below.
+- `src/ui/window/toolbar/toolbar.rs`: remove a final position adjustment whose
+  result is never used.
+- `src/backend/utils/ansi_formatter.rs`: compile the mouse-enable helper only
+  for tests, its only active callers.
+- `src/utils/log.rs`: compile logging imports and storage only in debug builds,
+  matching their callers.
+- `src/utils/fs/root.rs`: compile Windows-only drive kinds and icon arms for
+  Windows backends and tests.
+- `src/backend/termios/api/sizing.rs`: explicitly cast the resize signal handler
+  through a function pointer before converting to libc's handler type.
+
+`src/backend/crossterm/regression_tests.rs` is new. The warning cleanups above
+retain the existing runtime behavior and do not add lint suppressions. Registry
+cache markers and the upstream lockfile are omitted; the root lockfile controls
+dependency resolution.
+
+The local fix resets text styles before choosing colors and invalidates the
+color cache after every style reset. It also establishes styles for the first
+changed cell of each frame, because the terminal retains styles between frames.
+The output routine accepts a writer so tests can inspect real ANSI output
+without initializing or taking over a terminal.
+
+Run the renderer regression tests from the repository root:
+
+```sh
+cargo test --locked -p appcui --lib backend::crossterm::implementation::regression_tests
+```
+
+The existing tests for the warning cleanup are:
+
+```sh
+cargo test --locked -p appcui --lib backend::utils::tests::check_ansi_methods
+cargo test --locked -p appcui --lib utils::fs::tests::check_roottype
+cargo test --locked -p appcui --lib ui::window::tests:: -- --test-threads=1
+```
+
+Run AppCUI UI tests sequentially because its application singleton is shared
+across the process.
+
+Keep future changes focused and document them here. This is a local dependency
+patch; it does not require synchronizing with or publishing to another project.

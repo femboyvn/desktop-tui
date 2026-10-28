@@ -6,12 +6,12 @@ single binary entry point, `src/main.rs`. It has no library target, workspace
 members beyond itself, or CI workflow. Desktop input regression tests live in
 `src/ui/desktop/view.rs`.
 
-Development is intended to remain private and independent of the original parent
-project. Keep work local or in an owner-approved private repository; do not send
-contributions, issues, or pull requests to the parent or public forks, or sync
-development with them. Follow [AGENTS.md](AGENTS.md) to verify a destination's
-visibility and fork status before any authorized push. This policy does not
-establish the current server-side repository settings. `publish = false` in
+This is the owner's personal version, developed independently of the original
+parent project. Repository visibility may be public. Keep work local or in the
+owner-approved `femboyvn/desktop-tui` repository; do not send contributions,
+issues, or pull requests to the parent or other forks, or sync development with
+them. Follow [AGENTS.md](AGENTS.md) to verify a destination's identity and fork
+status before any authorized push. `publish = false` in
 [Cargo.toml](Cargo.toml) disables Cargo package publishing; it does not control Git
 hosting visibility. Preserve the inherited MIT license and attribution.
 
@@ -20,7 +20,7 @@ Read [AGENTS.md](AGENTS.md) for the working and Git workflow,
 [HOW_TO_IMPLEMENT_A_FUNCTION.md](HOW_TO_IMPLEMENT_A_FUNCTION.md) for implementation
 and verification steps.
 The focused command guides are [HOW_TO_RUN.md](HOW_TO_RUN.md) and
-[HOW_TO_TEST.md](HOW_TO_TEST.md); private development and handoff expectations are in
+[HOW_TO_TEST.md](HOW_TO_TEST.md); personal development and handoff expectations are in
 [CONTRIBUTE.md](CONTRIBUTE.md).
 
 ## Setup and commands
@@ -89,6 +89,7 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/utils.rs](src/utils.rs) | Unregistered helper file, outside the module tree. |
 | [shortcuts/](shortcuts/) | Example TOML launchers; executable names are external tools, not bundled binaries. |
 | [Cargo.toml](Cargo.toml), [Cargo.lock](Cargo.lock) | Package/dependency declarations and tracked dependency resolution. |
+| [vendor/](vendor/README.md) | Local AppCUI 0.4.6 dependency with a CrossTerm style/color rendering fix and ANSI output regression tests. |
 | [.cargo/config.toml](.cargo/config.toml) | Development/release profiles; release uses `opt-level = "z"`, LTO, one codegen unit, and symbol stripping. |
 | [rustfmt.toml](rustfmt.toml) | `disable_all_formatting = true`; preserve manual source style. |
 | [.agents/skills/](.agents/skills/) | Repository-local brainstorming, testing, and OS integration workflows; see `AGENTS.md` for selection and invocation. |

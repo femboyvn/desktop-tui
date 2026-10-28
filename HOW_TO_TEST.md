@@ -3,7 +3,7 @@
 Use this guide from the repository root. Start with [AGENTS.md](AGENTS.md) for
 the shared-worktree and Git rules, [HOW_TO_RUN.md](HOW_TO_RUN.md) for setup and
 controlled shortcuts, and [CONTRIBUTE.md](CONTRIBUTE.md) for internal handoffs and
-requested private reviews.
+requested project reviews.
 The module map and implementation limits are in [CODEBASE.md](CODEBASE.md).
 
 ## Choose checks that exercise the change
@@ -30,6 +30,16 @@ cargo clippy --locked --all-targets
 cargo fmt --all -- --check
 git diff --check
 ```
+
+The locally patched AppCUI renderer also has output-level regressions. Run them
+from this root (the application's default test command does not select dependency
+tests):
+
+```sh
+cargo test --locked -p appcui --lib backend::crossterm::implementation::regression_tests
+```
+
+See [vendor/README.md](vendor/README.md) for the patch and its provenance.
 
 Use `cargo build --locked --release` as well for dependency or release-profile
 changes. `cargo run --locked -- --help` checks CLI startup without initializing
@@ -103,6 +113,7 @@ menu item to launch it. Check only the matrix rows relevant to the patch.
 | Startup and menus | Launch with the explicit directory, start a known command, hide/show, close, and reopen it. Confirm responsiveness and arrangement if affected. |
 | Keyboard and focus | On an empty desktop, press Alt combinations and Escape; confirm the app stays open and Desktop > Exit still works. Type into the focused child; check affected arrows, navigation, modifiers, or function keys. Move focus and confirm input goes to the intended control. Check Ctrl+C termination separately. |
 | ANSI and rendering | Use controlled text/color/cursor output. Check the affected sequences, chunk boundaries, non-ASCII text, and surface edges against the intended result. Record existing emulator limits separately. |
+| Window movement and colors | Open Help and a terminal with bold/plain colored text. Drag each window repeatedly over the desktop and other windows, then close or hide it. Check that exposed cells and text retain their colors with active and quiet terminal output. |
 | Resize | Resize both the child window and outer terminal, including small sizes. Check canvas bounds, cursor, colors, and child dimensions with active output and while quiet. Resize synchronization runs on the window timer, including while output is quiet. |
 | Placeholder dialogs | Exercise file and folder selection, cancellation, and paths containing spaces using explicit argument arrays. Confirm arguments reach the child intact and cancellation prevents launch. |
 | Child lifecycle | Exercise normal exit, a missing executable, menu Close, Ctrl+C, and Desktop Exit. Observe errors and responsiveness, and use the host's process tools to check for leftover children. |
@@ -125,7 +136,7 @@ Report commands actually run and their outcomes, tests that ran, new versus
 existing warnings, manual scenarios exercised, and any blocked or remaining
 checks with reasons. Include the OS, terminal, toolchain, relevant shortcut, and
 revision for a reproducible UI failure. State whether the work is committed.
-Keep evidence local or within the owner-approved private destination; do not send
-reports, issues, or pull requests to the original parent project or public forks.
+Keep evidence local or within the owner-approved project destination; do not send
+reports, issues, or pull requests to the original parent project or other forks.
 A headless build cannot establish interactive correctness, and no CI result is
 available in this repository to substitute for these checks.
