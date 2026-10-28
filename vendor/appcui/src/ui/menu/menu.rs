@@ -470,6 +470,13 @@ impl Menu {
             self.current = mpi.item_index;
             need_repaint = true;
         }
+        if mpi.is_on_menu && self.current.in_range(self.items.len()) {
+            let item = &self.items[self.current.index()];
+            if item.is_enabled() && item.is_submenu() {
+                self.run_item_action(self.current.index(), self.receiver_control_handle);
+                return MouseMoveMenuResult::ProcessedAndRepaint;
+            }
+        }
         if need_repaint {
             if mpi.is_on_menu {
                 MouseMoveMenuResult::ProcessedAndRepaint

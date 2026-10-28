@@ -14,6 +14,10 @@ Provenance:
 Cargo uses this local copy through the path dependency in the root manifest.
 Modified packaged sources:
 
+- `src/ui/menu/menu.rs` and `src/system/runtime_manager.rs`: open submenus on
+  hover and route pointer motion through the visible parent chain, so moving
+  between Application categories replaces the opened submenu.
+
 - `src/backend/crossterm/input.rs`: recognize completed left-click pairs within
   500 ms and emit double-click actions for lists and window controls. Movement,
   dragging, keyboard input, resize, and scrolling cancel the pair.
@@ -78,4 +82,10 @@ CrossTerm double-click regressions:
 
 ```sh
 cargo test --locked -p appcui --lib double_click_tests -- --test-threads=1
+```
+
+Submenu hover regression:
+
+```sh
+cargo test --locked -p appcui --lib hovering_parent_categories_switches_open_submenus -- --test-threads=1
 ```

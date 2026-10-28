@@ -1532,16 +1532,22 @@ impl MouseMethods for RuntimeManager {
         let mut processed = false;
         // Process event in the following order:
         // first the context menu and its owner, then the app bar and then cmdbar
-        if let Some(menu) = self.get_opened_menu() {
-            match menu.on_mouse_move(x, y) {
-                menu::events::MouseMoveMenuResult::ProcessedAndRepaint => {
-                    self.repaint = true;
-                    return true;
-                }
-                menu::events::MouseMoveMenuResult::RepaintAndPass => self.repaint = true,
-                menu::events::MouseMoveMenuResult::ProcessWithoutRepaint => return true, // process it but no repaint needed.
-                menu::events::MouseMoveMenuResult::Ignored => {}
+        // An opened child menu does not cover its parent. Route motion through
+        // the whole visible chain so hovering another category can replace it.
+        let menus = unsafe { &mut *self.menus };
+        let mut handle = self.opened_menu_handle;
+        while let Some(menu) = menus.get_mut(handle) {
+            if menu.is_on_menu(x, y) {
+                self.opened_menu_handle = handle;
+                menu.on_mouse_move(x, y);
+                self.repaint = true;
+                return true;
             }
+            match menu.on_mouse_move(x, y) {
+                menu::events::MouseMoveMenuResult::ProcessedAndRepaint | menu::events::MouseMoveMenuResult::RepaintAndPass => self.repaint = true,
+                _ => {}
+            }
+            handle = menu.get_parent_handle();
         }
 
         if let Some(appbar) = self.appbar.as_mut() {

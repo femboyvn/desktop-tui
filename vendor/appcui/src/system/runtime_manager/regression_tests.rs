@@ -17,3 +17,31 @@ fn file_picker_preserves_background_colors_when_requested() {
     assert_eq!(*runtime.surface.char(1,1).unwrap(), original);
     app.run();
 }
+
+#[test]
+fn hovering_parent_categories_switches_open_submenus() {
+    let app = App::debug(100,30,"Paint.Enable(false)").build().unwrap();
+    #[derive(Copy, Clone)]
+    struct TestCommand(u32);
+    impl CommandID for TestCommand {}
+    impl From<TestCommand> for u32 { fn from(command: TestCommand) -> u32 { command.0 } }
+    let mut root = Menu::new();
+    let mut first = Menu::new();
+    first.add(menu::Command::new("Terminal", Key::None, TestCommand(1)));
+    root.add(menu::SubMenu::new("System", first));
+    let mut second = Menu::new();
+    second.add(menu::Command::new("Image Viewer", Key::None, TestCommand(2)));
+    root.add(menu::SubMenu::new("Utility", second));
+    let runtime = RuntimeManager::get();
+    let root = runtime.get_menus().add(root);
+    runtime.show_menu(root, Handle::None, 5, 2, 0, None);
+    runtime.process_menu_mouse_click(root, 7, 3);
+    let first = runtime.opened_menu_handle;
+    assert!(first != root);
+    assert!(runtime.process_menu_and_cmdbar_mousemove(7, 4));
+    let second = runtime.opened_menu_handle;
+    assert!(second != root && second != first, "hovering Utility must replace the System submenu");
+    assert!(runtime.process_menu_and_cmdbar_mousemove(7, 3));
+    assert!(runtime.opened_menu_handle == first, "hovering back to System must restore its submenu");
+    app.run();
+}

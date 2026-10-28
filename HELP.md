@@ -9,6 +9,7 @@ or the mouse wheel to scroll. Drag the divider to resize the panes.
 
 Open Application in the top bar, choose a category, then an app.
 Selecting it again restores and focuses its existing window.
+Hover another category to switch an opened submenu without clicking.
 System, Utility, User, and Games are always present; extra categories
 follow alphabetically. Empty categories show No apps yet.
 
