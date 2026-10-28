@@ -1,11 +1,31 @@
+use crate::preferences::TerminalPalette;
 use appcui::prelude::{CharFlags, Character, Color, Surface};
 
+// Keep provenance: an RGB value can equal a palette color without referring to it.
+#[derive(Debug, Clone, Copy)]
+enum ColorSource {
+    DefaultForeground,
+    DefaultBackground,
+    Ansi(u8),
+    Fixed(Color),
+}
+#[derive(Clone, Copy)]
+struct CellColors {
+    foreground: ColorSource,
+    background: ColorSource,
+}
+impl Default for CellColors {
+    fn default() -> Self {
+        Self {
+            foreground: ColorSource::DefaultForeground,
+            background: ColorSource::DefaultBackground,
+        }
+    }
+}
 #[derive(Debug, Clone, Copy)]
 struct TerminalState {
-    default_foreground_color: Color,
-    default_background_color: Color,
-    foreground: Color,
-    background: Color,
+    foreground: ColorSource,
+    background: ColorSource,
     bold: bool,
     dim: bool,
     italic: bool,
@@ -13,46 +33,134 @@ struct TerminalState {
     cursor_x: i32,
     cursor_y: i32,
 }
-
 impl TerminalState {
     fn reset(&mut self) {
-        self.foreground = self.default_foreground_color;
-        self.background = self.default_background_color;
+        self.foreground = ColorSource::DefaultForeground;
+        self.background = ColorSource::DefaultBackground;
         self.bold = false;
         self.dim = false;
         self.italic = false;
         self.underline = false;
-        self.cursor_x = 0;
-        self.cursor_y = 0;
     }
 }
-
 pub struct TerminalParser {
     width: u32,
     height: u32,
     state: TerminalState,
+    palette: TerminalPalette,
+    background_override: Option<Color>,
+    cells: Vec<CellColors>,
+    cursor_visible: bool,
 }
-
 impl TerminalParser {
-    pub fn new(width: u32, height: u32, default_background_color: Color) -> Self {
+    pub fn with_palette(
+        width: u32,
+        height: u32,
+        palette: &TerminalPalette,
+        background_override: Option<Color>,
+    ) -> Self {
+        let width = width.clamp(1, 10000);
+        let height = height.clamp(1, 10000);
         Self {
             width,
             height,
+            palette: palette.clone(),
+            background_override,
+            cells: vec![CellColors::default(); (width * height) as usize],
+            cursor_visible: false,
             state: TerminalState {
-                default_foreground_color: Color::RGB(255, 255, 255),
-                default_background_color,
-                foreground: Color::RGB(255, 255, 255),
-                background: default_background_color,
+                foreground: ColorSource::DefaultForeground,
+                background: ColorSource::DefaultBackground,
                 bold: false,
                 dim: false,
                 italic: false,
                 underline: false,
                 cursor_x: 0,
                 cursor_y: 0,
+            },
+        }
+    }
+    fn resolve(&self, source: ColorSource) -> Color {
+        match source {
+            ColorSource::DefaultForeground => self.palette.foreground.color(),
+            ColorSource::DefaultBackground => self
+                .background_override
+                .unwrap_or(self.palette.background.color()),
+            ColorSource::Ansi(index) => self.palette.ansi[index as usize].color(),
+            ColorSource::Fixed(color) => color,
+        }
+    }
+    pub fn new_surface(&self) -> Surface {
+        let mut surface = Surface::new(self.width, self.height);
+        surface.clear(Character::new(
+            ' ',
+            self.resolve(ColorSource::DefaultForeground),
+            self.resolve(ColorSource::DefaultBackground),
+            CharFlags::None,
+        ));
+        surface
+    }
+    pub fn apply_palette(&mut self, palette: &TerminalPalette, surface: &mut Surface) {
+        self.palette = palette.clone();
+        for y in 0..self.height as i32 {
+            for x in 0..self.width as i32 {
+                let colors = self.cells[(y as u32 * self.width + x as u32) as usize];
+                if let Some(mut character) = surface.char(x, y).copied() {
+                    character.foreground = self.resolve(colors.foreground);
+                    character.background = self.resolve(colors.background);
+                    surface.write_char(x, y, character);
+                }
             }
         }
     }
-
+    pub fn resize_surface(&mut self, width: u32, height: u32, surface: &mut Surface) {
+        let width = width.clamp(1, 10000);
+        let height = height.clamp(1, 10000);
+        let mut next = Surface::new(width, height);
+        next.clear(Character::new(
+            ' ',
+            self.resolve(ColorSource::DefaultForeground),
+            self.resolve(ColorSource::DefaultBackground),
+            CharFlags::None,
+        ));
+        let mut cells = vec![CellColors::default(); (width * height) as usize];
+        for y in 0..height.min(self.height) {
+            for x in 0..width.min(self.width) {
+                if let Some(character) = surface.char(x as i32, y as i32) {
+                    next.write_char(x as i32, y as i32, *character);
+                }
+                cells[(y * width + x) as usize] = self.cells[(y * self.width + x) as usize];
+            }
+        }
+        self.width = width;
+        self.height = height;
+        self.cells = cells;
+        self.state.cursor_x = self.state.cursor_x.clamp(0, width as i32 - 1);
+        self.state.cursor_y = self.state.cursor_y.clamp(0, height as i32 - 1);
+        if self.cursor_visible {
+            next.set_cursor(self.state.cursor_x, self.state.cursor_y);
+        }
+        *surface = next;
+    }
+    fn put_cell(&mut self, x: i32, y: i32, code: char, flags: CharFlags, surface: &mut Surface) {
+        if x < 0 || y < 0 || x >= self.width as i32 || y >= self.height as i32 {
+            return;
+        }
+        self.cells[(y as u32 * self.width + x as u32) as usize] = CellColors {
+            foreground: self.state.foreground,
+            background: self.state.background,
+        };
+        surface.write_char(
+            x,
+            y,
+            Character::new(
+                code,
+                self.resolve(self.state.foreground),
+                self.resolve(self.state.background),
+                flags,
+            ),
+        );
+    }
     pub fn parse_to_surface(&mut self, data: &[u8], mut surface: Surface) -> Surface {
         let text = String::from_utf8_lossy(data);
         let chars: Vec<char> = text.chars().collect();
@@ -69,20 +177,17 @@ impl TerminalParser {
                     .chars()
                     .count();
                 i += consumed_chars;
-            }
-            else {
+            } else {
                 // Handle regular character
                 self.write_character(chars[i], &mut surface);
                 i += 1;
             }
         }
-        
-        surface
-    }
 
-    pub fn resize(&mut self, width: u32, height: u32) {
-        self.width = width;
-        self.height = height;
+        if self.cursor_visible {
+            surface.set_cursor(self.state.cursor_x, self.state.cursor_y);
+        }
+        surface
     }
 
     fn parse_ansi_sequence(&mut self, data: &[u8], surface: &mut Surface) -> usize {
@@ -117,8 +222,7 @@ impl TerminalParser {
                     }
                     if private_mode {
                         self.handle_private_ansi_command(byte as char, &params, surface);
-                    }
-                    else {
+                    } else {
                         self.handle_ansi_command(byte as char, &params, surface);
                     }
                     return i + 1;
@@ -148,12 +252,14 @@ impl TerminalParser {
             'B' => {
                 // Cursor down
                 let count = params.get(0).unwrap_or(&1);
-                self.state.cursor_y = (self.state.cursor_y + *count as i32).min(self.height as i32 - 1);
+                self.state.cursor_y =
+                    (self.state.cursor_y + *count as i32).min(self.height as i32 - 1);
             }
             'C' => {
                 // Cursor right
                 let count = params.get(0).unwrap_or(&1);
-                self.state.cursor_x = (self.state.cursor_x + *count as i32).min(self.width as i32 - 1);
+                self.state.cursor_x =
+                    (self.state.cursor_x + *count as i32).min(self.width as i32 - 1);
             }
             'D' => {
                 // Cursor left
@@ -165,8 +271,7 @@ impl TerminalParser {
                 if params.is_empty() {
                     // Reset all attributes
                     self.state.reset();
-                }
-                else {
+                } else {
                     self.handle_sgr_params(params);
                 }
             }
@@ -186,13 +291,23 @@ impl TerminalParser {
         }
     }
 
-    fn handle_private_ansi_command(&mut self, command: char, _params: &[u32], surface: &mut Surface) {
+    fn handle_private_ansi_command(
+        &mut self,
+        command: char,
+        params: &[u32],
+        surface: &mut Surface,
+    ) {
+        if !params.contains(&25) {
+            return;
+        }
         match command {
             'l' => {
+                self.cursor_visible = false;
                 // Hide cursor
                 surface.hide_cursor()
             }
             'h' => {
+                self.cursor_visible = true;
                 // Show cursor
                 surface.set_cursor(self.state.cursor_x, self.state.cursor_y);
             }
@@ -207,24 +322,36 @@ impl TerminalParser {
             0 => {
                 // clear from cursor to end of screen
                 for y in self.state.cursor_y..self.height as i32 {
-                    let start_x = if y == self.state.cursor_y { self.state.cursor_x } else { 0 };
+                    let start_x = if y == self.state.cursor_y {
+                        self.state.cursor_x
+                    } else {
+                        0
+                    };
                     for x in start_x..self.width as i32 {
-                        surface.write_char(x, y, Character::new(' ', self.state.foreground, self.state.background, CharFlags::None));
+                        self.put_cell(x, y, ' ', CharFlags::None, surface);
                     }
                 }
             }
             1 => {
                 // clear from beginning of screen to cursor
                 for y in 0..=self.state.cursor_y {
-                    let end_x = if y == self.state.cursor_y { self.state.cursor_x } else { self.width as i32 - 1 };
+                    let end_x = if y == self.state.cursor_y {
+                        self.state.cursor_x
+                    } else {
+                        self.width as i32 - 1
+                    };
                     for x in 0..=end_x {
-                        surface.write_char(x, y, Character::new(' ', self.state.foreground, self.state.background, CharFlags::None));
+                        self.put_cell(x, y, ' ', CharFlags::None, surface);
                     }
                 }
             }
             2 => {
                 // clear entire screen
-                surface.clear(Character::new(' ', self.state.foreground, self.state.background, CharFlags::None));
+                for y in 0..self.height as i32 {
+                    for x in 0..self.width as i32 {
+                        self.put_cell(x, y, ' ', CharFlags::None, surface);
+                    }
+                }
             }
             _ => {}
         }
@@ -235,19 +362,19 @@ impl TerminalParser {
             0 => {
                 // clear from cursor to end of line
                 for x in self.state.cursor_x..self.width as i32 {
-                    surface.write_char(x, self.state.cursor_y, Character::new(' ', self.state.foreground, self.state.background, CharFlags::None));
+                    self.put_cell(x, self.state.cursor_y, ' ', CharFlags::None, surface);
                 }
             }
             1 => {
                 // clear from beginning of line to cursor
                 for x in 0..=self.state.cursor_x {
-                    surface.write_char(x, self.state.cursor_y, Character::new(' ', self.state.foreground, self.state.background, CharFlags::None));
+                    self.put_cell(x, self.state.cursor_y, ' ', CharFlags::None, surface);
                 }
             }
             2 => {
                 // clear entire line
                 for x in 0..self.width as i32 {
-                    surface.write_char(x, self.state.cursor_y, Character::new(' ', self.state.foreground, self.state.background, CharFlags::None));
+                    self.put_cell(x, self.state.cursor_y, ' ', CharFlags::None, surface);
                 }
             }
             _ => {}
@@ -271,14 +398,14 @@ impl TerminalParser {
                 23 => self.state.italic = false,
                 24 => self.state.underline = false,
 
-                39 => self.state.foreground = self.state.default_foreground_color,
-                49 => self.state.background = self.state.default_background_color,
+                39 => self.state.foreground = ColorSource::DefaultForeground,
+                49 => self.state.background = ColorSource::DefaultBackground,
 
                 // 16-color standard + bright
-                30..=37 => self.state.foreground = ansi_16_color(param - 30, false),
-                40..=47 => self.state.background = ansi_16_color(param - 40, false),
-                90..=97 => self.state.foreground = ansi_16_color(param - 90, true),
-                100..=107 => self.state.background = ansi_16_color(param - 100, true),
+                30..=37 => self.state.foreground = ColorSource::Ansi((param - 30) as u8),
+                40..=47 => self.state.background = ColorSource::Ansi((param - 40) as u8),
+                90..=97 => self.state.foreground = ColorSource::Ansi((param - 90 + 8) as u8),
+                100..=107 => self.state.background = ColorSource::Ansi((param - 100 + 8) as u8),
 
                 // Extended color sequences
                 38 | 48 => {
@@ -289,7 +416,11 @@ impl TerminalParser {
                             5 => {
                                 // 256-color: 38;5;<idx> or 48;5;<idx>
                                 if let Some(idx) = iter.next() {
-                                    let color = ansi_256_color(idx);
+                                    let color = if idx < 16 {
+                                        ColorSource::Ansi(idx as u8)
+                                    } else {
+                                        ColorSource::Fixed(ansi_256_color(idx))
+                                    };
                                     if is_foreground {
                                         self.state.foreground = color;
                                     } else {
@@ -299,8 +430,14 @@ impl TerminalParser {
                             }
                             2 => {
                                 // Truecolor: 38;2;<r>;<g>;<b> or 48;2;<r>;<g>;<b>
-                                if let (Some(r), Some(g), Some(b)) = (iter.next(), iter.next(), iter.next()) {
-                                    let color = Color::RGB(r as u8, g as u8, b as u8);
+                                if let (Some(r), Some(g), Some(b)) =
+                                    (iter.next(), iter.next(), iter.next())
+                                {
+                                    let color = ColorSource::Fixed(Color::RGB(
+                                        r.min(255) as u8,
+                                        g.min(255) as u8,
+                                        b.min(255) as u8,
+                                    ));
 
                                     if is_foreground {
                                         self.state.foreground = color;
@@ -363,8 +500,7 @@ impl TerminalParser {
                     flags |= CharFlags::Underline;
                 }
 
-                let character = Character::new(c, self.state.foreground, self.state.background, flags);
-                surface.write_char(self.state.cursor_x, self.state.cursor_y, character);
+                self.put_cell(self.state.cursor_x, self.state.cursor_y, c, flags, surface);
                 self.cursor_forward();
             }
         }
@@ -383,61 +519,128 @@ impl TerminalParser {
     }
 }
 
-/// Map 16 ANSI colors to RGB
-fn ansi_16_color(code: u32, bright: bool) -> Color {
-    let (r, g, b): (u8, u8, u8) = match code {
-        0 => (0, 0, 0),       // Black
-        1 => (128, 0, 0),     // Red
-        2 => (0, 128, 0),     // Green
-        3 => (128, 128, 0),   // Yellow
-        4 => (0, 0, 128),     // Blue
-        5 => (128, 0, 128),   // Magenta
-        6 => (0, 128, 128),   // Cyan
-        7 => (192, 192, 192), // White (light gray)
-        _ => (255, 255, 255),
-    };
-
-    if bright {
-        Color::RGB(
-            r.saturating_mul(2).min(255),
-            g.saturating_mul(2).min(255),
-            b.saturating_mul(2).min(255)
-        )
-    }
-    else {
-        Color::RGB(r, g, b)
-    }
-}
-
-/// Map 256-color palette to RGB
+/// Fixed xterm colors (indices 16–255 never follow user palette changes).
 fn ansi_256_color(idx: u32) -> Color {
     match idx {
-        0..=15 => {
-            // Reuse 16 ANSI
-            if idx < 8 {
-                ansi_16_color(idx, false)
-            } else {
-                ansi_16_color(idx - 8, true)
-            }
-        }
         16..=231 => {
-            // 6x6x6 color cube
             let n = idx - 16;
-            let r = (n / 36) % 6;
-            let g = (n / 6) % 6;
-            let b = n % 6;
-            Color::RGB(
-                (r * 51) as u8,
-                (g * 51) as u8,
-                (b * 51) as u8,
-            )
+            let level = |v| if v == 0 { 0 } else { (55 + 40 * v) as u8 };
+            Color::RGB(level((n / 36) % 6), level((n / 6) % 6), level(n % 6))
         }
         232..=255 => {
-            // Grayscale ramp (24 shades)
-            let level = 8 + (idx - 232) * 10;
-            Color::RGB(level as u8, level as u8, level as u8)
+            let level = (8 + (idx - 232) * 10) as u8;
+            Color::RGB(level, level, level)
         }
         _ => Color::RGB(0, 0, 0),
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::preferences::{Preferences, Rgb};
+    #[test]
+    fn recolors_default_standard_bright_and_indexed_colors_without_rgb_collisions() {
+        let old = Preferences::default().terminal;
+        let mut parser = TerminalParser::with_palette(30, 3, &old, None);
+        let surface = parser.new_surface();
+        let fixed = old.ansi[1];
+        let text = format!(
+            "a\x1b[31;44;1;3;4mb\x1b[91mc\x1b[38;5;1md\x1b[38;2;{};{};{}me\x1b[38;5;200mf\x1b[0mg",
+            fixed.0, fixed.1, fixed.2
+        );
+        let mut surface = parser.parse_to_surface(text.as_bytes(), surface);
+        let mut next = old.clone();
+        next.foreground = Rgb(1, 2, 3);
+        next.background = Rgb(4, 5, 6);
+        next.ansi[1] = Rgb(11, 12, 13);
+        next.ansi[9] = Rgb(21, 22, 23);
+        next.ansi[4] = Rgb(31, 32, 33);
+        let before = *surface.char(1, 0).unwrap();
+        parser.apply_palette(&next, &mut surface);
+        assert_eq!(
+            surface.char(0, 0).unwrap().foreground,
+            next.foreground.color()
+        );
+        assert_eq!(
+            surface.char(0, 0).unwrap().background,
+            next.background.color()
+        );
+        assert_eq!(surface.char(1, 0).unwrap().foreground, next.ansi[1].color());
+        assert_eq!(surface.char(1, 0).unwrap().background, next.ansi[4].color());
+        assert_eq!(surface.char(1, 0).unwrap().flags, before.flags);
+        assert_eq!(surface.char(1, 0).unwrap().code, 'b');
+        assert_eq!(surface.char(2, 0).unwrap().foreground, next.ansi[9].color());
+        assert_eq!(surface.char(3, 0).unwrap().foreground, next.ansi[1].color());
+        assert_eq!(surface.char(4, 0).unwrap().foreground, fixed.color());
+        assert_eq!(
+            surface.char(5, 0).unwrap().foreground,
+            Color::RGB(255, 0, 215)
+        );
+        assert_eq!(
+            surface.char(6, 0).unwrap().foreground,
+            next.foreground.color()
+        );
+        // SGR resets and recoloring do not move the cursor or change future writes.
+        surface = parser.parse_to_surface(b"h", surface);
+        assert_eq!(surface.char(7, 0).unwrap().code, 'h');
+        assert_eq!(
+            surface.char(7, 0).unwrap().foreground,
+            next.foreground.color()
+        );
+    }
+    #[test]
+    fn shortcut_override_survives_reset_erase_resize_and_palette_changes() {
+        let old = Preferences::default().terminal;
+        let override_color = Color::RGB(7, 8, 9);
+        let mut parser = TerminalParser::with_palette(10, 3, &old, Some(override_color));
+        let surface = parser.new_surface();
+        let mut surface = parser.parse_to_surface(b"\x1b[41mA\x1b[49mB\x1b[0mC\x1b[2K", surface);
+        parser.resize_surface(12, 4, &mut surface);
+        let mut next = old.clone();
+        next.background = Rgb(99, 98, 97);
+        next.ansi[1] = Rgb(80, 81, 82);
+        parser.apply_palette(&next, &mut surface);
+        for (x, y) in [(0, 0), (2, 0), (0, 1), (11, 3)] {
+            assert_eq!(surface.char(x, y).unwrap().background, override_color);
+        }
+        surface = parser.parse_to_surface(b"D", surface);
+        assert_eq!(surface.char(3, 0).unwrap().code, 'D');
+        assert_eq!(surface.char(3, 0).unwrap().background, override_color);
+    }
+    #[test]
+    fn erase_and_resize_keep_color_metadata_aligned() {
+        let old = Preferences::default().terminal;
+        let mut parser = TerminalParser::with_palette(6, 3, &old, None);
+        let mut surface = parser.parse_to_surface(
+            b"\x1b[32mAB\x1b[2;2H\x1b[104mX\x1b[0K",
+            parser.new_surface(),
+        );
+        parser.resize_surface(9, 4, &mut surface);
+        let mut next = old.clone();
+        next.ansi[2] = Rgb(1, 2, 3);
+        next.ansi[12] = Rgb(4, 5, 6);
+        parser.apply_palette(&next, &mut surface);
+        assert_eq!(surface.char(0, 0).unwrap().code, 'A');
+        assert_eq!(surface.char(0, 0).unwrap().foreground, next.ansi[2].color());
+        assert_eq!(surface.char(1, 1).unwrap().code, 'X');
+        assert_eq!(surface.char(5, 1).unwrap().code, ' ');
+        assert_eq!(
+            surface.char(5, 1).unwrap().background,
+            next.ansi[12].color()
+        );
+        assert_eq!(
+            surface.char(8, 3).unwrap().background,
+            next.background.color()
+        );
+        parser.resize_surface(3, 2, &mut surface);
+        assert_eq!(surface.char(1, 1).unwrap().code, 'X');
+        surface = parser.parse_to_surface(b"\x1b[2J", surface);
+        next.ansi[12] = Rgb(50, 51, 52);
+        parser.apply_palette(&next, &mut surface);
+        assert_eq!(
+            surface.char(0, 0).unwrap().background,
+            next.ansi[12].color()
+        );
+    }
+}

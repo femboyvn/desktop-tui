@@ -1,15 +1,19 @@
+use crate::preferences::TerminalPalette;
+use crate::shortcut::{BackgroundColor, TerminalOptions, WindowOptions, WindowSize};
 use crate::terminal_emulation::TerminalParser;
 use anyhow::anyhow;
 use appcui::dialogs::{Location, OpenFileDialogFlags, SelectFolderDialogFlags};
-use appcui::graphics::{CharAttribute, CharFlags, Character, Color, Size, Surface};
+use appcui::graphics::{Color, Size, Surface};
 use appcui::prelude::window::Flags;
-use appcui::prelude::{canvas, Alignment, Canvas, EventProcessStatus, Handle, LayoutBuilder, OnResize, TimerEvents, Window};
+use appcui::prelude::{
+    Alignment, Canvas, EventProcessStatus, Handle, LayoutBuilder, OnResize, TimerEvents, Window,
+    canvas,
+};
 use async_channel::{Receiver, Sender};
 use std::ffi::OsStr;
 use std::path::Path;
 use std::time::Duration;
 use virtual_terminal::{Command, Input, Output};
-use crate::shortcut::{BackgroundColor, TerminalOptions, WindowOptions, WindowSize};
 
 #[CustomControl(overwrite = OnKeyPressed)]
 pub struct CustomKeyboardControl {
@@ -24,7 +28,8 @@ pub struct TuiWindow {
     pub terminal_parser: TerminalParser,
     pub custom_keyboard_control: Handle<CustomKeyboardControl>,
     pub horizontal_adjustment: u32,
-    pub vertical_adjustment: u32
+    pub vertical_adjustment: u32,
+    pending_terminal_size: Option<Size>,
 }
 
 impl TuiWindow {
@@ -34,12 +39,16 @@ impl TuiWindow {
         args: I,
         window_options: WindowOptions,
         terminal_options: TerminalOptions,
-    ) -> anyhow::Result<Self> where S: AsRef<OsStr>, I: IntoIterator<Item = S> {
-        let window_size = window_options.size
-            .unwrap_or(WindowSize {
-                width: 100,
-                height: 25,
-            });
+        palette: &TerminalPalette,
+    ) -> anyhow::Result<Self>
+    where
+        S: AsRef<OsStr>,
+        I: IntoIterator<Item = S>,
+    {
+        let window_size = window_options.size.unwrap_or(WindowSize {
+            width: 100,
+            height: 25,
+        });
 
         let mut x = 0;
         let mut y = 0;
@@ -55,8 +64,14 @@ impl TuiWindow {
         }
 
         let inner_size = Size {
-            width: window_size.width.saturating_sub(horizontal_adjustment as u32),
-            height: window_size.height.saturating_sub(vertical_adjustment as u32),
+            width: window_size
+                .width
+                .saturating_sub(horizontal_adjustment as u32)
+                .max(1),
+            height: window_size
+                .height
+                .saturating_sub(vertical_adjustment as u32)
+                .max(1),
         };
 
         let mut window_flags = Flags::None;
@@ -80,10 +95,11 @@ impl TuiWindow {
                 .width(window_size.width)
                 .height(window_size.height)
                 .build(),
-            window_flags
+            window_flags,
         );
 
-        let mut modified_program = replace_file_path(program.as_ref().to_str().unwrap().to_string())?;
+        let mut modified_program =
+            replace_file_path(program.as_ref().to_str().unwrap().to_string())?;
         modified_program = replace_folder_path(modified_program)?;
         let mut modified_args: Vec<String> = Vec::new();
 
@@ -95,35 +111,34 @@ impl TuiWindow {
 
         let cmd = Command::new(modified_program)
             .args(modified_args)
-            .terminal_size((
-                inner_size.width as usize,
-                inner_size.height as usize
-            ));
+            .terminal_size((inner_size.width as usize, inner_size.height as usize));
 
         let rx = cmd.out_rx();
         let tx = cmd.in_tx();
 
         tx.send_blocking(Input::Resize((
             inner_size.width as usize,
-            inner_size.height as usize
+            inner_size.height as usize,
         )))?;
 
         let default_background_color = match terminal_options.background_color {
-            None => Color::RGB(0, 0, 0),
-            Some(BackgroundColor { r, g, b }) => Color::RGB(r, g, b),
+            None => None,
+            Some(BackgroundColor { r, g, b }) => Some(Color::RGB(r, g, b)),
         };
 
         let mut tui_win = Self {
             base: win,
             canvas: Handle::None,
             custom_keyboard_control: Handle::None,
-            terminal_parser: TerminalParser::new(
-                window_size.width,
-                window_size.height,
-                default_background_color
+            terminal_parser: TerminalParser::with_palette(
+                inner_size.width,
+                inner_size.height,
+                palette,
+                default_background_color,
             ),
-            horizontal_adjustment: horizontal_adjustment  as u32,
+            horizontal_adjustment: horizontal_adjustment as u32,
             vertical_adjustment: vertical_adjustment as u32,
+            pending_terminal_size: None,
         };
 
         tui_win.canvas = tui_win.add(Canvas::new(
@@ -134,22 +149,16 @@ impl TuiWindow {
                 .x(x)
                 .y(y)
                 .build(),
-            canvas::Flags::None
+            canvas::Flags::None,
         ));
 
-        let c = tui_win.canvas;
-        if let Some(cv) = tui_win.control_mut(c) {
-            let surface = cv.drawing_surface_mut();
-            surface.fill_rect(
-                Rect::new(0, 0, inner_size.width as i32, inner_size.height as i32),
-                Character::new(' ', Color::Transparent, default_background_color, CharFlags::None)
-            );
-            surface.write_string(0, 0, "Loading...", CharAttribute::default(), false);
-        }
+        let surface = tui_win.terminal_parser.new_surface();
+        let canvas = tui_win.canvas;
+        *tui_win.control_mut(canvas).unwrap().drawing_surface_mut() = surface;
 
         let timer = match tui_win.timer() {
             Some(t) => t,
-            None => return Err(anyhow!("Failed to get timer"))
+            None => return Err(anyhow!("Failed to get timer")),
         };
         timer.start(Duration::from_millis(25));
 
@@ -162,13 +171,29 @@ impl TuiWindow {
 
         tokio::spawn(cmd.run());
 
-        let c = tui_win.canvas;
-        if let Some(cv) = tui_win.control_mut(c) {
-            let surface = cv.drawing_surface_mut();
-            surface.clear(Character::new(' ', Color::Transparent, Color::Transparent, CharFlags::None));
-        }
-
         Ok(tui_win)
+    }
+
+    pub fn apply_palette(&mut self, palette: &TerminalPalette) {
+        if let Some(canvas) = self.base.control_mut(self.canvas) {
+            self.terminal_parser
+                .apply_palette(palette, canvas.drawing_surface_mut());
+        }
+    }
+
+    fn sync_terminal_size(&mut self) {
+        let size = self.size();
+        let width = size.width.saturating_sub(self.horizontal_adjustment).max(1);
+        let height = size.height.saturating_sub(self.vertical_adjustment).max(1);
+        let canvas = self.base.control_mut(self.canvas).unwrap();
+        if canvas.drawing_surface_mut().size() != Size::new(width, height) {
+            self.terminal_parser
+                .resize_surface(width, height, canvas.drawing_surface_mut());
+            canvas.set_size(width as u16, height as u16);
+            self.pending_terminal_size = Some(Size::new(width, height));
+        }
+        let control = self.base.control(self.custom_keyboard_control).unwrap();
+        send_pending_resize(&mut self.pending_terminal_size, &control.tx);
     }
 
     pub fn close_command(&mut self) {
@@ -183,10 +208,11 @@ impl TuiWindow {
 
 impl TimerEvents for TuiWindow {
     fn on_update(&mut self, _: u64) -> EventProcessStatus {
-        let (should_close, (rx_clone, tx_clone)) = {
+        self.sync_terminal_size();
+        let (should_close, rx_clone) = {
             let ckc = self.control(self.custom_keyboard_control).unwrap();
 
-            (ckc.should_exit, (ckc.rx.clone(), ckc.tx.clone()))
+            (ckc.should_exit, ckc.rx.clone())
         };
 
         if should_close {
@@ -198,43 +224,12 @@ impl TimerEvents for TuiWindow {
             Ok(msg) => match msg {
                 Output::Pid(_) => EventProcessStatus::Ignored,
                 Output::Stdout(command_output) => {
-                    let size = self.size();
-                    let inner_size = Size {
-                        width: size.width.saturating_sub(self.horizontal_adjustment),
-                        height: size.height.saturating_sub(self.vertical_adjustment),
-                    };
-
-                    let (old_surface, should_resize) = {
-                        let c = self.canvas;
-                        let cv = self.control_mut(c).unwrap();
-
-                        let should_resize = cv.size() != inner_size;
-                        let surface = cv.drawing_surface_mut();
-
-                        let mut buffer = Vec::new();
-                        surface.serialize_to_buffer(&mut buffer);
-
-                        (Surface::from_buffer(&buffer).unwrap(), should_resize)
-                    };
-
-                    let new_surface = self.terminal_parser.parse_to_surface(&command_output, old_surface);
-
-                    let c = self.canvas;
-                    let cv = self.control_mut(c).unwrap();
-                    let surface = cv.drawing_surface_mut();
-                    *surface = new_surface;
-
-                    if should_resize {
-                        tx_clone
-                            .send_blocking(Input::Resize((
-                                inner_size.width as usize,
-                                inner_size.height as usize
-                            )))
-                            .ok();
-                        cv.set_size(inner_size.width as u16, inner_size.height as u16);
-                        cv.resize_surface(inner_size);
-                        self.terminal_parser.resize(inner_size.width, inner_size.height);
-                    }
+                    let canvas = self.base.control_mut(self.canvas).unwrap();
+                    let old_surface =
+                        std::mem::replace(canvas.drawing_surface_mut(), Surface::new(1, 1));
+                    *canvas.drawing_surface_mut() = self
+                        .terminal_parser
+                        .parse_to_surface(&command_output, old_surface);
 
                     EventProcessStatus::Processed
                 }
@@ -243,13 +238,13 @@ impl TimerEvents for TuiWindow {
 
                     self.close();
                     EventProcessStatus::Processed
-                },
+                }
                 Output::Terminated(_) => {
                     self.close();
                     EventProcessStatus::Processed
                 }
-            }
-            Err(_) => EventProcessStatus::Ignored
+            },
+            Err(_) => EventProcessStatus::Ignored,
         }
     }
 }
@@ -262,11 +257,11 @@ fn replace_file_path(arg: String) -> anyhow::Result<String> {
             "",
             Location::Path(Path::new(env!("HOME"))),
             None,
-            OpenFileDialogFlags::Icons | OpenFileDialogFlags::CheckIfFileExists
+            OpenFileDialogFlags::Icons | OpenFileDialogFlags::CheckIfFileExists,
         ) {
             None => Err(anyhow!("No file selected")),
-            Some(file_path) => Ok(arg.replace("<FILE_PATH>", file_path.to_str().unwrap()))
-        }
+            Some(file_path) => Ok(arg.replace("<FILE_PATH>", file_path.to_str().unwrap())),
+        },
     }
 }
 
@@ -276,10 +271,38 @@ fn replace_folder_path(arg: String) -> anyhow::Result<String> {
         true => match dialogs::select_folder(
             "Select folder",
             Location::Path(Path::new(env!("HOME"))),
-            SelectFolderDialogFlags::Icons
+            SelectFolderDialogFlags::Icons,
         ) {
             None => Err(anyhow!("No folder selected")),
-            Some(file_path) => Ok(arg.replace("<FOLDER_PATH>", file_path.to_str().unwrap()))
+            Some(file_path) => Ok(arg.replace("<FOLDER_PATH>", file_path.to_str().unwrap())),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn terminal_resize_is_retried_after_input_queue_drains() {
+        let (tx, rx) = async_channel::bounded(1);
+        tx.try_send(Input::Data(vec![b'a'])).unwrap();
+        let mut pending = Some(Size::new(60, 12));
+        send_pending_resize(&mut pending, &tx);
+        assert_eq!(pending, Some(Size::new(60, 12)));
+        assert_eq!(rx.try_recv().unwrap(), Input::Data(vec![b'a']));
+        send_pending_resize(&mut pending, &tx);
+        assert_eq!(pending, None);
+        assert_eq!(rx.try_recv().unwrap(), Input::Resize((60, 12)));
+        send_pending_resize(&mut pending, &tx);
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+fn send_pending_resize(pending: &mut Option<Size>, tx: &Sender<Input>) {
+    if let Some(size) = *pending {
+        match tx.try_send(Input::Resize((size.width as usize, size.height as usize))) {
+            Ok(()) | Err(async_channel::TrySendError::Closed(_)) => *pending = None,
+            Err(async_channel::TrySendError::Full(_)) => {}
         }
     }
 }

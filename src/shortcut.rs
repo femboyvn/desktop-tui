@@ -1,6 +1,6 @@
 use nestify::nest;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{env, fs};
 use walkdir::WalkDir;
 
@@ -61,19 +61,41 @@ nest! {
     }
 }
 
-pub fn parse_shortcut_dir(shortcut_path: PathBuf) -> anyhow::Result<Vec<Shortcut>> {
+pub fn parse_shortcut_dir(
+    shortcut_path: PathBuf,
+    settings_path: &Path,
+) -> anyhow::Result<Vec<Shortcut>> {
     let mut desktop_entries = Vec::<Shortcut>::new();
+    let settings_path = settings_path
+        .canonicalize()
+        .unwrap_or_else(|_| settings_path.to_owned());
 
-    for entry in WalkDir::new(env::current_dir()?.join(shortcut_path)).into_iter().filter_map(|e| e.ok()) {
+    for entry in WalkDir::new(env::current_dir()?.join(shortcut_path))
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         let entry_path = entry.path();
-        if entry_path.is_dir() || entry_path.extension().is_none() || !entry_path.extension().unwrap().to_str().unwrap().ends_with("toml") {
+        if entry_path.canonicalize().as_deref().unwrap_or(entry_path) == settings_path {
+            continue;
+        }
+        if entry_path.is_dir()
+            || entry_path.extension().is_none()
+            || !entry_path
+                .extension()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .ends_with("toml")
+        {
             continue;
         }
 
         let file_content = fs::read_to_string(entry.path())?;
         let desktop_entry = toml::from_str::<Shortcut>(&file_content)?;
 
-        let exists = desktop_entries.iter().find(|entry| entry.name == desktop_entry.name);
+        let exists = desktop_entries
+            .iter()
+            .find(|entry| entry.name == desktop_entry.name);
 
         if exists.is_some() {
             continue;
@@ -82,13 +104,31 @@ pub fn parse_shortcut_dir(shortcut_path: PathBuf) -> anyhow::Result<Vec<Shortcut
         desktop_entries.push(desktop_entry);
     }
 
-    desktop_entries
-        .sort_by(
-            |a, b|
-                a.taskbar.position
-                .unwrap_or(99)
-                .cmp(&b.taskbar.position.unwrap_or(99))
-        );
+    desktop_entries.sort_by(|a, b| {
+        a.taskbar
+            .position
+            .unwrap_or(99)
+            .cmp(&b.taskbar.position.unwrap_or(99))
+    });
 
     Ok(desktop_entries)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::TestDir;
+    #[test]
+    fn excludes_only_the_application_settings_file() {
+        let dir = TestDir::new();
+        let settings = dir.path().join("preferences.toml");
+        fs::write(&settings, "not a shortcut or even valid toml").unwrap();
+        fs::create_dir(dir.path().join("nested")).unwrap();
+        fs::write(
+            dir.path().join("nested/preferences.toml"),
+            include_str!("../shortcuts/helix.toml"),
+        )
+        .unwrap();
+        let shortcuts = parse_shortcut_dir(dir.path().to_owned(), &settings).unwrap();
+        assert_eq!(shortcuts.len(), 1);
+    }
 }

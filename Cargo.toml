@@ -27,3 +27,6 @@ async-channel = "2.5.0"
 walkdir = "2.5.0"
 nestify = "0.3.3"
 directories = "6.0.0"
+argon2 = { version = "0.5.3", features = ["zeroize"] }
+zeroize = "1.9"
+libc = "0.2.175"
