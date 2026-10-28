@@ -170,7 +170,8 @@ running editor remains open. Special files are not opened.
 **Image Viewer** opens through Application > Utility > Image Viewer and its
 file picker, or from File Browser. The file picker preserves the colors of windows behind it. It shows the filename, oriented dimensions,
 and zoom in its title. Ctrl+O opens another image; **F** fits, **1** selects
-actual size, **+/-** zoom by 1.25, and arrows or mouse dragging pan. One source
+actual size, **+/-** or the mouse wheel zoom by 1.25 (up zooms in, down zooms out),
+and arrows or mouse dragging pan. One source
 pixel occupies half a terminal cell vertically at actual size. Explicit zoom
 is limited to 5–400%; Fit can go below 5% to fit a large image in a small window.
 Aspect ratio and orientation are preserved, and transparency uses the current

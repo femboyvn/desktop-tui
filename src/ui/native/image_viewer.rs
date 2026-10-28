@@ -130,6 +130,8 @@ impl OnKeyPressed for ImageCanvas {
 impl OnMouseEvent for ImageCanvas {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
         match event {
+            MouseEvent::Wheel(MouseWheelDirection::Up) => { self.request_focus(); self.zoom(1.25); }
+            MouseEvent::Wheel(MouseWheelDirection::Down) => { self.request_focus(); self.zoom(1.0 / 1.25); }
             MouseEvent::Pressed(data) => { self.request_focus(); self.drag = Some((data.x, data.y)); }
             MouseEvent::Drag(data) => {
                 if let Some((x, y)) = self.drag {
@@ -204,6 +206,25 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "image worker did not finish");
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+    #[test]
+    fn mouse_wheel_zooms_with_the_same_steps_and_bounds_as_keyboard() {
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let app = App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let mut canvas = ImageCanvas::new(dir.path().join("unused.png"), Rgb(0,0,0)).unwrap();
+        canvas.render.mode = Zoom::Scale(1.0);
+        assert!(matches!(OnMouseEvent::on_mouse_event(&mut canvas, &MouseEvent::Wheel(MouseWheelDirection::Up)), EventProcessStatus::Processed));
+        assert_eq!(canvas.render.mode, Zoom::Scale(1.25));
+        OnMouseEvent::on_mouse_event(&mut canvas, &MouseEvent::Wheel(MouseWheelDirection::Down));
+        assert_eq!(canvas.render.mode, Zoom::Scale(1.0));
+        for _ in 0..30 { OnMouseEvent::on_mouse_event(&mut canvas, &MouseEvent::Wheel(MouseWheelDirection::Up)); }
+        assert_eq!(canvas.render.mode, Zoom::Scale(4.0));
+        for _ in 0..60 { OnMouseEvent::on_mouse_event(&mut canvas, &MouseEvent::Wheel(MouseWheelDirection::Down)); }
+        assert_eq!(canvas.render.mode, Zoom::Scale(0.05));
+        assert!(matches!(OnMouseEvent::on_mouse_event(&mut canvas, &MouseEvent::Wheel(MouseWheelDirection::Left)), EventProcessStatus::Ignored));
+        canvas.worker.close();
+        app.run();
     }
     #[test]
     fn hidden_viewer_defers_failed_results_without_opening_a_dialog() {

@@ -49,7 +49,8 @@ File Browser does not modify files or open special files.
 Application > Utility > Image Viewer opens a file picker.
 The picker keeps the colors of windows behind it. Ctrl+O
 opens another file. F fits, 1 shows actual size, +/- zoom by 1.25,
-and arrows or mouse dragging pan. Explicit zoom is 5–400%; Fit can
+and the mouse wheel zooms in (up) or out (down).
+Arrows or mouse dragging pan. Explicit zoom is 5–400%; Fit can
 use less than 5% for large images. At actual size, each character
 cell displays one source pixel horizontally and two vertically.
 The title shows filename, oriented dimensions, and zoom.
