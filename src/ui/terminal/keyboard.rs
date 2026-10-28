@@ -1,7 +1,25 @@
-use crate::tui_window::CustomKeyboardControl;
 use appcui::input::{Key, KeyModifier};
-use appcui::prelude::{EventProcessStatus, KeyCode, OnKeyPressed};
-use virtual_terminal::Input;
+use appcui::prelude::*;
+use async_channel::{Receiver, Sender};
+use virtual_terminal::{Input, Output};
+
+#[CustomControl(overwrite = OnKeyPressed)]
+pub(crate) struct CustomKeyboardControl {
+    pub(super) should_exit: bool,
+    pub(crate) tx: Sender<Input>,
+    pub(crate) rx: Receiver<Output>,
+}
+
+impl CustomKeyboardControl {
+    pub(super) fn new(tx: Sender<Input>, rx: Receiver<Output>) -> Self {
+        Self {
+            should_exit: false,
+            base: ControlBase::new(Layout::fill(), true),
+            tx,
+            rx,
+        }
+    }
+}
 
 impl OnKeyPressed for CustomKeyboardControl {
     fn on_key_pressed(&mut self, key: Key, character: char) -> EventProcessStatus {

@@ -1,4 +1,4 @@
-use crate::preferences::DesktopPalette;
+use crate::config::preferences::DesktopPalette;
 use appcui::prelude::*;
 pub fn build_theme(p: &DesktopPalette) -> Theme {
     let mut t = Theme::new(appcui::system::Themes::Light);
@@ -129,7 +129,7 @@ pub fn build_theme(p: &DesktopPalette) -> Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::preferences::{Preferences, Rgb};
+    use crate::config::preferences::{Preferences, Rgb};
     #[test]
     fn theme_uses_configured_desktop_roles_in_controls_and_windows() {
         let mut p = Preferences::default().desktop;

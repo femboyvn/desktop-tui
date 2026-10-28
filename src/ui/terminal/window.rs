@@ -1,6 +1,7 @@
-use crate::preferences::TerminalPalette;
-use crate::shortcut::{BackgroundColor, TerminalOptions, WindowOptions, WindowSize};
-use crate::terminal_emulation::TerminalParser;
+use super::keyboard::CustomKeyboardControl;
+use crate::config::preferences::TerminalPalette;
+use crate::config::{BackgroundColor, TerminalOptions, WindowOptions, WindowSize};
+use crate::runtime::TerminalParser;
 use anyhow::anyhow;
 use appcui::dialogs::{Location, OpenFileDialogFlags, SelectFolderDialogFlags};
 use appcui::graphics::{Color, Size, Surface};
@@ -9,18 +10,11 @@ use appcui::prelude::{
     Alignment, Canvas, EventProcessStatus, Handle, LayoutBuilder, OnResize, TimerEvents, Window,
     canvas,
 };
-use async_channel::{Receiver, Sender};
+use async_channel::Sender;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::time::Duration;
 use virtual_terminal::{Command, Input, Output};
-
-#[CustomControl(overwrite = OnKeyPressed)]
-pub struct CustomKeyboardControl {
-    pub should_exit: bool,
-    pub tx: Sender<Input>,
-    pub rx: Receiver<Output>,
-}
 
 #[Window(events = TimerEvents)]
 pub struct TuiWindow {
@@ -162,12 +156,7 @@ impl TuiWindow {
         };
         timer.start(Duration::from_millis(25));
 
-        tui_win.custom_keyboard_control = tui_win.add(CustomKeyboardControl {
-            should_exit: false,
-            base: ControlBase::new(Layout::fill(), true),
-            tx,
-            rx,
-        });
+        tui_win.custom_keyboard_control = tui_win.add(CustomKeyboardControl::new(tx, rx));
 
         tokio::spawn(cmd.run());
 

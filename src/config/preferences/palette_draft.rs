@@ -1,4 +1,4 @@
-use crate::preferences::{Preferences, Rgb};
+use crate::config::preferences::{Preferences, Rgb};
 pub const DESKTOP_ROLES: [&str; 7] = [
     "Background",
     "Surface",

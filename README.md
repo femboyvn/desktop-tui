@@ -54,6 +54,17 @@ cargo run -- <shortcut_folder_path>
 
 If no path is provided, Desktop-TUI reads shortcuts from `~/.config/desktop-tui` on Linux (or `$XDG_CONFIG_HOME/desktop-tui` when set).
 
+## Source layout
+
+The binary uses technical layers, with functional groups inside each layer:
+
+- `src/ui/`: desktop and panel views, preferences dialogs, terminal windows and keyboard input, locking screens, and theme construction.
+- `src/config/`: preferences models, storage, palette presets and editing drafts, plus shortcut definitions and discovery.
+- `src/runtime/`: terminal emulation and password credentials.
+- `src/platform/linux/`: status readings, resource usage, and system actions.
+
+Groups use a named entry file alongside their child folder (for example, `ui/desktop.rs` and `ui/desktop/`). Entry files declare private implementation modules and expose shared types and entry points within the crate. `main.rs`, `args.rs`, and test-only `test_support.rs` stay at the source root; `utils.rs` remains outside the module tree.
+
 ## Shortcut file
 
 Example `helix.toml` shortcut file:

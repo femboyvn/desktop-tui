@@ -1,4 +1,4 @@
-use crate::preferences::TerminalPalette;
+use crate::config::preferences::TerminalPalette;
 use appcui::prelude::{CharFlags, Character, Color, Surface};
 
 // Keep provenance: an RGB value can equal a palette color without referring to it.
@@ -538,7 +538,7 @@ fn ansi_256_color(idx: u32) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::preferences::{Preferences, Rgb};
+    use crate::config::preferences::{Preferences, Rgb};
     #[test]
     fn recolors_default_standard_bright_and_indexed_colors_without_rgb_collisions() {
         let old = Preferences::default().terminal;

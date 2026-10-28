@@ -1,7 +1,7 @@
-use crate::terminal_lock::LockCredential;
+use super::model::Preferences;
+use crate::runtime::LockCredential;
 use anyhow::Context;
-use appcui::prelude::Color;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::io::Read;
 use std::io::Write;
 use std::os::fd::AsRawFd;
@@ -9,101 +9,6 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsE
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct Rgb(pub u8, pub u8, pub u8);
-impl TryFrom<String> for Rgb {
-    type Error = String;
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        let bytes = value.as_bytes();
-        if bytes.len() != 7 || bytes[0] != b'#' || !bytes[1..].iter().all(u8::is_ascii_hexdigit) {
-            return Err("Use a color in #RRGGBB format (for example #F6D9EE).".into());
-        }
-        Ok(Self(
-            u8::from_str_radix(&value[1..3], 16).unwrap(),
-            u8::from_str_radix(&value[3..5], 16).unwrap(),
-            u8::from_str_radix(&value[5..7], 16).unwrap(),
-        ))
-    }
-}
-impl From<Rgb> for String {
-    fn from(value: Rgb) -> Self {
-        format!("#{:02X}{:02X}{:02X}", value.0, value.1, value.2)
-    }
-}
-impl Rgb {
-    pub fn color(self) -> Color {
-        Color::RGB(self.0, self.1, self.2)
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct DesktopPalette {
-    pub background: Rgb,
-    pub surface: Rgb,
-    pub text: Rgb,
-    pub muted_text: Rgb,
-    pub border: Rgb,
-    pub accent: Rgb,
-    pub selection: Rgb,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TerminalPalette {
-    pub foreground: Rgb,
-    pub background: Rgb,
-    pub ansi: [Rgb; 16],
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Preferences {
-    pub desktop: DesktopPalette,
-    pub terminal: TerminalPalette,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub terminal_lock: Option<LockCredential>,
-    #[serde(default)]
-    pub panel: crate::panel::PanelPreferences,
-}
-impl Default for Preferences {
-    fn default() -> Self {
-        Self {
-            terminal_lock: None,
-            panel: crate::panel::PanelPreferences::default(),
-            desktop: DesktopPalette {
-                background: Rgb(246, 217, 238),
-                surface: Rgb(255, 247, 252),
-                text: Rgb(63, 42, 74),
-                muted_text: Rgb(132, 104, 144),
-                border: Rgb(177, 140, 181),
-                accent: Rgb(232, 164, 201),
-                selection: Rgb(200, 181, 234),
-            },
-            terminal: TerminalPalette {
-                foreground: Rgb(63, 42, 74),
-                background: Rgb(255, 247, 252),
-                // Plum, rose, sage, ochre, blue, mauve, teal, and pearl.
-                ansi: [
-                    Rgb(63, 42, 74),
-                    Rgb(177, 67, 104),
-                    Rgb(77, 128, 94),
-                    Rgb(157, 117, 47),
-                    Rgb(100, 110, 177),
-                    Rgb(157, 89, 166),
-                    Rgb(63, 131, 142),
-                    Rgb(218, 199, 219),
-                    Rgb(132, 104, 144),
-                    Rgb(219, 112, 151),
-                    Rgb(126, 172, 139),
-                    Rgb(203, 164, 96),
-                    Rgb(153, 159, 215),
-                    Rgb(199, 146, 205),
-                    Rgb(119, 183, 193),
-                    Rgb(255, 247, 252),
-                ],
-            },
-        }
-    }
-}
 impl Preferences {
     pub fn load(path: &Path) -> (Self, Option<String>) {
         match read_settings(path) {
@@ -297,7 +202,9 @@ pub fn settings_path() -> anyhow::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::model::{DateFormat, PanelPreferences, Rgb};
     use crate::test_support::TestDir;
+
     #[test]
     fn completed_save_lock_is_released_even_if_a_fork_inherited_the_descriptor() {
         let dir = TestDir::new();
@@ -313,6 +220,7 @@ mod tests {
         );
         drop(inherited);
     }
+
     #[test]
     fn saved_password_round_trips_privately_without_storing_plaintext() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -320,7 +228,7 @@ mod tests {
         let path = dir.path().join("config/preferences.toml");
         let mut p = Preferences::default();
         p.terminal_lock = Some(
-            crate::terminal_lock::LockCredential::new(
+            crate::runtime::LockCredential::new(
                 "persistent 🔒 password",
                 "persistent 🔒 password",
             )
@@ -355,6 +263,7 @@ mod tests {
         .unwrap();
         assert!(Preferences::stored_credential(&path).is_err());
     }
+
     #[test]
     fn legacy_settings_have_no_password_and_bad_credentials_never_become_temporary_locks() {
         let dir = TestDir::new();
@@ -374,6 +283,7 @@ mod tests {
             assert!(Preferences::load(&path).1.is_some());
         }
     }
+
     #[test]
     fn secure_settings_reject_symlinks_and_leave_targets_untouched() {
         use std::os::unix::fs::symlink;
@@ -394,29 +304,7 @@ mod tests {
         );
         assert!(!dir.path().join("settings.toml").exists());
     }
-    #[test]
-    fn defaults_are_light_femboy() {
-        let p = Preferences::default();
-        assert_eq!(p.desktop.background, Rgb(246, 217, 238));
-        assert_eq!(p.desktop.surface, Rgb(255, 247, 252));
-        assert_eq!(p.desktop.text, Rgb(63, 42, 74));
-        assert_eq!(p.desktop.accent, Rgb(232, 164, 201));
-        assert_eq!(p.desktop.selection, Rgb(200, 181, 234));
-        assert_ne!(p.terminal.ansi[0], p.terminal.ansi[8]);
-    }
-    #[test]
-    fn validates_rgb_without_accepting_partial_or_non_ascii_values() {
-        assert_eq!(
-            Rgb::try_from("#aBcD09".to_owned()).unwrap(),
-            Rgb(171, 205, 9)
-        );
-        assert_eq!(String::from(Rgb(171, 205, 9)), "#ABCD09");
-        for invalid in [
-            "red", "123456", "#123", "#1234567", "#GG0000", "#é1234", " #123456",
-        ] {
-            assert!(Rgb::try_from(invalid.to_owned()).is_err(), "{invalid}");
-        }
-    }
+
     #[test]
     fn missing_file_uses_defaults_without_creating_file() {
         let dir = TestDir::new();
@@ -424,6 +312,7 @@ mod tests {
         assert_eq!(Preferences::load(&path), (Preferences::default(), None));
         assert!(!path.exists());
     }
+
     #[test]
     fn saves_and_loads_every_palette_role() {
         let dir = TestDir::new();
@@ -441,6 +330,7 @@ mod tests {
             1
         );
     }
+
     #[test]
     fn invalid_settings_warn_and_leave_original_untouched() {
         let dir = TestDir::new();
@@ -458,6 +348,7 @@ mod tests {
             assert_eq!(std::fs::read_to_string(&path).unwrap(), bad);
         }
     }
+
     #[test]
     fn failed_save_does_not_replace_previous_settings() {
         let dir = TestDir::new();
@@ -470,5 +361,38 @@ mod tests {
             "original"
         );
         assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn panel_settings_round_trip_and_legacy_files_keep_defaults() {
+        let dir = TestDir::new();
+        let path = dir.path().join("preferences.toml");
+        let mut p = Preferences::default();
+        p.panel.enabled = false;
+        p.panel.show_seconds = true;
+        p.panel.date_format = DateFormat::DayMonth;
+        p.save(&path, None).unwrap();
+        assert_eq!(Preferences::load(&path), (p.clone(), None));
+        let mut legacy: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        // Existing users already have a Panel section with their choices;
+        // only the four new meter fields are absent on upgrade.
+        let mut previous_panel = legacy.clone();
+        let panel = previous_panel
+            .get_mut("panel")
+            .unwrap()
+            .as_table_mut()
+            .unwrap();
+        for field in ["show_cpu", "show_ram", "show_disk", "show_network_usage"] {
+            panel.remove(field);
+        }
+        std::fs::write(&path, toml::to_string(&previous_panel).unwrap()).unwrap();
+        assert_eq!(Preferences::load(&path), (p.clone(), None));
+        legacy.as_table_mut().unwrap().remove("panel");
+        std::fs::write(&path, toml::to_string(&legacy).unwrap()).unwrap();
+        let (loaded, warning) = Preferences::load(&path);
+        assert!(warning.is_none());
+        assert_eq!(loaded.panel, PanelPreferences::default());
+        assert_eq!(loaded.desktop, p.desktop);
     }
 }

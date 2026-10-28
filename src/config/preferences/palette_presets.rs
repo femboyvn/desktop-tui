@@ -1,4 +1,4 @@
-use crate::preferences::{DesktopPalette, Preferences, Rgb, TerminalPalette};
+use crate::config::preferences::{DesktopPalette, Preferences, Rgb, TerminalPalette};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PalettePreset {
@@ -85,7 +85,7 @@ impl PalettePreset {
         ] = desktop.map(rgb);
         Preferences {
             terminal_lock: None,
-            panel: crate::panel::PanelPreferences::default(),
+            panel: crate::config::preferences::PanelPreferences::default(),
             desktop: DesktopPalette {
                 background: background_desktop,
                 surface,
@@ -112,7 +112,7 @@ impl PalettePreset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::preferences::Rgb;
+    use crate::config::preferences::Rgb;
     use crate::test_support::TestDir;
     #[test]
     fn presets_have_distinct_complete_palettes_and_round_trip_settings() {

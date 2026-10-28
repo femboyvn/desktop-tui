@@ -99,8 +99,17 @@ fn reflow(source: &str, width: usize) -> String {
 mod tests {
     use super::*;
     #[test]
+    fn help_opens_scrolls_and_closes_at_80x24() {
+        let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let mut app = App::debug(80, 24, "Key.Pressed(PageDown)\nKey.Pressed(Escape)\nPaint('end')")
+            .build()
+            .unwrap();
+        app.add_window(help_window());
+        app.run();
+    }
+    #[test]
     fn bundled_help_is_split_into_named_categories_with_overview() {
-        let topics = topics(include_str!("../HELP.md"));
+        let topics = topics(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/HELP.md")));
         assert_eq!(topics[0].title, "Overview");
         assert!(topics[0].body.contains("offline"));
         assert!(
@@ -306,7 +315,7 @@ impl HelpWindow {
         self.base.request_focus_for_control(self.categories);
     }
     fn new() -> Self {
-        let topics = topics(include_str!("../HELP.md"));
+        let topics = topics(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/HELP.md")));
         let mut window = Self {
             base: Window::new("Help", layout!("a:c,w:76,h:22"), window::Flags::Sizeable),
             categories: Handle::None,

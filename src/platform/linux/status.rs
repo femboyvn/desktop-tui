@@ -1,4 +1,4 @@
-use crate::resource_usage::{ResourceSampler, ResourceSnapshot};
+use super::resource_usage::{ResourceSampler, ResourceSnapshot};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};

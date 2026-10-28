@@ -1,5 +1,5 @@
-use crate::preferences::Preferences;
-use crate::terminal_lock::LockCredential;
+use crate::config::preferences::Preferences;
+use crate::runtime::LockCredential;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -95,7 +95,7 @@ mod tests {
             draft
                 .save(
                     &path,
-                    crate::palette_presets::PalettePreset::Asexual.preferences(),
+                    crate::config::preferences::PalettePreset::Asexual.preferences(),
                     PasswordChange::Replace,
                     "original",
                     "changed",
@@ -110,7 +110,7 @@ mod tests {
         let saved = draft
             .save(
                 &path,
-                crate::palette_presets::PalettePreset::Asexual.preferences(),
+                crate::config::preferences::PalettePreset::Asexual.preferences(),
                 PasswordChange::Replace,
                 "original",
                 "changed",
@@ -234,7 +234,7 @@ mod tests {
         let edited = current
             .save(
                 &path,
-                crate::palette_presets::PalettePreset::Transgender.preferences(),
+                crate::config::preferences::PalettePreset::Transgender.preferences(),
                 PasswordChange::Keep,
                 "",
                 "",
@@ -244,8 +244,8 @@ mod tests {
             .unwrap();
         assert_eq!(edited.terminal_lock, active.terminal_lock);
         assert_eq!(
-            crate::palette_presets::PalettePreset::matching(&edited),
-            Some(crate::palette_presets::PalettePreset::Transgender)
+            crate::config::preferences::PalettePreset::matching(&edited),
+            Some(crate::config::preferences::PalettePreset::Transgender)
         );
         let mut stale = SecurityDraft::new(active.terminal_lock.clone());
         let changed = current

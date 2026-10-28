@@ -125,7 +125,7 @@ mod tests {
         fs::create_dir(dir.path().join("nested")).unwrap();
         fs::write(
             dir.path().join("nested/preferences.toml"),
-            include_str!("../shortcuts/helix.toml"),
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shortcuts/helix.toml")),
         )
         .unwrap();
         let shortcuts = parse_shortcut_dir(dir.path().to_owned(), &settings).unwrap();

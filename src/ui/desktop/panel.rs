@@ -1,51 +1,6 @@
-use crate::linux_status::{NetworkStatus, StatusSnapshot};
+use crate::config::preferences::{DateFormat, PanelPreferences};
+use crate::platform::linux::{NetworkStatus, StatusSnapshot};
 use chrono::NaiveDateTime;
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DateFormat {
-    #[default]
-    Short,
-    Iso,
-    DayMonth,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct PanelPreferences {
-    pub enabled: bool,
-    pub show_clock: bool,
-    pub show_date: bool,
-    pub show_network: bool,
-    pub show_battery: bool,
-    pub use_24_hour: bool,
-    pub show_seconds: bool,
-    pub show_interface: bool,
-    pub show_cpu: bool,
-    pub show_ram: bool,
-    pub show_disk: bool,
-    pub show_network_usage: bool,
-    pub date_format: DateFormat,
-}
-impl Default for PanelPreferences {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            show_clock: true,
-            show_date: true,
-            show_network: true,
-            show_battery: true,
-            use_24_hour: true,
-            show_seconds: false,
-            show_interface: false,
-            show_cpu: true,
-            show_ram: true,
-            show_disk: true,
-            show_network_usage: true,
-            date_format: DateFormat::Short,
-        }
-    }
-}
 /// Only complete indicators are shown. Clock and connection take precedence on
 /// small screens; no partial date or percentage can be mistaken for a real value.
 pub fn render(
@@ -283,21 +238,22 @@ pub fn bar_layout(width: usize, desired_status: usize, app_widths: &[usize]) -> 
     }
 }
 
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linux_status::{BatteryStatus, NetworkStatus, StatusSnapshot};
-    use crate::preferences::Preferences;
-    use crate::test_support::TestDir;
+    use crate::platform::linux::{BatteryStatus, NetworkStatus, StatusSnapshot};
     fn now() -> chrono::NaiveDateTime {
         chrono::NaiveDate::from_ymd_opt(2026, 10, 27)
             .unwrap()
             .and_hms_opt(14, 5, 9)
             .unwrap()
     }
+
     #[test]
     fn resource_indicators_have_full_and_bounded_compact_readings() {
-        use crate::resource_usage::{NetworkRate, ResourceSnapshot, Usage};
+        use crate::platform::linux::{NetworkRate, ResourceSnapshot, Usage};
         let settings = PanelPreferences::default();
         let status = StatusSnapshot {
             network: NetworkStatus::Connected {
@@ -352,6 +308,7 @@ mod tests {
                 && !caption.contains("Rx")
         );
     }
+
     #[test]
     fn bar_groups_applications_before_status_can_hide_their_menus() {
         let normal = bar_layout(80, 30, &[10, 8]);
@@ -367,6 +324,7 @@ mod tests {
         }
         assert_eq!(bar_layout(80, 0, &[]).status_width, 0);
     }
+
     #[test]
     fn formats_clock_date_network_and_battery_with_configurable_visibility() {
         let mut settings = PanelPreferences {
@@ -414,6 +372,7 @@ mod tests {
             "System pending "
         );
     }
+
     #[test]
     fn compact_panel_is_bounded_and_never_invents_a_connection_or_battery() {
         let settings = PanelPreferences {
@@ -446,6 +405,7 @@ mod tests {
         unknown.network = NetworkStatus::Unavailable;
         assert!(render(&settings, &unknown, now(), 100, false).contains("Net N/A"));
     }
+
     #[test]
     fn narrow_panel_keeps_connection_before_optional_interface_name() {
         let mut settings = PanelPreferences {
@@ -469,37 +429,5 @@ mod tests {
             render(&settings, &status, now(), 20, false),
             "14:05 27/10 W80% "
         );
-    }
-    #[test]
-    fn panel_settings_round_trip_and_legacy_files_keep_defaults() {
-        let dir = TestDir::new();
-        let path = dir.path().join("preferences.toml");
-        let mut p = Preferences::default();
-        p.panel.enabled = false;
-        p.panel.show_seconds = true;
-        p.panel.date_format = DateFormat::DayMonth;
-        p.save(&path, None).unwrap();
-        assert_eq!(Preferences::load(&path), (p.clone(), None));
-        let mut legacy: toml::Value =
-            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        // Existing users already have a Panel section with their choices;
-        // only the four new meter fields are absent on upgrade.
-        let mut previous_panel = legacy.clone();
-        let panel = previous_panel
-            .get_mut("panel")
-            .unwrap()
-            .as_table_mut()
-            .unwrap();
-        for field in ["show_cpu", "show_ram", "show_disk", "show_network_usage"] {
-            panel.remove(field);
-        }
-        std::fs::write(&path, toml::to_string(&previous_panel).unwrap()).unwrap();
-        assert_eq!(Preferences::load(&path), (p.clone(), None));
-        legacy.as_table_mut().unwrap().remove("panel");
-        std::fs::write(&path, toml::to_string(&legacy).unwrap()).unwrap();
-        let (loaded, warning) = Preferences::load(&path);
-        assert!(warning.is_none());
-        assert_eq!(loaded.panel, PanelPreferences::default());
-        assert_eq!(loaded.desktop, p.desktop);
     }
 }

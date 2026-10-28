@@ -1,107 +1,15 @@
-use crate::palette_draft::{DESKTOP_ROLES, PaletteDraft, TERMINAL_ROLES};
-use crate::palette_presets::PalettePreset;
-use crate::panel::{DateFormat, PanelPreferences};
-use crate::preferences::{Preferences, Rgb};
-use crate::security_preferences::{PasswordChange, SecurityDraft};
-use crate::system_actions::SystemAction;
-use crate::terminal_lock::SecretInput;
+use super::controls::{ColorSwatch, PreferencesContent};
+use crate::config::preferences::{
+    DESKTOP_ROLES, DateFormat, PaletteDraft, PalettePreset, PanelPreferences, PasswordChange,
+    Preferences, Rgb, SecurityDraft, TERMINAL_ROLES,
+};
+use crate::ui::locking::SecretInput;
 use appcui::prelude::*;
 use std::path::PathBuf;
 
-#[ModalWindow(response: bool, events: ButtonEvents)]
-pub struct ConfirmSystemAction {
-    cancel: Handle<Button>,
-    confirm: Handle<Button>,
-}
-impl ConfirmSystemAction {
-    pub fn new(action: SystemAction) -> Self {
-        let mut dialog = Self {
-            base: ModalWindow::new(
-                action.label(),
-                layout!("a:c,w:58,h:10"),
-                window::Flags::None,
-            ),
-            cancel: Handle::None,
-            confirm: Handle::None,
-        };
-        let verb = if action == SystemAction::Shutdown {
-            "Shut down"
-        } else {
-            "Restart"
-        };
-        dialog.add(Label::new(&format!("{verb} this computer?\nAll applications in this session may be closed.\nSave your work before continuing."),layout!("l:2,t:1,r:2,h:4")));
-        // Register Cancel first and explicitly request focus: Enter must never power off by default.
-        dialog.cancel = dialog.add(button!("&Cancel,l:10,b:0,w:14"));
-        dialog.confirm = dialog.add(Button::new(&format!("&{verb}"), layout!("r:10,b:0,w:14")));
-        dialog.base.request_focus_for_control(dialog.cancel);
-        dialog
-    }
-}
-impl ButtonEvents for ConfirmSystemAction {
-    fn on_pressed(&mut self, handle: Handle<Button>) -> EventProcessStatus {
-        if handle == self.confirm {
-            self.exit_with(true);
-        } else {
-            self.exit();
-        }
-        EventProcessStatus::Processed
-    }
-}
-
-#[CustomControl(overwrite = OnPaint)]
-struct ColorSwatch {
-    color: Option<Color>,
-}
-impl OnPaint for ColorSwatch {
-    fn on_paint(&self, surface: &mut Surface, theme: &Theme) {
-        if let Some(color) = self.color {
-            surface.clear(Character::new(' ', color, color, CharFlags::None));
-        } else {
-            surface.clear(Character::with_attributes(' ', theme.text.normal));
-            surface.write_string(0, 0, "Invalid #RRGGBB", theme.text.error, false);
-        }
-    }
-}
-#[CustomContainer(overwrite = OnKeyPressed)]
-struct PreferencesContent {
-    tabs: Handle<Tab>,
-}
-impl OnKeyPressed for PreferencesContent {
-    fn on_key_pressed(&mut self, key: Key, _character: char) -> EventProcessStatus {
-        let change: fn(&mut Tab) = match key.value() {
-            key!("Alt+D") => |tab| {
-                tab.set_current_tab(0);
-                tab.request_focus();
-            },
-            key!("Alt+T") => |tab| {
-                tab.set_current_tab(1);
-                tab.request_focus();
-            },
-            key!("Alt+U") => |tab| {
-                tab.set_current_tab(2);
-                tab.request_focus();
-            },
-            key!("Alt+4") => |tab| {
-                tab.set_current_tab(3);
-                tab.request_focus();
-            },
-            key!("Ctrl+Tab") => |tab| {
-                tab.set_current_tab((tab.current_tab().unwrap_or(0) + 1) % 4);
-                tab.request_focus();
-            },
-            key!("Ctrl+Shift+Tab") => |tab| {
-                tab.set_current_tab((tab.current_tab().unwrap_or(0) + 3) % 4);
-                tab.request_focus();
-            },
-            _ => return EventProcessStatus::Ignored,
-        };
-        Window::update_control(self.tabs, change);
-        EventProcessStatus::Processed
-    }
-}
 #[ModalWindow(response: Preferences, events: ButtonEvents+ComboBoxEvents+TextFieldEvents+WindowEvents)]
 pub struct PreferencesDialog {
-    draft: crate::palette_draft::PaletteDraft,
+    draft: PaletteDraft,
     path: PathBuf,
     selectors: [Handle<ComboBox>; 2],
     fields: [Handle<TextField>; 2],
@@ -146,10 +54,7 @@ impl PreferencesDialog {
             panel_checks: [Handle::None; 12],
             date_format: Handle::None,
         };
-        let mut content = PreferencesContent {
-            base: ContainerBase::new(layout!("d:f"), true),
-            tabs: Handle::None,
-        };
+        let mut content = PreferencesContent::new();
         content.add(Label::new("Preset", layout!("l:1,t:0,w:7,h:1")));
         let mut preset = ComboBox::new(layout!("l:9,t:0,r:15,h:1"), combobox::Flags::None);
         preset.set_hotkey(key!("Alt+P"));
@@ -199,10 +104,10 @@ impl PreferencesDialog {
             );
             dialog.swatches[group as usize] = tabs.add(
                 group,
-                ColorSwatch {
-                    base: ControlBase::new(layout!("l:22,t:5,w:22,h:2"), false),
-                    color: Rgb::try_from(value.clone()).ok().map(Rgb::color),
-                },
+                ColorSwatch::new(
+                    layout!("l:22,t:5,w:22,h:2"),
+                    Rgb::try_from(value.clone()).ok().map(Rgb::color),
+                ),
             );
             tabs.add(
                 group,
@@ -317,7 +222,8 @@ impl PreferencesDialog {
                 layout!("l:1,t:10,r:1,h:1"),
             ),
         );
-        content.tabs = content.add(tabs);
+        let tabs = content.add(tabs);
+        content.set_tabs(tabs);
         content.add(Label::new(
             "Save applies all tabs. Cancel or Escape discards edits.",
             layout!("l:2,b:3,r:1,h:1"),
@@ -343,7 +249,7 @@ impl PreferencesDialog {
     }
     fn update_swatch(&mut self, group: usize, value: &str) {
         if let Some(swatch) = self.base.control_mut(self.swatches[group]) {
-            swatch.color = Rgb::try_from(value.to_owned()).ok().map(Rgb::color);
+            swatch.set_color(Rgb::try_from(value.to_owned()).ok().map(Rgb::color));
         }
     }
     fn save_draft(&mut self) {
@@ -556,12 +462,13 @@ impl TextFieldEvents for PreferencesDialog {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::preferences::Rgb;
+    use crate::config::preferences::Rgb;
     use crate::test_support::TestDir;
     fn debug(script: &str) -> appcui::system::Builder {
         // Let queued control events run before the debug backend ends the application.
         App::debug(80, 24, &format!("{script}\nPaint('end')"))
     }
+
     #[test]
     fn panel_tab_saves_all_options_and_presets_preserve_panel_and_password() {
         let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
@@ -569,7 +476,7 @@ mod tests {
         let path = dir.path().join("preferences.toml");
         let mut active = Preferences::default();
         active.terminal_lock =
-            Some(crate::terminal_lock::LockCredential::new("keep", "keep").unwrap());
+            Some(crate::runtime::LockCredential::new("keep", "keep").unwrap());
         active.save(&path, None).unwrap();
         let original = std::fs::read(&path).unwrap();
         let edits = "Key.Pressed(Alt+4)\nMouse.Click(12,8,left)\nMouse.Click(44,8,left)\nMouse.Click(12,11,left)\nMouse.Click(44,11,left)\nMouse.Click(12,12,left)\nMouse.Click(44,12,left)\nKey.Pressed(Alt+G)\nKey.Pressed(End)\nKey.Pressed(Enter)\nKey.Pressed(Alt+P)\nKey.Pressed(Home)\nKey.Pressed(Down,2)\nKey.Pressed(Alt+A)\nKey.Pressed(Alt+R)";
@@ -596,11 +503,12 @@ mod tests {
         assert!(!saved.panel.show_ram);
         assert!(!saved.panel.show_disk);
         assert!(!saved.panel.show_network_usage);
-        assert_eq!(saved.panel.date_format, crate::panel::DateFormat::DayMonth);
+        assert_eq!(saved.panel.date_format, crate::config::preferences::DateFormat::DayMonth);
         assert_eq!(saved.terminal_lock, active.terminal_lock);
         assert_eq!(saved.desktop, Preferences::default().desktop);
         assert_eq!(Preferences::load(&path).0, saved);
     }
+
     #[test]
     fn security_tab_saves_only_on_save_and_palette_presets_preserve_password() {
         let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
@@ -640,6 +548,7 @@ mod tests {
         assert_eq!(reset.desktop, Preferences::default().desktop);
         assert_eq!(Preferences::load(&path).0, reset);
     }
+
     #[test]
     fn security_tab_authenticates_changes_and_removal_without_partial_saves() {
         let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
@@ -648,7 +557,7 @@ mod tests {
         let mut active = Preferences::default();
         active.desktop.background = Rgb(1, 2, 3);
         active.terminal_lock =
-            Some(crate::terminal_lock::LockCredential::new("original", "original").unwrap());
+            Some(crate::runtime::LockCredential::new("original", "original").unwrap());
         active.save(&path, None).unwrap();
         let bytes = std::fs::read(&path).unwrap();
         let remove = "Key.Pressed(Alt+U)\nKey.Pressed(Alt+L)\nKey.Pressed(End)\nKey.Pressed(Enter)\nKey.Pressed(Alt+O)";
@@ -681,6 +590,7 @@ mod tests {
         assert!(removed.terminal_lock.is_none());
         assert_eq!(Preferences::load(&path).0, removed);
     }
+
     #[test]
     fn invalid_palette_save_clears_password_inputs() {
         let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
@@ -695,6 +605,7 @@ mod tests {
         assert!(dialog.base.control(password).unwrap().value.is_empty());
         app.run();
     }
+
     #[test]
     fn preset_selection_applies_to_draft_and_save_only() {
         let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
@@ -710,7 +621,7 @@ mod tests {
         assert_eq!(PreferencesDialog::new(&active, path.clone()).show(), None);
         app.run();
         assert_eq!(Preferences::load(&path).0, active);
-        for (index, preset) in crate::palette_presets::PalettePreset::ALL
+        for (index, preset) in crate::config::preferences::PalettePreset::ALL
             .into_iter()
             .enumerate()
         {
@@ -727,25 +638,10 @@ mod tests {
             assert_eq!(Preferences::load(&path).0, preset.preferences());
         }
     }
+
     #[test]
-    fn dialogs_cancel_by_default_and_preferences_save_only_valid_drafts_at_80x24() {
+    fn preferences_save_only_valid_drafts_at_80x24() {
         let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
-        for key in ["Enter", "Escape"] {
-            let app = debug(&format!("Key.Pressed({key})")).build().unwrap();
-            assert_eq!(
-                ConfirmSystemAction::new(SystemAction::Shutdown).show(),
-                None
-            );
-            app.run();
-        }
-        let app = debug("Key.Pressed(Tab)\nKey.Pressed(Enter)")
-            .build()
-            .unwrap();
-        assert_eq!(
-            ConfirmSystemAction::new(SystemAction::Restart).show(),
-            Some(true)
-        );
-        app.run();
         let dir = TestDir::new();
         let path = dir.path().join("preferences.toml");
         let mut active = Preferences::default();
@@ -788,12 +684,5 @@ mod tests {
         assert_eq!(saved.desktop.surface, Rgb(68, 85, 102));
         assert_eq!(saved.terminal.foreground, Rgb(119, 136, 153));
         assert_eq!(Preferences::load(&path).0, saved);
-        let mut app = debug("Key.Pressed(PageDown)\nKey.Pressed(Escape)")
-            .build()
-            .unwrap();
-        app.add_window(help_window());
-        app.run();
     }
 }
-
-pub use crate::help::help_window;

@@ -1,13 +1,14 @@
-use crate::desktop::mydesktop::Commands;
-use crate::desktop_dialogs::{ConfirmSystemAction, PreferencesDialog, help_window};
-use crate::linux_status::StatusMonitor;
-use crate::palette_theme::build_theme;
-use crate::panel::{self, BarLayout};
-use crate::preferences::Preferences;
-use crate::shortcut::Shortcut;
-use crate::system_actions::{SystemAction, SystemActionRunner, SystemActions};
-use crate::terminal_lock::{LockSetupDialog, TerminalLockScreen};
-use crate::tui_window::TuiWindow;
+use self::mydesktop::Commands;
+use super::confirm_system_action::ConfirmSystemAction;
+use super::help::help_window;
+use super::panel::{self, BarLayout};
+use crate::config::preferences::Preferences;
+use crate::config::Shortcut;
+use crate::platform::linux::{StatusMonitor, SystemAction, SystemActionRunner, SystemActions};
+use crate::ui::locking::{LockSetupDialog, TerminalLockScreen};
+use crate::ui::preferences::PreferencesDialog;
+use crate::ui::terminal::TuiWindow;
+use crate::ui::build_theme;
 use appcui::prelude::appbar::MenuButton;
 use appcui::prelude::menu::{Command, SingleChoice};
 use appcui::prelude::*;
@@ -592,7 +593,7 @@ impl TimerEvents for MyDesktop {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::preferences::Rgb;
+    use crate::config::preferences::Rgb;
     use crate::test_support::{TestDir, UI_LOCK};
     use virtual_terminal::{Input, Output};
     #[test]
@@ -600,10 +601,10 @@ mod tests {
         let _ui_lock = UI_LOCK.lock().unwrap();
         let dir = TestDir::new();
         struct OfflineStatus;
-        impl crate::linux_status::StatusReader for OfflineStatus {
-            fn read(&self) -> crate::linux_status::StatusSnapshot {
-                crate::linux_status::StatusSnapshot {
-                    network: crate::linux_status::NetworkStatus::Offline,
+        impl crate::platform::linux::StatusReader for OfflineStatus {
+            fn read(&self) -> crate::platform::linux::StatusSnapshot {
+                crate::platform::linux::StatusSnapshot {
+                    network: crate::platform::linux::NetworkStatus::Offline,
                     battery: None,
                     ..Default::default()
                 }
@@ -622,7 +623,7 @@ mod tests {
                 "Third Application",
             ] {
                 let mut shortcut: Shortcut =
-                    toml::from_str(include_str!("../shortcuts/sh.toml")).unwrap();
+                    toml::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shortcuts/sh.toml"))).unwrap();
                 shortcut.name = name.into();
                 shortcuts.push(shortcut);
             }
@@ -643,7 +644,7 @@ mod tests {
                 Arc::new(NoSystemActions),
             );
             desktop.status = StatusMonitor::new(Arc::new(OfflineStatus));
-            desktop.status.snapshot.network = crate::linux_status::NetworkStatus::Offline;
+            desktop.status.snapshot.network = crate::platform::linux::NetworkStatus::Offline;
             let script = format!(
                 "Paint('initial')\nCheckHash({wide:#X})\nResize(80,24)\nPaint('narrow')\nCheckHash({narrow:#X})\nResize(100,24)\nPaint('wide restored')\nCheckHash({wide:#X})"
             );
@@ -705,7 +706,7 @@ mod tests {
         let path = dir.path().join("preferences.toml");
         let mut preferences = Preferences::default();
         preferences.terminal_lock =
-            Some(crate::terminal_lock::LockCredential::new("reusable", "reusable").unwrap());
+            Some(crate::runtime::LockCredential::new("reusable", "reusable").unwrap());
         preferences.save(&path, None).unwrap();
         for (password, remains_locked) in [("wrong", true), ("reusable", false)] {
             // Simulate a fresh instance whose in-memory palette has no credential.
@@ -738,20 +739,20 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let _entered = runtime.enter();
         let dir = TestDir::new();
-        let mut shortcut: Shortcut = toml::from_str(include_str!("../shortcuts/sh.toml")).unwrap();
+        let mut shortcut: Shortcut = toml::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shortcuts/sh.toml"))).unwrap();
         shortcut.command = "/bin/sh".into();
         shortcut.args = vec![
             "-c".into(),
             r"printf '\033[31mA'; read answer; printf '\033[H\033[0mZ'; read answer".into(),
         ];
-        shortcut.window.size = Some(crate::shortcut::WindowSize {
+        shortcut.window.size = Some(crate::config::WindowSize {
             width: 30,
             height: 8,
         });
         shortcut.terminal.background_color = None;
         let mut overridden = shortcut.clone();
         overridden.terminal.background_color =
-            Some(crate::shortcut::BackgroundColor { r: 7, g: 8, b: 9 });
+            Some(crate::config::BackgroundColor { r: 7, g: 8, b: 9 });
         let old = Preferences::default();
         let mut desktop = MyDesktop::new(
             vec![shortcut.clone(), overridden],
