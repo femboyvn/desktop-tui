@@ -67,6 +67,7 @@ The binary uses technical layers, with functional groups inside each layer:
 - `src/config/`: preferences models, storage, palette presets and editing drafts, plus shortcut definitions and discovery.
 - `src/runtime/`: terminal emulation and password credentials.
 - `src/platform/linux/`: status readings, resource usage, and system actions.
+- `vendor/appcui/`: local AppCUI dependency with a terminal rendering fix; see [patch notes](vendor/README.md).
 
 Groups use a named entry file alongside their child folder (for example, `ui/desktop.rs` and `ui/desktop/`). Entry files declare private implementation modules and expose shared types and entry points within the crate. `main.rs`, `args.rs`, and test-only `test_support.rs` stay at the source root; `utils.rs` remains outside the module tree.
 

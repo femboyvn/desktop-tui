@@ -11,7 +11,7 @@ repository = "https://github.com/femboyvn/desktop-tui"
 keywords = ["Desktop", "Environment", "TUI", "AppCUI-rs"]
 
 [dependencies]
-appcui = { version = "0.4.6", features = ["CROSSTERM", "TRUE_COLORS"] }
+appcui = { path = "vendor/appcui", version = "0.4.6", features = ["CROSSTERM", "TRUE_COLORS"] }
 
 virtual-terminal = "0.1.5"
 

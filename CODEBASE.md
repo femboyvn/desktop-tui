@@ -89,6 +89,7 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/utils.rs](src/utils.rs) | Unregistered helper file, outside the module tree. |
 | [shortcuts/](shortcuts/) | Example TOML launchers; executable names are external tools, not bundled binaries. |
 | [Cargo.toml](Cargo.toml), [Cargo.lock](Cargo.lock) | Package/dependency declarations and tracked dependency resolution. |
+| [vendor/](vendor/README.md) | Local AppCUI 0.4.6 dependency with a CrossTerm style/color rendering fix and ANSI output regression tests. |
 | [.cargo/config.toml](.cargo/config.toml) | Development/release profiles; release uses `opt-level = "z"`, LTO, one codegen unit, and symbol stripping. |
 | [rustfmt.toml](rustfmt.toml) | `disable_all_formatting = true`; preserve manual source style. |
 | [.agents/skills/](.agents/skills/) | Repository-local brainstorming, testing, and OS integration workflows; see `AGENTS.md` for selection and invocation. |
