@@ -326,6 +326,8 @@ pub enum SaveFileDialogFlags {
 pub enum OpenFileDialogFlags {
     Icons = 1,
     CheckIfFileExists = 2,
+    // Keep the colors of windows behind the file picker.
+    PreserveBackground = 4,
 }
 
 #[EnumBitFlags(bits = 8)]
@@ -390,6 +392,9 @@ where
             }
             if flags.contains(OpenFileDialogFlags::CheckIfFileExists) {
                 inner_flags |= open_save_dialog::InnerFlags::CheckIfFileExists;
+            }
+            if flags.contains(OpenFileDialogFlags::PreserveBackground) {
+                inner_flags |= open_save_dialog::InnerFlags::PreserveBackground;
             }
 
             let w = FileExplorer::new(file_name, title, location, mask_list, nav, inner_flags);

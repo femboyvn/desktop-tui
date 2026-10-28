@@ -11,7 +11,7 @@ pub(crate) fn home_directory() -> PathBuf {
 }
 pub(crate) fn select_image() -> Option<PathBuf> {
     dialogs::open("Open image (PNG, JPEG, WebP, GIF, BMP)", "", Location::Path(&home_directory()), None,
-        OpenFileDialogFlags::Icons | OpenFileDialogFlags::CheckIfFileExists)
+        OpenFileDialogFlags::Icons | OpenFileDialogFlags::CheckIfFileExists | OpenFileDialogFlags::PreserveBackground)
 }
 
 struct Request { path: PathBuf, source_revision: u64, render: RenderRequest }

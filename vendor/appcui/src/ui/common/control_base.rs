@@ -34,6 +34,7 @@ pub enum StatusFlags {
     IncreaseBottomMarginOnFocus = 0x1000,
     SingleWindow = 0x2000,
     ThemeType = 0x4000,
+    PreserveModalBackground = 0x8000,
 }
 #[derive(Copy, Clone, Default)]
 pub(crate) struct Margins {
@@ -242,6 +243,13 @@ impl ControlBase {
         self.status_flags.contains(StatusFlags::WindowControl)
     }
     #[inline(always)]
+    pub(crate) fn preserves_modal_background(&self) -> bool {
+        self.status_flags.contains(StatusFlags::PreserveModalBackground)
+    }
+    pub(crate) fn preserve_modal_background(&mut self) {
+        self.status_flags.set(StatusFlags::PreserveModalBackground);
+    }
+
     pub(crate) fn is_modal_window(&self) -> bool {
         self.status_flags.contains(StatusFlags::ModalWindow)
     }

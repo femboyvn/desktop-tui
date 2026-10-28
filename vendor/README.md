@@ -14,6 +14,10 @@ Provenance:
 Cargo uses this local copy through the path dependency in the root manifest.
 Modified packaged sources:
 
+- `src/dialogs.rs`, `src/dialogs/open_save_dialog.rs`, `src/ui/common/control_base.rs`,
+  and `src/system/runtime_manager.rs`: opt-in file-picker background preservation;
+  Image Viewer uses it so other windows retain their original colors.
+
 - `src/backend/crossterm/implementation.rs`: the rendering fix described below.
 - `src/ui/window/toolbar/toolbar.rs`: remove a final position adjustment whose
   result is never used.
@@ -56,3 +60,10 @@ across the process.
 
 Keep future changes focused and document them here. This is a local dependency
 patch; it does not require synchronizing with or publishing to another project.
+
+The file-picker backdrop regression is in
+`src/system/runtime_manager/regression_tests.rs`:
+
+```sh
+cargo test --locked -p appcui --lib file_picker_preserves_background_colors_when_requested -- --test-threads=1
+```

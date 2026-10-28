@@ -164,7 +164,7 @@ and literal placeholder text in that selected path are preserved. An already
 running editor remains open. Special files are not opened.
 
 **Image Viewer** opens through Application > Utility > Image Viewer and its
-file picker, or from File Browser. It shows the filename, oriented dimensions,
+file picker, or from File Browser. The file picker preserves the colors of windows behind it. It shows the filename, oriented dimensions,
 and zoom in its title. Ctrl+O opens another image; **F** fits, **1** selects
 actual size, **+/-** zoom by 1.25, and arrows or mouse dragging pan. One source
 pixel occupies half a terminal cell vertically at actual size. Explicit zoom

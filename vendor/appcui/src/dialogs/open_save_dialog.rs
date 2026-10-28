@@ -26,6 +26,7 @@ pub(super) enum InnerFlags {
     MultipleOpen = 4,
     ValidateOverwrite = 8,
     CheckIfFileExists = 16,
+    PreserveBackground = 32,
 }
 
 pub(super) static LAST_PATH: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
@@ -77,6 +78,9 @@ where
             path: PathBuf::new(),
             flags,
         };
+        if flags.contains(InnerFlags::PreserveBackground) {
+            w.preserve_modal_background();
+        }
         w.path = match location {
             Location::Current => nav.current_dir(),
             Location::Last => {

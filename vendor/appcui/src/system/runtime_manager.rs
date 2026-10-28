@@ -1295,7 +1295,9 @@ impl PaintMethods for RuntimeManager {
             let count = self.modal_windows.len();
             for index in 0..count {
                 self.surface.reset();
-                if index + 1 == count {
+                let preserve_background = self.get_controls().get(self.modal_windows[index])
+                    .is_some_and(|control| control.base().preserves_modal_background());
+                if index + 1 == count && !preserve_background {
                     self.surface.clear(Character::with_color(Color::Gray, Color::Black));
                 }
                 self.paint_control(self.modal_windows[index]);
@@ -2002,3 +2004,6 @@ impl Drop for RuntimeManager {
         }
     }
 }
+
+#[cfg(test)]
+mod regression_tests;
