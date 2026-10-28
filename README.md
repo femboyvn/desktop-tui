@@ -1,10 +1,11 @@
 Desktop-TUI 🖥️
 ===
 
-This checkout is maintained for private, independent development in
-`femboyvn/desktop-tui`. Changes and reviews stay in that repository; development
-does not include contributions to the original parent project or public forks.
-Verify that the remote is private and detached before pushing, as described in
+This checkout is the owner's personal, independently maintained version in
+`femboyvn/desktop-tui`. Personal use does not require a private GitHub repository.
+Changes and reviews stay in this repository; development does not include
+contributions to the original parent project or other forks.
+Verify the destination and its independence before pushing, as described in
 [AGENTS.md](AGENTS.md). Cargo package publishing is disabled.
 
 > [!WARNING]
@@ -33,7 +34,7 @@ Features:
 
 ### Install from this checkout
 
-Use the private checkout as the installation source:
+Use this personal checkout as the installation source:
 
 ```shell
 cargo install --path . --locked
@@ -119,7 +120,7 @@ background_color = { r = 30, g = 30, b = 30 }
 
 ## Development
 
-Read [CONTRIBUTE.md](CONTRIBUTE.md) for private development and internal review guidance.
+Read [CONTRIBUTE.md](CONTRIBUTE.md) for personal development and project review guidance.
 Use [HOW_TO_RUN.md](HOW_TO_RUN.md) to build and launch the app and
 [HOW_TO_TEST.md](HOW_TO_TEST.md) to verify a change.
 Start with [AGENTS.md](AGENTS.md) for the development and Git workflow. See

@@ -4,20 +4,21 @@ This file applies to the whole repository. Follow the user's task and any more
 specific `AGENTS.md` in the directory you change. Keep these documents aligned
 with the code when architecture, commands, or conventions change.
 
-## Private project policy
+## Personal project policy
 
-Develop this project independently and keep its work private. Do not contribute
-changes, open issues or pull requests, push branches, or synchronize work with the
-original parent project or public forks. Preserve the existing license and
-attribution.
+Develop this project as the owner's personal, independently maintained version.
+Personal use does not require private GitHub repository visibility. Do not
+contribute changes, open issues or pull requests, push branches, or synchronize
+work with the original parent project or other forks. Preserve the existing
+license and attribution.
 
 The intended repository is `femboyvn/desktop-tui`. Use only its owner-approved
-private remote for any authorized push or internal review. Before pushing,
-verify the destination owner/repository, private visibility, and that it is
-independent of the original parent's fork network.
-Remote names, local configuration, and this policy do not establish server-side
-privacy. Keep work local if the destination cannot be verified. Create an
-internal issue or pull request only when the user requests one.
+remote for any authorized push or review. Before pushing, verify the destination
+owner/repository and that it is independent of the original parent's fork network.
+Remote names and local configuration do not establish those server-side properties.
+Keep work local if the destination cannot be verified. Do not change repository
+visibility as part of routine development. Create an issue or pull request only
+when the user requests one.
 
 ## Read before working
 
@@ -28,7 +29,7 @@ internal issue or pull request only when the user requests one.
 4. Read [README.md](README.md) and the relevant source and sample shortcuts for
    user-facing behavior. The source and Cargo configuration are authoritative
    when prose has drifted; update the affected documentation with the change.
-5. Read [CONTRIBUTE.md](CONTRIBUTE.md) for private development setup, internal
+5. Read [CONTRIBUTE.md](CONTRIBUTE.md) for personal development setup, project
    handoffs, and review expectations.
 6. Use [HOW_TO_RUN.md](HOW_TO_RUN.md) for build/run instructions and
    [HOW_TO_TEST.md](HOW_TO_TEST.md) for automated and manual verification.
@@ -97,12 +98,12 @@ agent host without local skill discovery, open the relevant `SKILL.md` directly.
 6. Avoid rewriting published history. Do not force-push, reset destructively,
    clean untracked files, amend another person's commit, or rebase shared work
    without explicit authorization. Integrate only against the agreed local or
-   approved private base; resolve conflicts deliberately and repeat affected
+   approved project base; resolve conflicts deliberately and repeat affected
    checks. Do not fetch or merge from the original parent as a routine sync step.
 7. Leave a reviewable patch by default. Commit, push, merge, publish, or tag only
-   when requested or covered by the agreed private workflow. Apply the private
-   project policy before any push or external write. An internal handoff or a
-   user-requested private review should state the problem, resulting behavior,
+   when requested or covered by the agreed project workflow. Apply the personal
+   project policy before any push or external write. A handoff or a
+   user-requested project review should state the problem, resulting behavior,
    validation, and any remaining limitations; a pull request is optional.
 
 ## Verification

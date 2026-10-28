@@ -3,7 +3,7 @@
 Use this guide from the repository root. Start with [AGENTS.md](AGENTS.md) for
 the shared-worktree and Git rules, [HOW_TO_RUN.md](HOW_TO_RUN.md) for setup and
 controlled shortcuts, and [CONTRIBUTE.md](CONTRIBUTE.md) for internal handoffs and
-requested private reviews.
+requested project reviews.
 The module map and implementation limits are in [CODEBASE.md](CODEBASE.md).
 
 ## Choose checks that exercise the change
@@ -136,7 +136,7 @@ Report commands actually run and their outcomes, tests that ran, new versus
 existing warnings, manual scenarios exercised, and any blocked or remaining
 checks with reasons. Include the OS, terminal, toolchain, relevant shortcut, and
 revision for a reproducible UI failure. State whether the work is committed.
-Keep evidence local or within the owner-approved private destination; do not send
-reports, issues, or pull requests to the original parent project or public forks.
+Keep evidence local or within the owner-approved project destination; do not send
+reports, issues, or pull requests to the original parent project or other forks.
 A headless build cannot establish interactive correctness, and no CI result is
 available in this repository to substitute for these checks.
