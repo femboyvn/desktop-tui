@@ -1,18 +1,27 @@
 use crate::backend::SystemEventReader;
 use crate::input::{Key, KeyCode, KeyModifier, MouseButton, MouseWheelDirection};
 use crate::system::SystemEvent;
-use crate::system::{KeyModifierChangedEvent, KeyPressedEvent, MouseButtonDownEvent, MouseButtonUpEvent, MouseMoveEvent, MouseWheelEvent};
+use crate::system::{KeyModifierChangedEvent, KeyPressedEvent, MouseButtonDownEvent, MouseButtonUpEvent, MouseDoubleClickEvent, MouseMoveEvent, MouseWheelEvent};
+use std::time::{Duration, Instant};
 use crossterm::event::KeyCode as CrosstermKeyCode;
 use crossterm::event::{self, Event, KeyEvent, KeyEventKind, MouseButton as CrosstermMouseButton, MouseEvent, MouseEventKind};
 
+#[derive(Clone, Copy)]
+struct Click { x: i32, y: i32, button: MouseButton, time: Instant }
+const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
+
 pub(crate) struct Input {
     last_modifiers: KeyModifier,
+    pressed_click: Option<Click>,
+    completed_click: Option<Click>,
 }
 
 impl Input {
     pub(super) fn new() -> Self {
         Self {
             last_modifiers: KeyModifier::None,
+            pressed_click: None,
+            completed_click: None,
         }
     }
 }
@@ -22,9 +31,9 @@ impl SystemEventReader for Input {
         match event::read() {
             Ok(Event::Key(key_event)) => self.handle_key_event(key_event),
             Ok(Event::Mouse(mouse_event)) => self.handle_mouse_event(mouse_event),
-            Ok(Event::Resize(width, height)) => Some(SystemEvent::Resize(crate::graphics::Size::new(width as u32, height as u32))),
+            Ok(Event::Resize(width, height)) => { self.clear_clicks(); Some(SystemEvent::Resize(crate::graphics::Size::new(width as u32, height as u32))) },
             Ok(Event::FocusGained) => None,
-            Ok(Event::FocusLost) => None,
+            Ok(Event::FocusLost) => { self.clear_clicks(); None },
             Ok(Event::Paste(_)) => None,
             Err(_) => None,
         }
@@ -38,6 +47,7 @@ impl Input {
             return None;
         }
 
+        self.clear_clicks();
         let key_code = self.convert_key_code(key_event.code);
         let modifiers = self.convert_modifiers(key_event.modifiers);
         
@@ -60,25 +70,45 @@ impl Input {
         Some(SystemEvent::KeyPressed(KeyPressedEvent { key, character }))
     }
 
+    fn clear_clicks(&mut self) {
+        self.pressed_click = None;
+        self.completed_click = None;
+    }
     fn handle_mouse_event(&mut self, mouse_event: MouseEvent) -> Option<SystemEvent> {
+        self.handle_mouse_event_at(mouse_event, Instant::now())
+    }
+    fn handle_mouse_event_at(&mut self, mouse_event: MouseEvent, now: Instant) -> Option<SystemEvent> {
         let x = mouse_event.column as i32;
         let y = mouse_event.row as i32;
 
+        if matches!(mouse_event.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown | MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight) { self.clear_clicks(); }
         match mouse_event.kind {
             MouseEventKind::Down(button) => {
                 let button = self.convert_mouse_button(button);
-                Some(SystemEvent::MouseButtonDown(MouseButtonDownEvent { x, y, button }))
+                let double_click = self.completed_click.take().is_some_and(|click|
+                    button == MouseButton::Left && click.button == button && click.x == x && click.y == y
+                    && now.saturating_duration_since(click.time) <= DOUBLE_CLICK_INTERVAL);
+                if double_click {
+                    self.pressed_click = None;
+                    Some(SystemEvent::MouseDoubleClick(MouseDoubleClickEvent { x, y, button }))
+                } else {
+                    self.pressed_click = Some(Click { x, y, button, time: now });
+                    Some(SystemEvent::MouseButtonDown(MouseButtonDownEvent { x, y, button }))
+                }
             }
             MouseEventKind::Up(button) => {
                 let button = self.convert_mouse_button(button);
+                self.completed_click = self.pressed_click.take().filter(|click|
+                    button == MouseButton::Left && click.button == button && click.x == x && click.y == y
+                    && now.saturating_duration_since(click.time) <= DOUBLE_CLICK_INTERVAL);
                 Some(SystemEvent::MouseButtonUp(MouseButtonUpEvent { x, y, button }))
             }
-            MouseEventKind::Moved => Some(SystemEvent::MouseMove(MouseMoveEvent {
-                x,
-                y,
-                button: MouseButton::None,
-            })),
+            MouseEventKind::Moved => {
+                if self.pressed_click.or(self.completed_click).is_some_and(|click| click.x != x || click.y != y) { self.clear_clicks(); }
+                Some(SystemEvent::MouseMove(MouseMoveEvent { x, y, button: MouseButton::None }))
+            }
             MouseEventKind::Drag(button) => {
+                self.clear_clicks();
                 let button = self.convert_mouse_button(button);
                 Some(SystemEvent::MouseMove(MouseMoveEvent { x, y, button }))
             }
@@ -198,5 +228,46 @@ impl Input {
             CrosstermMouseButton::Right => MouseButton::Right,
             CrosstermMouseButton::Middle => MouseButton::Center,
         }
+    }
+}
+
+#[cfg(test)]
+mod double_click_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+    fn mouse(kind: MouseEventKind, column: u16, row: u16) -> MouseEvent {
+        MouseEvent { kind, column, row, modifiers: event::KeyModifiers::NONE }
+    }
+    #[test]
+    fn completed_click_pair_emits_one_double_click_and_triples_restart() {
+        let mut input = Input::new();
+        let now = Instant::now();
+        let down = mouse(MouseEventKind::Down(CrosstermMouseButton::Left), 8, 9);
+        let up = mouse(MouseEventKind::Up(CrosstermMouseButton::Left), 8, 9);
+        assert!(matches!(input.handle_mouse_event_at(down, now), Some(SystemEvent::MouseButtonDown(_))));
+        input.handle_mouse_event_at(up, now + Duration::from_millis(20));
+        assert!(matches!(input.handle_mouse_event_at(down, now + Duration::from_millis(100)), Some(SystemEvent::MouseDoubleClick(_))));
+        input.handle_mouse_event_at(up, now + Duration::from_millis(120));
+        assert!(matches!(input.handle_mouse_event_at(down, now + Duration::from_millis(200)), Some(SystemEvent::MouseButtonDown(_))));
+    }
+    #[test]
+    fn slow_moved_dragged_and_different_button_clicks_do_not_open_items() {
+        for (next, delay) in [
+            (mouse(MouseEventKind::Down(CrosstermMouseButton::Left), 8, 9), 700),
+            (mouse(MouseEventKind::Down(CrosstermMouseButton::Left), 9, 9), 100),
+            (mouse(MouseEventKind::Down(CrosstermMouseButton::Right), 8, 9), 100),
+        ] {
+            let now = Instant::now();
+            let mut input = Input::new();
+            input.handle_mouse_event_at(mouse(MouseEventKind::Down(CrosstermMouseButton::Left), 8, 9), now);
+            input.handle_mouse_event_at(mouse(MouseEventKind::Up(CrosstermMouseButton::Left), 8, 9), now + Duration::from_millis(20));
+            assert!(matches!(input.handle_mouse_event_at(next, now + Duration::from_millis(delay)), Some(SystemEvent::MouseButtonDown(_))));
+        }
+        let now = Instant::now();
+        let mut input = Input::new();
+        input.handle_mouse_event_at(mouse(MouseEventKind::Down(CrosstermMouseButton::Left), 8, 9), now);
+        input.handle_mouse_event_at(mouse(MouseEventKind::Drag(CrosstermMouseButton::Left), 9, 9), now + Duration::from_millis(10));
+        input.handle_mouse_event_at(mouse(MouseEventKind::Up(CrosstermMouseButton::Left), 8, 9), now + Duration::from_millis(20));
+        assert!(matches!(input.handle_mouse_event_at(mouse(MouseEventKind::Down(CrosstermMouseButton::Left), 8, 9), now + Duration::from_millis(100)), Some(SystemEvent::MouseButtonDown(_))));
     }
 }

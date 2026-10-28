@@ -1813,6 +1813,11 @@ impl MouseMethods for RuntimeManager {
         self.mouse_locked_object = MouseLockedObject::None;
     }
     fn process_mouse_dblclick_event(&mut self, event: MouseDoubleClickEvent) {
+        // Menus must consume a double click rather than activating a control underneath.
+        if !self.opened_menu_handle.is_none() {
+            self.process_mousebuttondown_event(MouseButtonDownEvent { x: event.x, y: event.y, button: event.button });
+            return;
+        }
         // update mouse position
         self.mouse_pos.x = event.x;
         self.mouse_pos.y = event.y;

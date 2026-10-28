@@ -14,6 +14,12 @@ Provenance:
 Cargo uses this local copy through the path dependency in the root manifest.
 Modified packaged sources:
 
+- `src/backend/crossterm/input.rs`: recognize completed left-click pairs within
+  500 ms and emit double-click actions for lists and window controls. Movement,
+  dragging, keyboard input, resize, and scrolling cancel the pair.
+- `src/system/runtime_manager.rs`: keep double clicks in open menus from reaching
+  controls underneath.
+
 - `src/dialogs.rs`, `src/dialogs/open_save_dialog.rs`, `src/ui/common/control_base.rs`,
   and `src/system/runtime_manager.rs`: opt-in file-picker background preservation;
   Image Viewer uses it so other windows retain their original colors.
@@ -66,4 +72,10 @@ The file-picker backdrop regression is in
 
 ```sh
 cargo test --locked -p appcui --lib file_picker_preserves_background_colors_when_requested -- --test-threads=1
+```
+
+CrossTerm double-click regressions:
+
+```sh
+cargo test --locked -p appcui --lib double_click_tests -- --test-threads=1
 ```

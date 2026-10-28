@@ -27,7 +27,8 @@ Choose Close to stop the primary application process.
 ## File Browser
 
 Application > System > File Browser starts in your home directory.
-Enter an absolute or relative path, or open a folder in the listing.
+Enter an absolute or relative path, or double-click a folder in the listing.
+Double-click a regular file to open it; Enter opens the selected row.
 Up (Alt+U) opens the parent, Refresh (Alt+R) reloads, and Hidden
 (Alt+H) toggles dot files. Directories sort before files; columns
 show name, type, byte size, and local modification time. Failed
