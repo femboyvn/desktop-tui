@@ -6,9 +6,8 @@ edition = "2024"
 authors = ["julien-cpsn"]
 license = "MIT"
 readme = "README.md"
-documentation = "https://github.com/Julien-cpsn/desktop-tui"
-homepage = "https://github.com/Julien-cpsn/desktop-tui"
-repository = "https://github.com/Julien-cpsn/desktop-tui"
+publish = false
+repository = "https://github.com/femboyvn/desktop-tui"
 keywords = ["Desktop", "Environment", "TUI", "AppCUI-rs"]
 
 [dependencies]

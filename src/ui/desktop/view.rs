@@ -366,11 +366,9 @@ impl DesktopEvents for MyDesktop {
     }
 
     fn on_close(&mut self) -> ActionRequest {
-        if self.terminal_locked {
-            ActionRequest::Deny
-        } else {
-            ActionRequest::Allow
-        }
+        // Escape can arrive separately as the prefix of an Alt key sequence.
+        // Leave application shutdown to the explicit Desktop > Exit command.
+        ActionRequest::Deny
     }
 }
 
@@ -859,6 +857,56 @@ mod tests {
                 );
                 std::thread::sleep(Duration::from_millis(5));
             }
+        }
+    }
+    #[test]
+    fn empty_desktop_stays_open_for_escape_and_alt_keys() {
+        // Capture the debug backend's paint probes in a subprocess: an early
+        // application exit would otherwise skip the rest of the script silently.
+        const CHILD_ENV: &str = "DESKTOP_TUI_INPUT_TEST_CHILD";
+        if std::env::var_os(CHILD_ENV).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "ui::desktop::view::tests::empty_desktop_stays_open_for_escape_and_alt_keys", "--nocapture"])
+                .env(CHILD_ENV, "1")
+                .output()
+                .unwrap();
+
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert_eq!(stdout.matches("desktop-input-alive").count(), 2, "Desktop exited before the input probe");
+            assert!(!stdout.contains("desktop-exit-failed"), "Desktop > Exit did not close the application");
+            return;
+        }
+
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let mut script = String::from("Paint.Enable(false)\nKey.Modifier(Alt)\n");
+        for key in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+                    'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z',
+                    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9'] {
+            script.push_str(&format!("Key.Pressed(Alt+{})\n", key));
+        }
+        script.push_str("Key.Pressed(Alt+Left)\nKey.Pressed(Alt+F4)\n");
+        script.push_str("Key.Modifier(None)\nKey.Pressed(Escape)\nKey.Pressed(A)\n");
+        script.push_str("Mouse.Click(4,0,left)\nKey.Pressed(Escape)\n");
+        script.push_str("Paint.Enable(true)\nPaint('desktop-input-alive')\n");
+        script.push_str("Mouse.Click(4,0,left)\nKey.Pressed(Down)\nKey.Pressed(End)\nKey.Pressed(Enter)\nPaint('desktop-exit-failed')\n");
+
+        for shortcuts in [vec![], vec![toml::from_str::<Shortcut>(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shortcuts/helix.toml"))).unwrap()]] {
+            let app = App::debug(80, 25, &script)
+                .desktop(MyDesktop::new(
+                    shortcuts,
+                    Preferences::default(),
+                    dir.path().join("preferences.toml"),
+                    None,
+                    Arc::new(NoSystemActions),
+                ))
+                .app_bar()
+                .color_schema(false)
+                .build()
+                .unwrap();
+
+            app.run();
         }
     }
 }
