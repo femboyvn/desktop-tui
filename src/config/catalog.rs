@@ -23,7 +23,8 @@ pub(crate) fn with_starters(mut shortcuts: Vec<Shortcut>) -> Vec<Shortcut> {
     ] {
         if !shortcuts.iter().any(|shortcut| shortcut.name == name) {
             shortcuts.push(Shortcut {
-                name: name.into(), category: Some(category.into()), command: command.into(), args: vec![],
+                name: name.into(), category: Some(category.into()), command: command.into(),
+                args: if name == "System Performance" { vec!["--theme".into(), "default-light".into()] } else { vec![] },
                 taskbar: TaskbarOptions { position: None, additional_commands: vec![] },
                 window: WindowOptions { resizable: true, close_button: true, fixed_position: false, size: None },
                 terminal: TerminalOptions { padding: None, background_color: None },
@@ -57,6 +58,16 @@ pub(crate) fn categories(apps: &[Application]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn performance_starter_uses_readable_light_theme_without_overriding_custom_args() {
+        let starters = with_starters(vec![]);
+        let performance = starters.iter().find(|shortcut| shortcut.name == "System Performance").unwrap();
+        assert_eq!(performance.args, ["--theme", "default-light"]);
+        let mut custom = performance.clone();
+        custom.args = vec!["--theme".into(), "nord".into()];
+        let merged = with_starters(vec![custom]);
+        assert_eq!(merged[0].args, ["--theme", "nord"]);
+    }
     #[test]
     fn starters_and_categories_are_available_without_shortcuts() {
         let shortcuts = with_starters(vec![]);

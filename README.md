@@ -142,6 +142,10 @@ Five starters are available even with an empty shortcut directory:
 | Utility | Image Viewer | Native |
 | Utility | Text editor | `nano` |
 
+The System Performance starter uses bottom’s `default-light` theme for readable
+text on the default light terminal background. Override its shortcut to choose
+a different theme or arguments.
+
 External tools must be installed separately and available on PATH. A shortcut
 named Terminal, System Performance, or Text editor replaces that external
 starter, including its command, options, and category. A missing category

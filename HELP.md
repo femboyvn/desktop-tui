@@ -16,6 +16,8 @@ follow alphabetically. Empty categories show No apps yet.
 File Browser, Terminal (sh), System Performance (btm / bottom),
 Image Viewer, and Text editor (nano) are available with an empty
 shortcut folder. External tools must be installed separately.
+System Performance uses bottom’s default-light theme to match the
+default terminal background. A custom shortcut can choose another theme.
 Shortcuts with the same external starter names replace them.
 Native browser/viewer identities remain separate.
 
