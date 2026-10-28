@@ -90,7 +90,7 @@ command = "hx"
 args = []
 
 [taskbar]
-# Shortcut position on the action bar
+# Shortcut ordering within Application categories
 # Optional
 position = 3
 
@@ -128,9 +128,17 @@ The top bar starts with **Desktop | Application | Tilling**. Application groups
 launchers under **System**, **Utility**, **User**, and **Games**, followed by
 additional named categories in alphabetical order. Empty categories show a
 disabled **No apps yet**. Selecting a launcher starts its window or restores
-and focuses the existing instance. External app menus keep Start, Hide/Show,
-Close, and configured additional commands; **Apps** groups those menus when
-space is limited. Additional commands open independent windows.
+and focuses the existing instance.
+
+The space after **Tilling |** shows open, visible windows in opening order,
+including native apps, separate editor documents, and Help. Opening a window’s
+button focuses it and offers **Hide (run in background)** and **Close**. Hide
+removes its button while keeping the window and process alive. Restore any
+hidden window through **Application > Background windows**, or select its
+application launcher again. Unopened apps have no taskbar button. **Apps** groups
+visible windows when space is limited; selecting one opens its Focus/Hide/Close
+actions. The status panel remains responsive.
+External windows with additional commands expose them through **App commands...**.
 
 Five starters are available even with an empty shortcut directory:
 

@@ -115,7 +115,7 @@ mod tests {
         assert!(
             topics
                 .iter()
-                .any(|topic| topic.title == "Launching apps" && topic.body.contains("Start"))
+                .any(|topic| topic.title == "Launching apps" && topic.body.contains("Application"))
         );
         assert!(
             topics

@@ -14,6 +14,11 @@ Provenance:
 Cargo uses this local copy through the path dependency in the root manifest.
 Modified packaged sources:
 
+- `src/system/menu_handle_manager.rs`, `src/system/runtime_manager.rs`,
+  `src/ui/common/control_base.rs`, `src/ui/menu/menu.rs`, and
+  `src/ui/appbar/app_bar.rs`: mutable owned menus, recursive release/clear,
+  popup closure, and app-bar item removal for dynamic window taskbar entries.
+
 - `src/ui/menu/menu.rs` and `src/system/runtime_manager.rs`: open submenus on
   hover and route pointer motion through the visible parent chain, so moving
   between Application categories replaces the opened submenu.
@@ -88,4 +93,10 @@ Submenu hover regression:
 
 ```sh
 cargo test --locked -p appcui --lib hovering_parent_categories_switches_open_submenus -- --test-threads=1
+```
+
+Taskbar popup ownership regression:
+
+```sh
+cargo test --locked -p appcui --lib removing_window_menu_releases_handles_and_closes_its_popup -- --test-threads=1
 ```

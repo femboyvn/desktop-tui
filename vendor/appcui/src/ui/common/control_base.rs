@@ -632,6 +632,14 @@ impl ControlBase {
         }
     }
 
+    /// Access a registered menu owned by this control.
+    pub fn menu_mut(&mut self, handle: Handle<Menu>) -> Option<&mut Menu> {
+        RuntimeManager::get().get_menu(handle)
+    }
+    /// Release an owned menu and its submenus, closing its popup if necessary.
+    pub fn unregister_menu(&mut self, handle: Handle<Menu>) -> bool {
+        RuntimeManager::get().remove_menu(handle)
+    }
     pub fn register_menu(&mut self, menu: Menu) -> Handle<Menu> {
         RuntimeManager::get().add_menu(menu)
     }

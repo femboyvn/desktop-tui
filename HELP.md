@@ -21,8 +21,10 @@ default terminal background. A custom shortcut can choose another theme.
 Shortcuts with the same external starter names replace them.
 Native browser/viewer identities remain separate.
 
-External app menus also offer Start, Hide/Show, and Close.
-Additional commands appear below Close; they can open a file or
+Window buttons after Tilling | show only open, visible windows.
+A button focuses its window and offers Hide (run in background) and Close.
+Unopened applications have no button. App commands... provides configured
+additional commands, which can open a file or
 folder picker when a shortcut uses `<FILE_PATH>` or
 `<FOLDER_PATH>`. Additional commands open separate windows.
 Choose Close to stop the primary application process.
@@ -70,9 +72,11 @@ to resize a resizable window. Use the maximize button to maximize
 or restore it. Close buttons stop the window; Ctrl+C in a terminal
 stops its running command.
 
-Hide in an application's menu hides its window while the process
-keeps running. Choose Show to bring it back. Start does not create
-another copy of an already running application.
+Hide (run in background) removes a window from the taskbar while its
+process keeps running. Application > Background windows restores hidden
+windows, including independent editor documents. Selecting an application
+launcher also restores its existing primary window. Closed windows release
+their taskbar buttons. Reopening creates a new instance.
 
 ## Tiling
 
@@ -171,9 +175,9 @@ transmitted traffic. Compact traffic units B/K/M/G mean bytes, KiB,
 MiB or GiB per second; compact dates are day/month. Hover over the
 status for full multiline readings. Complete indicators are omitted
 only if they still cannot fit, prioritizing clock and connection.
-Apps replaces individual application menus when needed: choose an
-application to open its normal Start, Hide/Show, Close, and extra
-commands. Indicators and menus are hidden during Terminal Lock.
+Apps groups visible window buttons when needed: choose a window to
+focus it and open its Hide/Close actions. Background windows stay out of this list and can be restored
+through Application > Background windows. Indicators and menus are hidden during Terminal Lock.
 
 ## Security and passwords
 

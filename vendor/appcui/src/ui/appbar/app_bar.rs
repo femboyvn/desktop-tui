@@ -87,6 +87,20 @@ impl AppBar {
     {
         self.manager.add(item.into()).cast()
     }
+    /// Remove an item and invalidate its handle.
+    #[allow(private_bounds)]
+    pub fn remove<T>(&mut self, handle: Handle<T>) -> bool
+    where T: Into<AppBarItem>,
+    {
+        if !self.manager.remove(handle.cast()) { return false; }
+        let opened = self.opened_menu.and_then(|index| self.shown_items.get(index.index())).map(|item| item.idx);
+        self.shown_items.retain(|item| item.idx != handle.index() as u32);
+        self.opened_menu = opened.and_then(|id| self.shown_items.iter().position(|item| item.idx == id)).map(VisibleIndex::from_usize);
+        self.mouse_pos = MousePos::None;
+        self.pressed_item = None;
+        RuntimeManager::get().request_update_command_and_app_bars();
+        true
+    }
     /// Get an item from the app bar by its handle. The item has to be converted to an AppBarItem.
     /// 
     /// # Arguments

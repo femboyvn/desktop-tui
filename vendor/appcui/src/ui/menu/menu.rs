@@ -167,6 +167,19 @@ impl Menu {
         }
     }
 
+    /// Remove all items and release any owned submenus.
+    pub fn clear(&mut self) {
+        RuntimeManager::get().close_menu_tree(self.handle);
+        let children: Vec<_> = self.items.iter().filter_map(|item| item.get_submenu()).collect();
+        for child in children { RuntimeManager::get().remove_menu(child); }
+        self.items.clear();
+        self.current = VectorIndex::Invalid;
+        self.first_visible_item = 0;
+        self.visible_items_count = 0;
+        self.button_up = MenuButtonState::Normal;
+        self.button_down = MenuButtonState::Normal;
+    }
+
     /// Adds a new menu item to the existing menu.
     ///
     /// # Parameters

@@ -92,16 +92,17 @@ TOML
 cargo run --locked -- "$desktop_tui_shortcuts_dir"
 ```
 
-Select **Smoke test > Start**. This explicitly runs Unix `sh` with a finite
+Select **Application > User > Smoke test**. This explicitly runs Unix `sh` with a finite
 `printf` command, waits briefly using `sleep`, then exits; its window closes on
 child exit. In TOML, `\n` becomes a newline within the shell's quoted string.
 The desktop itself remains open. For an interactive shell instead, edit the
-shortcut to `args = []`, restart the desktop, and select **Start** again.
+shortcut to `args = []`, restart the desktop, and select its Application launcher again.
 Remove the temporary directory after finishing.
 
-Shortcuts are menu entries, not startup jobs. Use their **Hide/Show** and
-**Close** commands, the **Tilling** menu for arrangement, and **Desktop > Exit**
-to leave. With the child control focused, Ctrl+C requests child termination and
+Shortcuts are menu entries, not startup jobs. Open windows appear after **Tilling |**.
+Use a window button’s **Hide (run in background)** or **Close** command. Restore
+hidden instances through **Application > Background windows**. Use **Tilling**
+for arrangement and **Desktop > Exit** to leave. With the child control focused, Ctrl+C requests child termination and
 closes its window; it does not follow ordinary shell interrupt semantics.
 Escape on the desktop keeps the application open, including when a terminal
 delivers it separately as the prefix of an Alt key sequence.

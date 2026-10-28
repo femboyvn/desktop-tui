@@ -19,6 +19,9 @@ impl MenuHandleManager {
     pub(crate) fn get(&mut self, menu_handle: Handle<Menu>) -> Option<&Menu> {
         self.manager.get(menu_handle.cast())
     }
+    pub(crate) fn remove(&mut self, handle: Handle<Menu>) -> bool {
+        self.manager.remove(handle)
+    }
     #[inline(always)]
     pub(crate) fn add(&mut self, menu: Menu) -> Handle<Menu> {
         self.manager.add(menu)

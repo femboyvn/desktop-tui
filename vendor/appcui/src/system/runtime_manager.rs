@@ -466,6 +466,19 @@ impl RuntimeManager {
     pub(crate) fn get_appbar(&mut self) -> &mut AppBar {
         self.appbar.as_mut().expect("AppBar (application bar) was not enabled ! Have you forgot to add '.app_bar()' when you initialized the Application ? (e.g. App::new().app_bar().build())")
     }
+    pub(crate) fn close_menu_tree(&mut self, handle: Handle<Menu>) {
+        let mut opened = self.opened_menu_handle;
+        while !opened.is_none() {
+            if opened == handle { self.close_opened_menu(); break; }
+            opened = self.get_menu(opened).map_or(Handle::None, |menu| menu.get_parent_handle());
+        }
+    }
+    pub(crate) fn remove_menu(&mut self, handle: Handle<Menu>) -> bool {
+        self.close_menu_tree(handle);
+        let Some(menu) = self.get_menu(handle) else { return false; };
+        menu.clear();
+        self.get_menus().remove(handle)
+    }
     pub(crate) fn show_menu(
         &mut self,
         handle: Handle<Menu>,

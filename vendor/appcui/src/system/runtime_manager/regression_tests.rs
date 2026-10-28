@@ -45,3 +45,21 @@ fn hovering_parent_categories_switches_open_submenus() {
     assert!(runtime.opened_menu_handle == first, "hovering back to System must restore its submenu");
     app.run();
 }
+
+#[test]
+fn removing_window_menu_releases_handles_and_closes_its_popup() {
+    let app = App::debug(100,30,"Paint.Enable(false)").app_bar().build().unwrap();
+    let runtime = RuntimeManager::get();
+    let menu = runtime.add_menu(Menu::new());
+    let button = runtime.appbar.as_mut().unwrap().add(appbar::MenuButton::with_handle("Window", menu, 1, appbar::Side::Left));
+    runtime.show_menu(menu, Handle::None, 5, 2, 0, None);
+    assert!(runtime.opened_menu_handle == menu);
+    let mut owner = ControlBase::new(layout!("d:f"), false);
+    assert!(owner.unregister_menu(menu));
+    assert!(runtime.opened_menu_handle.is_none());
+    assert!(runtime.get_menu(menu).is_none());
+    assert!(runtime.appbar.as_mut().unwrap().remove(button));
+    assert!(runtime.appbar.as_ref().unwrap().get(button).is_none());
+    assert!(!owner.unregister_menu(menu));
+    app.run();
+}

@@ -115,8 +115,9 @@ modules and expose shared types and entry points through crate-scoped re-exports
    matching files, excludes the exact settings file, drops duplicate shortcut names,
    and sorts by taskbar position.
 3. `MyDesktop::new` merges external starters without replacing user shortcuts.
-   `on_start` creates Desktop/Application/Tilling menus and one external app menu per
-   shortcut, then starts a 100 ms desktop timer for clock/panel updates and pending system
+   `on_start` creates Desktop/Application/Tilling menus and registers external
+   shortcut command menus. Visible open windows receive taskbar buttons in opening
+   order; hidden windows are listed under Application > Background windows, then starts a 100 ms desktop timer for clock/panel updates and pending system
    actions. Linux readings refresh in the background. Apps start on menu commands; native IDs and immutable external indices dispatch
    independently of categories or labels. The application requests 255 AppCUI timer
    slots for native windows and independently opened documents.
@@ -178,7 +179,9 @@ These describe the current implementation, not promises to preserve defects:
   Imports and trait implementations that look unused can participate in generated
   code; inspect macro usage before removing them.
 - Immutable shortcut indices connect external menu vectors and `app_windows`;
-  categorized launch commands map menu handles to application IDs. Native windows
+  categorized launch commands map menu handles to application IDs. Taskbar entries
+  have typed window targets and separate popup/selector handles, and are removed
+  along with their owned menus on closure. Native windows
   use typed handles; editor documents and extra commands have separate terminal
   handles. Closed windows can
   leave stale handles; callers check whether a handle still resolves. Keep these
@@ -218,3 +221,9 @@ palette updates, Terminal Lock visibility snapshots, and desktop shutdown.
 
 Native timer callbacks defer result polling while hidden, including during Terminal
 Lock. Failed terminal launch dialogs are also deferred until the window is visible.
+
+The taskbar projects tracked terminal, native, document, and Help windows. It
+shows visible instances and groups them under Apps when necessary. Hiding a
+window retains it for Application > Background windows; closing unregisters its
+popup and removes its app-bar item. Overflow lists paginate beyond100 entries
+to stay within AppCUI keyboard navigation bounds.
