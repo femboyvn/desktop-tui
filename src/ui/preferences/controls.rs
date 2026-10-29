@@ -59,12 +59,16 @@ impl OnKeyPressed for PreferencesContent {
                 tab.set_current_tab(3);
                 tab.request_focus();
             },
+            key!("Alt+5") => |tab| {
+                tab.set_current_tab(4);
+                tab.request_focus();
+            },
             key!("Ctrl+Tab") => |tab| {
-                tab.set_current_tab((tab.current_tab().unwrap_or(0) + 1) % 4);
+                tab.set_current_tab((tab.current_tab().unwrap_or(0) + 1) % 5);
                 tab.request_focus();
             },
             key!("Ctrl+Shift+Tab") => |tab| {
-                tab.set_current_tab((tab.current_tab().unwrap_or(0) + 3) % 4);
+                tab.set_current_tab((tab.current_tab().unwrap_or(0) + 4) % 5);
                 tab.request_focus();
             },
             _ => return EventProcessStatus::Ignored,

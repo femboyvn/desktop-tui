@@ -89,6 +89,7 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/ui/terminal/keyboard.rs](src/ui/terminal/keyboard.rs) | `CustomKeyboardControl` and its `OnKeyPressed` implementation; `to_escape_sequence_vec` and helpers translate AppCUI keys into terminal bytes. |
 | [src/runtime/terminal.rs](src/runtime/terminal.rs) | Stateful `TerminalParser`; text/control characters, supported ANSI commands, cursor state, styles, and color conversion into an AppCUI `Surface`. |
 | [src/config/preferences.rs](src/config/preferences.rs), [src/config/preferences/](src/config/preferences/) | Settings models/defaults, atomic storage, palette presets, palette drafts, and password-editing drafts. |
+| [src/config/preferences/ascii_background.rs](src/config/preferences/ascii_background.rs), [src/runtime/ascii_background.rs](src/runtime/ascii_background.rs) | Validated ASCII background text and bounded regular-file loading for Preference > Background. |
 | [src/ui/desktop/](src/ui/desktop/) | Desktop status panel, offline Help, and system-action confirmation alongside the main view. |
 | [src/ui/preferences/](src/ui/preferences/) | Preferences dialog and its custom controls. |
 | [src/ui/locking/](src/ui/locking/) | Secret input, temporary-password setup, and the lock screen with private retry/input boundaries. |
@@ -98,6 +99,7 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/test_support.rs](src/test_support.rs) | Test-only temporary directories and the shared UI lock. |
 | [src/utils.rs](src/utils.rs) | Unregistered helper file, outside the module tree. |
 | [shortcuts/](shortcuts/) | Example TOML launchers; executable names are external tools, not bundled binaries. |
+| [backgrounds/](backgrounds/) | Plain ASCII artwork examples for desktop backgrounds. |
 | [Cargo.toml](Cargo.toml), [Cargo.lock](Cargo.lock) | Package/dependency declarations and tracked dependency resolution. |
 | [vendor/](vendor/README.md) | Local AppCUI 0.4.6 dependency with a CrossTerm style/color rendering fix and ANSI output regression tests. |
 | [.cargo/config.toml](.cargo/config.toml) | Development/release profiles; release uses `opt-level = "z"`, LTO, one codegen unit, and symbol stripping. |
@@ -209,6 +211,16 @@ These describe the current implementation, not promises to preserve defects:
   is not a rule to copy into new fallible code. See the coding conventions.
 
 ## Native application workers
+
+Preference > Background loads ASCII text through a latest-request worker, then
+keeps the validated copy in the dialog draft until Save. Its read-only preview
+uses AppCUI TextArea. Save is disabled during loading; Clear and Cancel discard
+pending results without waiting for I/O. Regular-file reads and normalized art
+are capped at 16 KiB; CRLF becomes LF and tabs expand to four-column stops.
+The optional `ascii_background` preferences string defaults to empty for older
+settings. Desktop `OnPaint` centers the saved text using the palette's desktop
+text/background colors and clips it to the surface. Rendering does no I/O;
+source files are not needed after saving. Color presets preserve the draft art.
 
 Each Image Viewer and File Browser window owns a latest-request worker with one active job, one pending
 request, and one result. New requests replace pending work and invalidate older

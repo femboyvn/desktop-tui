@@ -29,6 +29,7 @@ Features:
 - [x] Built-in Snake, 2048, and Minesweeper
 - [x] Clock
 - [x] Offline Help and saved desktop/terminal palettes
+- [x] Saved ASCII desktop backgrounds from text files
 - [x] Linux screen lock, shutdown, and restart controls
 
 ![demo](./demo.gif)
@@ -281,7 +282,7 @@ The MIT license for this project can be seen [here](./LICENSE)
 
 Linux is the supported target. Open **Desktop** for **Help**, **Preference**, **Terminal Lock**, **Screen Lock**, **Shutdown**, **Restart**, and **Exit**. Help opens a resizable offline guide with categories on the left and scrollable details on the right; its contents are also available in [HELP.md](HELP.md).
 
-**Preference** has **Desktop**, **Terminal**, **Security**, and **Panel** tabs. Choose from **Femboy**, **Transgender**, **Asexual**, **Nonbinary**, and **Monochrome** presets, then click **Apply** to update the color draft across the Desktop and Terminal tabs. Browsing presets keeps existing edits until Apply is clicked. Monochrome uses neutral grays. Custom identifies individually edited palettes. Select a color role, enter a `#RRGGBB` color, and inspect the swatch. Desktop roles include the background, surfaces, text, muted text, borders, accents, and selection. Terminal roles include default foreground/background and all 16 normal and bright ANSI colors.
+**Preference** has **Desktop**, **Terminal**, **Security**, **Panel**, and **Background** tabs. Choose from **Femboy**, **Transgender**, **Asexual**, **Nonbinary**, and **Monochrome** presets, then click **Apply** to update the color draft across the Desktop and Terminal tabs. Browsing presets keeps existing edits until Apply is clicked. Monochrome uses neutral grays. Custom identifies individually edited palettes. Select a color role, enter a `#RRGGBB` color, and inspect the swatch. Desktop roles include the background, surfaces, text, muted text, borders, accents, and selection. Terminal roles include default foreground/background and all 16 normal and bright ANSI colors.
 
 The default Femboy palette uses pale pink `#F6D9EE`, white `#FFF7FC`, plum `#3F2A4A`, pink accents `#E8A4C9`, and lavender selection `#C8B5EA`. **Reset to Femboy** changes the color draft and preserves password settings. **Save** validates and persists all edits, then immediately recolors the desktop and running terminal windows, including hidden windows. **Cancel** or Escape discards edits. Failed saves leave the active palette and saved password unchanged.
 
@@ -291,7 +292,26 @@ The **Security** tab lets you set, change, or remove a persistent Terminal Lock 
 
 Only a salted **Argon2id** password verifier is saved; plaintext passwords are never written to disk. The verifier is stored with the palette in `preferences.toml`, using owner-only permissions: `0600` on the file and `0700` on the application configuration folder. Saves replace the file atomically, so password and color edits succeed together. Symlinked settings and unsafe password-storage permissions are rejected. If permissions were changed externally, restore them with `chmod 700 ~/.config/desktop-tui` and `chmod 600 ~/.config/desktop-tui/preferences.toml` (adjust for `$XDG_CONFIG_HOME`). Passwords cannot be recovered. Anyone with access to your account or permission to terminate Desktop-TUI can bypass its TUI lock; **Screen Lock** locks the graphical Linux session.
 
-**Preference > Panel** configures the top-right status display. Enable or hide the panel, clock, date, Wi-Fi/network status, battery, CPU usage, RAM usage, disk usage, and network download/upload rates. Choose a 12- or 24-hour clock, seconds, a short/ISO/day-month date, and optional network interface names. **Save** applies these options immediately and persists them with the palette and password; Cancel or Escape discards them. Color presets and Reset to Femboy preserve panel settings. Ctrl+Tab cycles all four tabs; Alt+4 opens Panel and Alt+G focuses its date format.
+**Preference > Background** sets an ASCII desktop image. Press **Alt+5**, click
+**Browse...** (Alt+B), and choose a plain `.txt` or `.asc` file, such as the
+included [cat example](backgrounds/cat.asc). Review the scrollable preview, then
+click **Save**. Loading runs in the background; Save becomes available when it
+finishes. Failed imports keep the previous art. Save stores a copy of the text
+in `preferences.toml`, so the source file can be moved or deleted afterward.
+**Clear art** (Alt+E), then Save, restores the solid background. Cancel or Escape
+discards background edits along with the other tabs. Color presets and Reset to
+Femboy preserve the selected art.
+
+Art is centered behind windows, uses the desktop Text and Background colors,
+and is clipped without wrapping when the terminal is smaller than the image.
+Resizing centers it again. Spaces and blank lines are preserved; LF and CRLF
+line endings are supported, and tabs expand to four-column stops. Input and
+expanded text are limited to 16 KiB. Use printable ASCII characters; ANSI color
+codes, Unicode art, and raster images are unsupported for this background.
+Empty files also restore the solid background. Existing settings without
+`ascii_background` retain the solid background.
+
+**Preference > Panel** configures the top-right status display. Enable or hide the panel, clock, date, Wi-Fi/network status, battery, CPU usage, RAM usage, disk usage, and network download/upload rates. Choose a 12- or 24-hour clock, seconds, a short/ISO/day-month date, and optional network interface names. **Save** applies these options immediately and persists them with the palette and password; Cancel or Escape discards them. Color presets and Reset to Femboy preserve panel settings. Ctrl+Tab cycles all five tabs; Alt+4 opens Panel and Alt+G focuses its date format.
 
 The clock uses the computer's local time. Device and resource readings refresh in the background every three seconds from Linux `/sys` and `/proc`, without extra commands or privileges. Wi-Fi shows an approximate signal percentage when the driver provides it, or `WiFi up`; wired and other routed connections show `Net up`. `Net offline` means no usable local link was detected, and `Net N/A` means status could not be read. Link status does not verify Internet access. The battery is omitted when unavailable, and `+` indicates charging; multiple system batteries use their mean percentage. Device/peripheral batteries are excluded.
 

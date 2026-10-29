@@ -1,4 +1,5 @@
 mod locking;
+pub(crate) mod ascii_background;
 mod terminal;
 
 pub(crate) use locking::{LockCredential, MAX_PASSWORD_BYTES};

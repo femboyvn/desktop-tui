@@ -84,6 +84,7 @@ impl PalettePreset {
             selection,
         ] = desktop.map(rgb);
         Preferences {
+            ascii_background: super::AsciiBackground::default(),
             terminal_lock: None,
             panel: crate::config::preferences::PanelPreferences::default(),
             desktop: DesktopPalette {

@@ -590,6 +590,16 @@ impl MyDesktop {
 impl OnPaint for MyDesktop {
     fn on_paint(&self, surface: &mut Surface, theme: &Theme) {
         surface.clear(theme.desktop.character);
+        let text = self.preferences.ascii_background.text();
+        let width = text.lines().map(str::len).max().unwrap_or(0);
+        let height = text.lines().count();
+        let size = surface.size();
+        let x = (i64::from(size.width) - width as i64).div_euclid(2) as i32;
+        let y = (i64::from(size.height) - height as i64).div_euclid(2) as i32;
+        let color = CharAttribute::with_color(theme.desktop.character.foreground, theme.desktop.character.background);
+        for (row, line) in text.lines().enumerate() {
+            surface.write_ascii(x, y + row as i32, line.as_bytes(), color, false);
+        }
     }
 }
 impl OnResize for MyDesktop {
@@ -975,6 +985,37 @@ mod tests {
     use crate::config::preferences::Rgb;
     use crate::test_support::{TestDir, UI_LOCK};
     use virtual_terminal::{Input, Output};
+    #[test]
+    fn ascii_background_is_centered_clipped_and_repainted_with_the_palette() {
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let preferences = Preferences {
+            ascii_background: "ABCDE\n F G \nHIJKL".to_owned().try_into().unwrap(),
+            ..Preferences::default()
+        };
+        let mut desktop = MyDesktop::new(vec![], preferences, dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
+        let mut theme = build_theme(&desktop.preferences.desktop);
+        theme.desktop.character.foreground = Color::RGB(1, 2, 3);
+        let row = |surface: &Surface, y| -> String {
+            (0..surface.size().width).map(|x| surface.char(x as i32, y).unwrap().code).collect()
+        };
+        let mut surface = Surface::new(9, 7);
+        OnPaint::on_paint(&desktop, &mut surface, &theme);
+        assert_eq!(row(&surface, 2), "  ABCDE  ");
+        assert_eq!(row(&surface, 3), "   F G   ");
+        assert_eq!(row(&surface, 4), "  HIJKL  ");
+        let cell = surface.char(2, 2).unwrap();
+        assert_eq!(cell.foreground, Color::RGB(1, 2, 3));
+        assert_eq!(cell.background, theme.desktop.character.background);
+        let mut small = Surface::new(3, 1);
+        OnPaint::on_paint(&desktop, &mut small, &theme);
+        assert_eq!(row(&small, 0), "F G");
+        OnPaint::on_paint(&desktop, &mut Surface::new(0, 0), &theme);
+        desktop.preferences.ascii_background = Default::default();
+        OnPaint::on_paint(&desktop, &mut surface, &theme);
+        assert_eq!(row(&surface, 2), "         ");
+    }
+
     #[test]
     fn audio_files_open_in_the_native_music_player_instead_of_the_editor() {
         let _ui_lock = UI_LOCK.lock().unwrap();

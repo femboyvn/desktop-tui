@@ -184,7 +184,7 @@ README for a complete example.
 
 ## Preferences
 
-Desktop > Preference opens Desktop, Terminal, Security, and Panel tabs.
+Desktop > Preference opens Desktop, Terminal, Security, Panel, and Background tabs.
 Choose a preset and click Apply to update the color draft across
 the Desktop and Terminal tabs. Presets
 include Femboy, Transgender, Asexual, Nonbinary, and Monochrome.
@@ -214,6 +214,27 @@ colors 16–255 stay fixed. A shortcut's explicit terminal
 background overrides the default, even after terminal color
 resets.
 
+## ASCII background
+
+Desktop > Preference > Background (Alt+5) sets an ASCII desktop image.
+Click Browse... (Alt+B) and choose a plain .txt or .asc file. The
+included backgrounds/cat.asc is a small example. Review the scrollable
+preview, then Save. Loading runs in the background; Save is unavailable
+until it finishes. Failed imports keep the previous art.
+
+Save keeps a copy in preferences.toml and applies it immediately; the
+source file can be moved or deleted afterward. Clear art (Alt+E), then
+Save, restores the solid background. An empty file also clears the art.
+Cancel or Escape discards edits. Color presets and Reset to Femboy
+preserve the selected background.
+
+Art is centered behind windows with the desktop Text and Background
+colors. Resizing centers it again; small terminals clip without wrapping.
+Spaces and blank lines are preserved. LF and CRLF line endings work;
+tabs expand to four-column stops. Both input and expanded text must fit
+within 16 KiB. Use printable ASCII, without ANSI escapes or Unicode art.
+Raster images are supported by Image Viewer, not as ASCII backgrounds.
+
 ## Status panel
 
 Preference > Panel controls the top-right clock, date, Wi-Fi/network,
@@ -222,7 +243,7 @@ Enable or hide each one, choose 12/24-hour
 time and seconds, a short/ISO/day-month date, and optional interface
 names. Save applies and persists the settings immediately. Cancel
 or Escape discards changes. Color presets and Reset to Femboy
-preserve panel options. Ctrl+Tab cycles all four Preference tabs;
+preserve panel options. Ctrl+Tab cycles all five Preference tabs;
 Alt+4 opens Panel, and Alt+G selects the date format.
 
 The clock uses local time. Device and resource readings refresh in
@@ -260,7 +281,7 @@ In Preference > Security, choose Set / change saved password,
 enter and confirm the new password, then Save. To change or remove
 an existing password, enter the current password. Keep current
 setting preserves it during color edits. Cancel or Escape discards
-all edits. Ctrl+Tab cycles all four tabs; Alt+U opens Security.
+all edits. Ctrl+Tab cycles all five tabs; Alt+U opens Security.
 Alt+L selects the password action. Alt+O, Alt+N, and Alt+F focus
 current, new, and confirmation fields. Ctrl+U clears a field.
 

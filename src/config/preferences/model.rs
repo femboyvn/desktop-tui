@@ -52,6 +52,8 @@ pub struct TerminalPalette {
 pub struct Preferences {
     pub desktop: DesktopPalette,
     pub terminal: TerminalPalette,
+    #[serde(default, skip_serializing_if = "super::AsciiBackground::is_empty")]
+    pub ascii_background: super::AsciiBackground,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terminal_lock: Option<LockCredential>,
     #[serde(default)]
@@ -60,6 +62,7 @@ pub struct Preferences {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
+            ascii_background: super::AsciiBackground::default(),
             terminal_lock: None,
             panel: PanelPreferences::default(),
             desktop: DesktopPalette {

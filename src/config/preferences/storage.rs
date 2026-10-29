@@ -206,6 +206,41 @@ mod tests {
     use crate::test_support::TestDir;
 
     #[test]
+    fn ascii_background_is_loaded_and_saved_with_existing_preferences() {
+        let dir = TestDir::new();
+        let path = dir.path().join("preferences.toml");
+        let original = toml::to_string_pretty(&Preferences::default()).unwrap();
+        std::fs::write(&path, format!("ascii_background = ''' /\\_/\\\n( o.o )\n > ^ <'''\n{original}")).unwrap();
+        let (preferences, warning) = Preferences::load(&path);
+        assert!(warning.is_none(), "ASCII art should load: {warning:?}");
+        preferences.save(&path, None).unwrap();
+        let contents: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(contents["ascii_background"].as_str(), Some(" /\\_/\\\n( o.o )\n > ^ <"));
+        assert_eq!(Preferences::load(&path), (preferences, None));
+    }
+
+    #[test]
+    fn ascii_background_defaults_for_old_settings_and_rejects_invalid_saved_art() {
+        let dir = TestDir::new();
+        let path = dir.path().join("preferences.toml");
+        let original = toml::to_string_pretty(&Preferences::default()).unwrap();
+        std::fs::write(&path, &original).unwrap();
+        let (preferences, warning) = Preferences::load(&path);
+        assert!(warning.is_none());
+        assert!(preferences.ascii_background.is_empty());
+        let invalid = format!("ascii_background = 'é'\n{original}");
+        std::fs::write(&path, &invalid).unwrap();
+        assert!(Preferences::load(&path).1.is_some());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), invalid);
+        let maximum = Preferences {
+            ascii_background: "\\".repeat(16384).try_into().unwrap(),
+            ..Preferences::default()
+        };
+        maximum.save(&path, None).unwrap();
+        assert_eq!(Preferences::load(&path), (maximum, None));
+    }
+
+    #[test]
     fn completed_save_lock_is_released_even_if_a_fork_inherited_the_descriptor() {
         let dir = TestDir::new();
         let lock = SettingsLock::acquire(std::fs::File::open(dir.path()).unwrap()).unwrap();

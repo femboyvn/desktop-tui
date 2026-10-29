@@ -1,13 +1,15 @@
 use super::controls::{ColorSwatch, PreferencesContent};
 use crate::config::preferences::{
-    DESKTOP_ROLES, DateFormat, PaletteDraft, PalettePreset, PanelPreferences, PasswordChange,
+    AsciiBackground, DESKTOP_ROLES, DateFormat, PaletteDraft, PalettePreset, PanelPreferences, PasswordChange,
     Preferences, Rgb, SecurityDraft, TERMINAL_ROLES,
 };
 use crate::ui::locking::SecretInput;
+use crate::runtime::{ascii_background, latest::LatestWorker};
 use appcui::prelude::*;
 use std::path::PathBuf;
+use std::time::Duration;
 
-#[ModalWindow(response: Preferences, events: ButtonEvents+ComboBoxEvents+TextFieldEvents+WindowEvents)]
+#[ModalWindow(response: Preferences, events: ButtonEvents+ComboBoxEvents+TextFieldEvents+WindowEvents+TimerEvents)]
 pub struct PreferencesDialog {
     draft: PaletteDraft,
     path: PathBuf,
@@ -26,6 +28,12 @@ pub struct PreferencesDialog {
     passwords: [Handle<SecretInput>; 3],
     panel_checks: [Handle<CheckBox>; 12],
     date_format: Handle<ComboBox>,
+    background: AsciiBackground,
+    background_preview: Handle<TextArea>,
+    background_status: Handle<Label>,
+    background_browse: Handle<Button>,
+    background_clear: Handle<Button>,
+    background_worker: Option<LatestWorker<PathBuf, Result<AsciiBackground, String>>>,
 }
 impl PreferencesDialog {
     pub fn new(preferences: &Preferences, path: PathBuf) -> Self {
@@ -53,6 +61,12 @@ impl PreferencesDialog {
             passwords: [Handle::None; 3],
             panel_checks: [Handle::None; 12],
             date_format: Handle::None,
+            background: preferences.ascii_background.clone(),
+            background_preview: Handle::None,
+            background_status: Handle::None,
+            background_browse: Handle::None,
+            background_clear: Handle::None,
+            background_worker: None,
         };
         let mut content = PreferencesContent::new();
         content.add(Label::new("Preset", layout!("l:1,t:0,w:7,h:1")));
@@ -73,6 +87,7 @@ impl PreferencesDialog {
         tabs.add_tab("&Terminal");
         tabs.add_tab("Sec&urity");
         tabs.add_tab("Panel");
+        tabs.add_tab("Background");
         for group in 0..2 {
             tabs.add(group, Label::new("Color role", layout!("l:1,t:1,w:42,h:1")));
             let mut selector = ComboBox::new(layout!("l:1,t:2,r:1,h:1"), combobox::Flags::None);
@@ -222,6 +237,14 @@ impl PreferencesDialog {
                 layout!("l:1,t:10,r:1,h:1"),
             ),
         );
+        tabs.add(4, Label::new("Choose a plain ASCII .txt or .asc file (up to 16 KiB).", layout!("l:1,t:0,r:1,h:1")));
+        dialog.background_browse = tabs.add(4, button!("'&Browse...',l:1,t:1,w:14,type:Flat"));
+        dialog.background_clear = tabs.add(4, button!("'Cl&ear art',l:17,t:1,w:14,type:Flat"));
+        dialog.background_status = tabs.add(4, Label::new("", layout!("l:1,t:2,r:1,h:1")));
+        dialog.background_preview = tabs.add(4, TextArea::new(
+            dialog.background.text(), layout!("l:1,t:3,r:1,b:2"), textarea::Flags::ReadOnly | textarea::Flags::ScrollBars,
+        ));
+        tabs.add(4, Label::new("Centered behind windows. Save keeps a copy. Alt+5: Background.", layout!("l:1,b:0,r:1,h:1")));
         let tabs = content.add(tabs);
         content.set_tabs(tabs);
         content.add(Label::new(
@@ -233,6 +256,7 @@ impl PreferencesDialog {
         dialog.save = content.add(button!("&Save,r:1,b:0,w:12"));
         dialog.add(content);
         dialog.sync_preset_choice();
+        dialog.refresh_background();
         dialog.base.request_focus_for_control(dialog.selectors[0]);
         dialog
     }
@@ -253,6 +277,7 @@ impl PreferencesDialog {
         }
     }
     fn save_draft(&mut self) {
+        if self.background_worker.is_some() { return; }
         let palette = self.draft.validate();
         match palette {
             Err(error) => {
@@ -261,6 +286,7 @@ impl PreferencesDialog {
             }
             Ok(mut preferences) => {
                 preferences.panel = self.panel_draft();
+                preferences.ascii_background = self.background.clone();
                 let action = self.password_change();
                 let result = match &mut self.security {
                     None => Err(anyhow::anyhow!(
@@ -286,11 +312,51 @@ impl PreferencesDialog {
                     Ok(preferences) => self.exit_with(preferences),
                     Err(error) => dialogs::error(
                         "Preferences were not saved",
-                        &format!("{error:#}\nThe active palette and password are unchanged."),
+                        &format!("{error:#}\nYour active preferences are unchanged."),
                     ),
                 }
             }
         }
+    }
+    fn refresh_background(&mut self) {
+        let preview = self.background_preview;
+        // TextArea requires a nonempty line buffer. The preview's final newline is not saved.
+        let mut text = self.background.text().to_owned();
+        if !text.ends_with('\n') { text.push('\n'); }
+        if let Some(control) = self.control_mut(preview) {
+            control.set_text(&text);
+            // AppCUI set_text() leaves scrollbar ranges stale until a resize notification.
+            let size = control.size();
+            if size.width > 0 && size.height > 0 { OnResize::on_resize(control, size, size); }
+        }
+        let text = if self.background.is_empty() {
+            "Solid color (no ASCII background).".to_owned()
+        } else {
+            format!("{} columns x {} lines. Save to apply.", self.background.text().lines().map(str::len).max().unwrap_or(0), self.background.text().lines().count())
+        };
+        self.set_background_status(&text);
+    }
+    fn set_background_status(&mut self, text: &str) {
+        let handle = self.background_status;
+        if let Some(label) = self.control_mut(handle) { label.set_caption(text); }
+    }
+    fn stop_background_load(&mut self) {
+        if self.background_worker.take().is_some() {
+            // stop() releases AppCUI's timer slot permanently; reuse it for later imports.
+            if let Some(timer) = self.timer() { timer.pause(); }
+        }
+        let save = self.save;
+        if let Some(button) = self.control_mut(save) { button.set_enabled(true); }
+    }
+    fn load_background(&mut self, path: PathBuf) -> anyhow::Result<()> {
+        let mut worker = LatestWorker::new(|path: PathBuf| ascii_background::load(&path).map_err(|error| format!("{error:#}")))?;
+        self.timer().ok_or_else(|| anyhow::anyhow!("Background loading timer unavailable."))?.start(Duration::from_millis(50));
+        worker.submit(path);
+        self.background_worker = Some(worker);
+        let save = self.save;
+        if let Some(button) = self.control_mut(save) { button.set_enabled(false); }
+        self.set_background_status("Loading ASCII background...");
+        Ok(())
     }
     fn panel_draft(&self) -> PanelPreferences {
         let checked = |index: usize| self.control(self.panel_checks[index]).unwrap().is_checked();
@@ -375,8 +441,20 @@ impl PreferencesDialog {
 impl ButtonEvents for PreferencesDialog {
     fn on_pressed(&mut self, handle: Handle<Button>) -> EventProcessStatus {
         if handle == self.cancel {
+            self.stop_background_load();
             self.clear_passwords();
             self.exit();
+        } else if handle == self.background_browse {
+            let home = directories::UserDirs::new().map(|dirs| dirs.home_dir().to_owned()).unwrap_or_else(|| PathBuf::from("/"));
+            if let Some(path) = dialogs::open("Open ASCII background", "", dialogs::Location::Path(&home), Some("ASCII art = [txt, asc]"),
+                dialogs::OpenFileDialogFlags::CheckIfFileExists | dialogs::OpenFileDialogFlags::PreserveBackground)
+                && let Err(error) = self.load_background(path) {
+                    self.set_background_status(&format!("Cannot load background: {error:#}"));
+                }
+        } else if handle == self.background_clear {
+            self.stop_background_load();
+            self.background = AsciiBackground::default();
+            self.refresh_background();
         } else if handle == self.reset {
             self.draft = PaletteDraft::new(&Preferences::default());
             self.refresh(0);
@@ -437,8 +515,20 @@ impl WindowEvents for PreferencesDialog {
         self.save_draft();
     }
     fn on_cancel(&mut self) -> ActionRequest {
+        self.stop_background_load();
         self.clear_passwords();
         ActionRequest::Allow
+    }
+}
+impl TimerEvents for PreferencesDialog {
+    fn on_update(&mut self, _: u64) -> EventProcessStatus {
+        let Some(result) = self.background_worker.as_mut().and_then(LatestWorker::poll) else { return EventProcessStatus::Ignored; };
+        self.stop_background_load();
+        match result {
+            Ok(background) => { self.background = background; self.refresh_background(); }
+            Err(error) => self.set_background_status(&format!("Cannot load background: {error}")),
+        }
+        EventProcessStatus::Processed
     }
 }
 impl TextFieldEvents for PreferencesDialog {
@@ -467,6 +557,172 @@ mod tests {
     fn debug(script: &str) -> appcui::system::Builder {
         // Let queued control events run before the debug backend ends the application.
         App::debug(80, 24, &format!("{script}\nPaint('end')"))
+    }
+
+    fn finish_background_load(dialog: &mut PreferencesDialog) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while dialog.background_worker.is_some() {
+            TimerEvents::on_update(dialog, 0);
+            assert!(std::time::Instant::now() < deadline, "background load did not finish");
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
+    fn ascii_background_preview_scrollbars_refresh_after_import_and_clear() {
+        let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let mut app = debug("Key.Pressed(Enter)\nKey.Pressed(Escape)").build().unwrap();
+        let mut dialog = PreferencesDialog::new(&Preferences::default(), dir.path().join("preferences.toml"));
+        // Lay out a real preview before replacing its content, as happens during an import.
+        let mut window = Window::new("Preview", layout!("a:c,w:14,h:8"), window::Flags::None);
+        dialog.background_preview = window.add(TextArea::new("\n", layout!("d:f"), textarea::Flags::ReadOnly | textarea::Flags::ScrollBars));
+        let handle = dialog.background_preview;
+        app.add_window(window);
+        dialogs::message("Preview layout", "Continue");
+        assert_eq!(dialog.control(handle).unwrap().size(), Size::new(12, 6));
+        dialog.background = "abcdefghijklmnopqrst\n".repeat(20).try_into().unwrap();
+        dialog.refresh_background();
+        let preview = dialog.control_mut(handle).unwrap();
+        let down = MouseEvent::Pressed(MouseEventData { x: 12, y: 5, button: MouseButton::Left, modifier: KeyModifier::None });
+        let right = MouseEvent::Pressed(MouseEventData { x: 10, y: 6, button: MouseButton::Left, modifier: KeyModifier::None });
+        OnMouseEvent::on_mouse_event(preview, &down);
+        assert_eq!(preview.cursor_position().line(), Some(1), "imported rows must be scrollable without a resize");
+        OnMouseEvent::on_mouse_event(preview, &right);
+        assert_eq!(preview.cursor_position().collumn(), Some(1), "imported columns must be scrollable without a resize");
+        let clear = dialog.background_clear;
+        ButtonEvents::on_pressed(&mut dialog, clear);
+        let preview = dialog.control_mut(handle).unwrap();
+        for _ in 0..5 { OnMouseEvent::on_mouse_event(preview, &down); }
+        OnKeyPressed::on_key_pressed(preview, key!("Right").into(), '\0');
+        assert!(preview.cursor_position().line().unwrap() <= 1, "Clear must leave only the blank preview lines");
+        app.run();
+    }
+
+    #[test]
+    fn ascii_background_file_picker_previews_and_saves_a_copy() {
+        let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let source = dir.path().join("cat art 文.asc");
+        std::fs::write(&source, " /\\_/\\\r\n( o.o )").unwrap();
+        let path = dir.path().join("preferences.toml");
+        let active = Preferences::default();
+        active.save(&path, None).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        // The shared picker interprets its Name field relative to its current folder.
+        let home = directories::UserDirs::new().map(|dirs| dirs.home_dir().to_owned()).unwrap_or_else(|| PathBuf::from("/"));
+        let relative = format!("{}{}", "../".repeat(home.components().count().saturating_sub(1)), source.strip_prefix("/").unwrap().display());
+        let pick = format!("Key.TypeText('{relative}')\nKey.Pressed(Enter)");
+        let app = debug(&format!("{pick}\n{pick}\nKey.Pressed(Alt+S)")).build().unwrap();
+        let mut dialog = PreferencesDialog::new(&active, path.clone());
+        let clear = dialog.background_clear;
+        ButtonEvents::on_pressed(&mut dialog, clear);
+        let browse = dialog.background_browse;
+        ButtonEvents::on_pressed(&mut dialog, browse);
+        assert!(dialog.background_worker.is_some(), "Browse must submit the selected file");
+        assert!(!dialog.control(dialog.save).unwrap().is_enabled());
+        WindowEvents::on_accept(&mut dialog);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "Enter must not save while loading");
+        finish_background_load(&mut dialog);
+        assert_eq!(dialog.control(dialog.background_preview).unwrap().text(), " /\\_/\\\n( o.o )\n");
+        assert!(dialog.control(dialog.save).unwrap().is_enabled());
+        std::fs::write(&source, "replacement art").unwrap();
+        ButtonEvents::on_pressed(&mut dialog, browse);
+        assert!(dialog.background_worker.is_some(), "Browse must work again after a completed import");
+        finish_background_load(&mut dialog);
+        std::fs::remove_file(&source).unwrap();
+        let saved = dialog.show().unwrap();
+        app.run();
+        assert_eq!(saved.ascii_background.text(), "replacement art");
+        assert_eq!(Preferences::load(&path), (saved, None));
+    }
+
+    #[test]
+    fn ascii_background_clear_save_cancel_and_tab_navigation_work_at_80x24() {
+        let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let path = dir.path().join("preferences.toml");
+        let active = Preferences {
+            ascii_background: "keep me".to_owned().try_into().unwrap(),
+            ..Preferences::default()
+        };
+        active.save(&path, None).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        for script in ["Key.Pressed(Alt+5)\nKey.Pressed(Alt+E)\nKey.Pressed(Escape)", "Key.Pressed(Alt+5)\nKey.Pressed(Alt+B)\nKey.Pressed(Escape)\nKey.Pressed(Escape)"] {
+            let app = debug(script).build().unwrap();
+            assert!(PreferencesDialog::new(&active, path.clone()).show().is_none());
+            app.run();
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+        // Forward cycling from Panel must reach Background; reverse from Desktop must wrap there too.
+        for navigation in ["Key.Pressed(Alt+4)\nKey.Pressed(Ctrl+Tab)", "Key.Pressed(Alt+D)\nKey.Pressed(Ctrl+Shift+Tab)"] {
+            let app = debug(&format!("{navigation}\nKey.Pressed(Alt+E)\nKey.Pressed(Alt+S)")).build().unwrap();
+            let saved = PreferencesDialog::new(&active, path.clone()).show().unwrap();
+            app.run();
+            assert!(saved.ascii_background.is_empty(), "Background Clear must be reachable through tab navigation");
+            assert!(Preferences::load(&path).0.ascii_background.is_empty());
+        }
+    }
+
+    #[test]
+    fn ascii_background_failed_import_keeps_previous_art() {
+        let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let path = dir.path().join("preferences.toml");
+        let active = Preferences {
+            ascii_background: "keep me".to_owned().try_into().unwrap(),
+            ..Preferences::default()
+        };
+        let app = debug("Key.Pressed(Alt+S)").build().unwrap();
+        let mut dialog = PreferencesDialog::new(&active, path.clone());
+        dialog.load_background(dir.path().join("missing.asc")).unwrap();
+        finish_background_load(&mut dialog);
+        assert_eq!(dialog.control(dialog.background_preview).unwrap().text(), "keep me\n");
+        assert!(dialog.control(dialog.background_status).unwrap().caption().contains("Cannot load"));
+        let saved = dialog.show().unwrap();
+        app.run();
+        assert_eq!(saved.ascii_background, active.ascii_background);
+    }
+
+    #[test]
+    fn ascii_background_clear_and_cancel_discard_pending_imports() {
+        let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let path = dir.path().join("preferences.toml");
+        let source = dir.path().join("new.txt");
+        std::fs::write(&source, "new background").unwrap();
+        let app = debug("Key.Pressed(Escape)").build().unwrap();
+        let mut dialog = PreferencesDialog::new(&Preferences::default(), path.clone());
+        dialog.load_background(source.clone()).unwrap();
+        let clear = dialog.background_clear;
+        ButtonEvents::on_pressed(&mut dialog, clear);
+        assert!(dialog.background_worker.is_none());
+        TimerEvents::on_update(&mut dialog, 0);
+        assert!(dialog.background.is_empty());
+        assert_eq!(dialog.control(dialog.background_preview).unwrap().text(), "\n");
+        dialog.load_background(source).unwrap();
+        WindowEvents::on_cancel(&mut dialog);
+        assert!(dialog.background_worker.is_none());
+        assert!(dialog.show().is_none());
+        app.run();
+        assert!(!path.exists(), "cancelled imports must not save preferences");
+    }
+
+    #[test]
+    fn ascii_background_survives_color_presets_and_reset() {
+        let _ui_lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let path = dir.path().join("preferences.toml");
+        let active = Preferences {
+            ascii_background: " /\\_/\\\n( o.o )".to_owned().try_into().unwrap(),
+            ..Preferences::default()
+        };
+        active.save(&path, None).unwrap();
+        let app = debug("Key.Pressed(Alt+P)\nKey.Pressed(Home)\nKey.Pressed(Down,2)\nKey.Pressed(Alt+A)\nKey.Pressed(Alt+R)\nKey.Pressed(Alt+S)").build().unwrap();
+        let saved = PreferencesDialog::new(&active, path.clone()).show().unwrap();
+        app.run();
+        assert_eq!(saved.ascii_background, active.ascii_background);
+        assert_eq!(Preferences::load(&path), (saved, None));
     }
 
     #[test]
