@@ -26,6 +26,7 @@ Features:
 - [x] Can let the user select a file or a folder to use its path as a command argument
 - [x] Categorized Application menu with starter launchers
 - [x] Native File Browser, Image Viewer, and Music Player
+- [x] Built-in Snake, 2048, and Minesweeper
 - [x] Clock
 - [x] Offline Help and saved desktop/terminal palettes
 - [x] Linux screen lock, shutdown, and restart controls
@@ -140,7 +141,7 @@ visible windows when space is limited; selecting one opens its Focus/Hide/Close
 actions. The status panel remains responsive.
 External windows with additional commands expose them through **App commands...**.
 
-Six starters are available even with an empty shortcut directory:
+Nine starters are available even with an empty shortcut directory:
 
 | Category | Application | Executable |
 | --- | --- | --- |
@@ -150,6 +151,9 @@ Six starters are available even with an empty shortcut directory:
 | Utility | Image Viewer | Native |
 | Utility | Text editor | `nano` |
 | Utility | Music Player | Native (compiled audio engine) |
+| Games | Snake | Native |
+| Games | 2048 | Native |
+| Games | Minesweeper | Native |
 
 The System Performance starter uses bottom’s `default-light` theme for readable
 text on the default light terminal background. Override its shortcut to choose
@@ -158,8 +162,23 @@ a different theme or arguments.
 External tools must be installed separately and available on PATH. A shortcut
 named Terminal, System Performance, or Text editor replaces that external
 starter, including its command, options, and category. A missing category
-places a shortcut in User. File Browser, Image Viewer, and Music Player have their own native
-identities even when custom shortcuts use the same names. No games are bundled.
+places a shortcut in User. Native apps and games keep their own identities even
+when custom shortcuts use the same names.
+
+**Games** are bundled under **Application > Games** and need no extra installation.
+Each game opens its own movable, resizable window. Press **R** for a new round.
+
+| Game | Controls and rules |
+| --- | --- |
+| Snake | Arrows or WASD steer; Space starts, and Space/P pauses or resumes. Eat `*` to grow and score; walls and your body end the round. |
+| 2048 | Arrows or WASD slide tiles. Equal tiles merge once per move; reach 2048 to win. A move that changes nothing adds no tile. |
+| Minesweeper | Arrows or WASD select; Space/Enter reveals, F flags. Left-click reveals and right-click flags. Reveal all 71 safe cells on the 9×9 board with ten mines. The first reveal and its neighbors are safe. |
+
+Hiding or locking preserves every board. Snake also pauses when it loses focus;
+press Space/P to resume after returning. Windows too small for the board show a
+resize prompt and ignore game input. Score and session best for Snake/2048 stay
+in memory until the window closes. Close and relaunch for a fresh window.
+Game windows stay within the available desktop area when the terminal shrinks.
 
 **Music Player** is built into Desktop-TUI; it requires no separate player installation.
 Open **Application > Utility > Music Player**, then click **Open** or press **Ctrl+O**
@@ -209,7 +228,7 @@ and viewport preparation run in a bounded worker that reuses decoded pixels.
 
 Native windows and document windows participate in tiling, palette updates,
 Terminal Lock visibility restoration, and Desktop > Exit. Closing and reopening
-a native app creates a fresh worker; results from its previous instance are
+a worker-backed app creates a fresh worker; results from its previous instance are
 discarded. File mutations, image editing, and animation playback are outside
 this version.
 

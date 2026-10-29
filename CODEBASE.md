@@ -80,7 +80,8 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/runtime/latest.rs](src/runtime/latest.rs), [src/runtime/images.rs](src/runtime/images.rs), [src/runtime/files.rs](src/runtime/files.rs) | Bounded latest-request workers, image decode/geometry/render preparation, and directory enumeration. |
 | [src/runtime/processes.rs](src/runtime/processes.rs) | Managed PTY runner, independent PID observation, asynchronous process-tree cleanup, and shutdown task draining. |
 | [src/runtime/music.rs](src/runtime/music.rs) | Bounded audio input, retained encoded streams, coalesced playback worker/state snapshots, and device cleanup after the event loop. |
-| [src/ui/native/](src/ui/native/) | Native Image Viewer, File Browser, and Music Player windows and controls. |
+| [src/ui/native/](src/ui/native/) | Native Image Viewer, File Browser, Music Player, and game windows and controls. |
+| [src/ui/native/games.rs](src/ui/native/games.rs), [src/ui/native/games/](src/ui/native/games/) | Shared game window/input/rendering and bounded Snake, 2048, and Minesweeper rules. |
 | [src/config/shortcuts.rs](src/config/shortcuts.rs) | Serde types generated through `nestify::nest!`; `parse_shortcut_dir` loads, deduplicates, and sorts shortcuts. |
 | [src/ui/desktop/view.rs](src/ui/desktop/view.rs) | `MyDesktop`, app-bar menus, shortcut-to-window handles, launch/show/hide/close commands, arrangement, preferences/locking integration, and panel updates. |
 | [src/ui/terminal/window.rs](src/ui/terminal/window.rs) | `TuiWindow`, child command/channels, canvas updates, resize synchronization, shutdown, file/folder selection. |
@@ -161,7 +162,7 @@ The complete user example lives in [README.md](README.md). Source definitions in
 - `name` and `command` are required; top-level `args` defaults to an empty vector.
 - Optional top-level `category` defaults to User when absent or blank. System,
   Utility, User, and Games precede alphabetically ordered additional categories.
-  Native File Browser/Image Viewer/Music Player entries remain separate from custom
+  Native File Browser/Image Viewer/Music Player and game entries remain separate from custom
   shortcuts; names matching Terminal, System Performance, or Text editor override
   external starters.
 - The `taskbar`, `window`, and `terminal` tables are required. Taskbar position is
@@ -208,7 +209,7 @@ These describe the current implementation, not promises to preserve defects:
 
 ## Native application workers
 
-Each native window owns a latest-request worker with one active job, one pending
+Each Image Viewer and File Browser window owns a latest-request worker with one active job, one pending
 request, and one result. New requests replace pending work and invalidate older
 results. Closing cancels pending work without joining from a callback; worker
 state is separate for each window instance. Image workers cache decoded pixels
@@ -229,6 +230,16 @@ palette updates, Terminal Lock visibility snapshots, and desktop shutdown.
 
 Native timer callbacks defer result polling while hidden, including during Terminal
 Lock. Failed terminal launch dialogs are also deferred until the window is visible.
+
+The three native games share `GameWindow` and `GameControl`, with one instance per
+`GameKind` and deterministic rules in private modules. They do no I/O and spawn
+no workers or child processes. Snake uses a 140 ms timer, pauses on focus loss,
+hiding, locking, or insufficient space, and resumes only on Space/P. Puzzle games
+advance only on input. Game windows are bounded to the available desktop on
+launch and terminal resize. Fixed board geometry survives resize; small windows show
+a prompt and ignore game input. Minesweeper plants ten mines after the first
+reveal, excluding that cell and its neighbors. Scores and boards live only for
+the window's lifetime.
 
 The taskbar projects tracked terminal, native, document, and Help windows. It
 shows visible instances and groups them under Apps when necessary. Hiding a

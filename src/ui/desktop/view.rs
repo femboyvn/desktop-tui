@@ -4,12 +4,12 @@ use super::help::{help_window, HelpWindow};
 use super::panel::{self, BarLayout};
 use crate::config::preferences::Preferences;
 use crate::config::Shortcut;
-use crate::config::catalog::{self, AppId};
+use crate::config::catalog::{self, AppId, GameKind};
 use crate::platform::linux::{StatusMonitor, SystemAction, SystemActionRunner, SystemActions};
 use crate::ui::locking::{LockSetupDialog, TerminalLockScreen};
 use crate::ui::preferences::PreferencesDialog;
 use crate::ui::terminal::TuiWindow;
-use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow};
+use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow};
 use crate::ui::build_theme;
 use appcui::prelude::appbar::MenuButton;
 use appcui::prelude::menu::{Command, SingleChoice};
@@ -53,6 +53,7 @@ pub struct MyDesktop {
     image_window: Handle<ImageWindow>,
     browser_window: Handle<BrowserWindow>,
     music_window: Handle<MusicWindow>,
+    game_windows: HashMap<GameKind, Handle<GameWindow>>,
     document_windows: Vec<Handle<TuiWindow>>,
     pub status_label: Handle<appbar::Label>,
     status: StatusMonitor,
@@ -61,7 +62,7 @@ pub struct MyDesktop {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum WindowTarget {
-    Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Help(Handle<HelpWindow>),
+    Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Game(Handle<GameWindow>), Help(Handle<HelpWindow>),
 }
 #[derive(Clone, PartialEq)]
 struct WindowInfo { target: WindowTarget, caption: String, visible: bool, shortcut: Option<usize> }
@@ -81,6 +82,7 @@ struct LockVisibility {
     image: Option<(Handle<ImageWindow>, bool)>,
     browser: Option<(Handle<BrowserWindow>, bool)>,
     music: Option<(Handle<MusicWindow>, bool)>,
+    games: Vec<(Handle<GameWindow>, bool)>,
 }
 
 impl MyDesktop {
@@ -116,6 +118,7 @@ impl MyDesktop {
             image_window: Handle::None,
             browser_window: Handle::None,
             music_window: Handle::None,
+            game_windows: HashMap::new(),
             document_windows: Vec::new(),
             status: StatusMonitor::default(),
             apps_button: Handle::None,
@@ -166,6 +169,11 @@ impl MyDesktop {
                 if window.is_closing() { return None; }
                 (window.title().to_owned(), window.is_visible(), None)
             }
+            WindowTarget::Game(handle) => {
+                let window = self.windowt(handle)?;
+                if window.is_closing() { return None; }
+                (window.title().to_owned(), window.is_visible(), None)
+            }
             WindowTarget::Help(handle) => ("Help".into(), self.windowt(handle)?.is_visible(), None),
         };
         Some(WindowInfo { target, caption, visible, shortcut })
@@ -176,6 +184,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
+            WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
         }
     }
@@ -185,6 +194,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
+            WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); window.set_visible(false); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
         }
     }
@@ -194,6 +204,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
+            WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.close(); },
         }
     }
@@ -307,7 +318,7 @@ impl MyDesktop {
     }
     fn hide_for_terminal_lock(&mut self) -> LockVisibility {
         self.terminal_locked = true;
-        let mut visibility = LockVisibility { terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None };
+        let mut visibility = LockVisibility { terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None, games: Vec::new() };
         for handle in self.terminal_handles() {
             if let Some(window) = self.window_mut(handle) {
                 visibility.terminals.push((handle, window.is_visible()));
@@ -329,6 +340,13 @@ impl MyDesktop {
             visibility.music = Some((music, window.is_visible()));
             window.set_visible(false);
         }
+        for handle in self.game_windows.values().copied().collect::<Vec<_>>() {
+            if let Some(window) = self.window_mut(handle) {
+                visibility.games.push((handle, window.is_visible()));
+                window.suspend();
+                window.set_visible(false);
+            }
+        }
         for handle in self.help_windows.clone() {
             if let Some(window) = self.window_mut(handle) { visibility.help.push((handle, window.is_visible())); window.set_visible(false); }
         }
@@ -344,6 +362,7 @@ impl MyDesktop {
             && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         if let Some((handle, visible)) = visibility.music
             && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
+        for (handle, visible) in visibility.games { if let Some(window) = self.window_mut(handle) { window.set_visible(visible); } }
         for (handle, visible) in visibility.help { if let Some(window) = self.window_mut(handle) { window.set_visible(visible); } }
         self.terminal_locked = false;
         self.sync_taskbar();
@@ -446,6 +465,25 @@ impl MyDesktop {
         Ok(())
     }
 
+    fn open_game(&mut self, kind: GameKind) {
+        if let Some(handle) = self.game_windows.get(&kind).copied()
+            && let Some(window) = self.window_mut(handle)
+            && !window.is_closing() {
+            window.set_visible(true);
+            window.request_focus();
+            return;
+        }
+        match GameWindow::new(kind) {
+            Ok(mut window) => {
+                window.constrain_to(self.desktop_rect().size());
+                let handle = self.add_window(window);
+                self.game_windows.insert(kind, handle);
+                self.track_window(WindowTarget::Game(handle));
+            }
+            Err(error) => dialogs::error(&format!("Cannot open {}", kind.name()), &format!("{error:#}")),
+        }
+    }
+
     fn launch_application(&mut self, id: AppId) {
         match id {
             AppId::External(index) => {
@@ -455,6 +493,7 @@ impl MyDesktop {
             AppId::ImageViewer => self.open_image(None),
             AppId::FileBrowser => self.open_browser(),
             AppId::MusicPlayer => self.open_music(),
+            AppId::Game(kind) => self.open_game(kind),
         }
     }
 
@@ -510,6 +549,10 @@ impl OnPaint for MyDesktop {
 }
 impl OnResize for MyDesktop {
     fn on_resize(&mut self, _old_size: Size, _new_size: Size) {
+        let available = self.desktop_rect().size();
+        for handle in self.game_windows.values().copied().collect::<Vec<_>>() {
+            if let Some(window) = self.window_mut(handle) { window.constrain_to(available); }
+        }
         if self.terminal_locked || self.status_label.is_none() {
             return;
         }
@@ -703,6 +746,7 @@ impl MenuEvents for MyDesktop {
                 WindowTarget::Browser(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Image(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Music(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
+                WindowTarget::Game(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Help(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
             }
         }
@@ -770,6 +814,9 @@ impl MenuEvents for MyDesktop {
                 if let Some(window) = self.window_mut(handle) { window.shutdown(); }
                 let handle = self.music_window;
                 if let Some(window) = self.window_mut(handle) { window.shutdown(); }
+                for handle in self.game_windows.values().copied().collect::<Vec<_>>() {
+                    if let Some(window) = self.window_mut(handle) { window.shutdown(); }
+                }
                 self.close();
                 return;
             }
@@ -884,6 +931,50 @@ mod tests {
     use crate::test_support::{TestDir, UI_LOCK};
     use virtual_terminal::{Input, Output};
     #[test]
+    fn games_launch_restore_lock_and_close_as_independent_native_windows() {
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
+        DesktopEvents::on_start(&mut desktop);
+        for kind in catalog::GameKind::ALL {
+            desktop.launch_application(AppId::Game(kind));
+            assert_eq!(desktop.window_tasks.len(), 1);
+            let info = desktop.window_tasks[0].info.clone();
+            assert_eq!(info.caption, kind.name());
+            assert!(info.visible && info.shortcut.is_none());
+            desktop.hide_window(info.target);
+            desktop.sync_taskbar();
+            assert!(!desktop.window_info(info.target).unwrap().visible);
+            let visibility = desktop.hide_for_terminal_lock();
+            desktop.restore_after_terminal_unlock(visibility);
+            assert!(!desktop.window_info(info.target).unwrap().visible);
+            let command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::Game(kind)).unwrap().0;
+            MenuEvents::on_command(&mut desktop, Handle::None, command, Commands::LaunchApplication);
+            assert_eq!(desktop.window_tasks.len(), 1);
+            assert_eq!(desktop.window_tasks[0].info.target, info.target);
+            assert!(desktop.window_info(info.target).unwrap().visible);
+            let visibility = desktop.hide_for_terminal_lock();
+            assert!(!desktop.window_info(info.target).unwrap().visible);
+            desktop.restore_after_terminal_unlock(visibility);
+            assert!(desktop.window_info(info.target).unwrap().visible);
+            desktop.close_window(info.target);
+            desktop.sync_taskbar();
+            assert!(desktop.window_tasks.is_empty());
+            desktop.launch_application(AppId::Game(kind));
+            assert_ne!(desktop.window_tasks[0].info.target, info.target);
+            let target = desktop.window_tasks[0].info.target;
+            desktop.close_window(target);
+            desktop.sync_taskbar();
+        }
+        for kind in catalog::GameKind::ALL { desktop.launch_application(AppId::Game(kind)); }
+        assert_eq!(desktop.window_tasks.len(), 3);
+        let targets = desktop.window_order.clone();
+        MenuEvents::on_command(&mut desktop, Handle::None, Handle::None, Commands::Exit);
+        assert!(targets.into_iter().all(|target| desktop.window_info(target).is_none()));
+        app.run();
+    }
+    #[test]
     fn narrow_overflow_keeps_hide_and_close_actions_reachable() {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "ui::desktop::view::tests::resizing_regroups_and_restores_apps_with_panel_enabled_or_disabled", "--nocapture"])
@@ -962,7 +1053,7 @@ mod tests {
         let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
         let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
         DesktopEvents::on_start(&mut desktop);
-        assert_eq!(desktop.application_commands.len(), 6);
+        assert_eq!(desktop.application_commands.len(), 9);
         let browser_command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::FileBrowser).unwrap().0;
         MenuEvents::on_command(&mut desktop, Handle::None, browser_command, Commands::LaunchApplication);
         let browser = desktop.browser_window;

@@ -1,6 +1,15 @@
 use super::Shortcut;
 use super::shortcuts::{TaskbarOptions, TerminalOptions, WindowOptions};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum GameKind { Snake, Puzzle2048, Minesweeper }
+impl GameKind {
+    pub const ALL: [Self; 3] = [Self::Snake, Self::Puzzle2048, Self::Minesweeper];
+    pub fn name(self) -> &'static str {
+        match self { Self::Snake => "Snake", Self::Puzzle2048 => "2048", Self::Minesweeper => "Minesweeper" }
+    }
+}
+
 /// External IDs index the immutable shortcut catalog, never a menu position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum AppId {
@@ -8,6 +17,7 @@ pub(crate) enum AppId {
     FileBrowser,
     ImageViewer,
     MusicPlayer,
+    Game(GameKind),
 }
 
 pub(crate) struct Application {
@@ -41,6 +51,7 @@ pub(crate) fn applications(shortcuts: &[Shortcut]) -> Vec<Application> {
         Application { id: AppId::ImageViewer, name: "Image Viewer".into(), category: "Utility".into() },
         Application { id: AppId::MusicPlayer, name: "Music Player".into(), category: "Utility".into() },
     ];
+    apps.extend(GameKind::ALL.map(|kind| Application { id: AppId::Game(kind), name: kind.name().into(), category: "Games".into() }));
     apps.extend(shortcuts.iter().enumerate().map(|(index, shortcut)| Application {
         id: AppId::External(index), name: shortcut.name.clone(),
         category: shortcut.category.as_deref().map(str::trim).filter(|s| !s.is_empty()).unwrap_or("User").into(),
@@ -60,6 +71,20 @@ pub(crate) fn categories(apps: &[Application]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bundled_games_have_native_ids_and_keep_same_named_shortcuts_independent() {
+        let mut custom = with_starters(vec![]).remove(0);
+        custom.name = "Snake".into();
+        custom.command = "custom-snake".into();
+        custom.category = Some("Games".into());
+        let shortcuts = with_starters(vec![custom]);
+        let apps = applications(&shortcuts);
+        for kind in GameKind::ALL {
+            assert!(apps.iter().any(|app| app.id == AppId::Game(kind) && app.name == kind.name() && app.category == "Games"));
+        }
+        assert!(apps.iter().any(|app| app.id == AppId::External(0) && app.name == "Snake"));
+        assert_eq!(shortcuts[0].command, "custom-snake");
+    }
     #[test]
     fn music_player_is_native_and_keeps_its_identity_with_custom_shortcuts() {
         let shortcuts = with_starters(vec![]);
@@ -94,7 +119,7 @@ mod tests {
     fn starters_and_categories_are_available_without_shortcuts() {
         let shortcuts = with_starters(vec![]);
         let apps = applications(&shortcuts);
-        assert_eq!(apps.len(), 6);
+        assert_eq!(apps.len(), 9);
         assert_eq!(categories(&apps), ["System", "Utility", "User", "Games"]);
         assert_eq!(shortcuts.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), ["sh", "btm", "nano"]);
     }

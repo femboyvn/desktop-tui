@@ -14,12 +14,13 @@ System, Utility, User, and Games are always present; extra categories
 follow alphabetically. Empty categories show No apps yet.
 
 File Browser, Terminal (sh), System Performance (btm / bottom),
-Image Viewer, Text editor (nano), and the native Music Player are
+Image Viewer, Text editor (nano), native Music Player, and the games
+Snake, 2048, and Minesweeper are
 available with an empty shortcut folder. External tools must be installed separately.
 System Performance uses bottom’s default-light theme to match the
 default terminal background. A custom shortcut can choose another theme.
 Shortcuts with the same external starter names replace them.
-Native browser/viewer/player identities remain separate.
+Native app and game identities remain separate.
 
 Window buttons after Tilling | show only open, visible windows.
 A button focuses its window and offers Hide (run in background) and Close.
@@ -28,6 +29,34 @@ additional commands, which can open a file or
 folder picker when a shortcut uses `<FILE_PATH>` or
 `<FOLDER_PATH>`. Additional commands open separate windows.
 Choose Close to stop the primary application process.
+
+## Games
+
+Application > Games offers built-in Snake, 2048, and Minesweeper.
+No external game programs are needed. Each has its own movable,
+resizable window, taskbar button, and current board. R starts a new
+round. Closing and reopening starts a fresh window; scores are not saved.
+
+Snake: arrows or WASD steer; Space starts, Space/P pauses or resumes.
+Eat * to grow and score ten points. Hitting walls or your body ends
+the round. Snake pauses on lost focus, Hide, Terminal Lock, or a
+window too small for its board. Space/P resumes when you return.
+
+2048: arrows or WASD slide. Equal adjacent tiles merge once per
+move, adding their merged value to the score. Only moves that change
+the board add a new tile. Reach 2048 to win; no possible moves ends
+the round. Snake and 2048 show the best score for the current window.
+
+Minesweeper: a 9 by 9 board hides ten mines. Arrows or WASD select,
+Space/Enter reveals, and F toggles a flag. Left-click reveals;
+right-click flags. The first reveal and its neighbors are safe.
+Numbers count adjacent mines; empty areas reveal nearby safe cells.
+Flags block reveals. Reveal all 71 safe cells to win. A mine ends
+the round and shows the mines.
+
+Hide and Terminal Lock preserve every game's board. Restore through
+Application > Background windows or the game's launcher. If the
+window shows Resize window to play, enlarge it to use game controls.
 
 ## Music Player
 
