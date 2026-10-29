@@ -41,6 +41,10 @@ cargo test --locked -p appcui --lib backend::crossterm::implementation::regressi
 
 See [vendor/README.md](vendor/README.md) for the patch and its provenance.
 
+For ALSA eventfd wakeup/cleanup changes, also run the hardware-free C regression
+and fortified compiler check in [vendor/miniaudio/README.md](vendor/miniaudio/README.md).
+These checks do not select or open a real audio device.
+
 Use `cargo build --locked --release` as well for dependency or release-profile
 changes. `cargo run --locked -- --help` checks CLI startup without initializing
 the terminal; it does not exercise menus, shortcut loading, or child execution.
