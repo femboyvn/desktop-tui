@@ -41,6 +41,9 @@ pub(crate) fn is_image(path: &Path) -> bool {
 pub(crate) fn is_pdf(path: &Path) -> bool {
     path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
 }
+pub(crate) fn is_audio(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| ["mp3", "wav", "flac", "ogg"].iter().any(|candidate| extension.eq_ignore_ascii_case(candidate)))
+}
 
 #[cfg(test)]
 mod tests {
@@ -93,5 +96,18 @@ mod tests {
     fn detects_pdf_documents_without_matching_other_extensions() {
         for name in ["document.pdf", "- 文.PDF", "mixed.PdF"] { assert!(is_pdf(Path::new(name))); }
         for name in ["pdf", "document.pdf.txt", "document.png"] { assert!(!is_pdf(Path::new(name))); }
+    }
+    #[test]
+    fn detects_supported_audio_without_matching_other_extensions() {
+        for name in ["track.mp3", "track.MP3", "track.wav", "track.WaV", "track.flac", "track.FLAC", "track.ogg", "track.OgG"] {
+            assert!(is_audio(Path::new(name)), "{name}");
+        }
+        for name in ["mp3", "track.mp3.txt", "track.mp4", "track.opus", "track.aac", "track.png", "no extension"] {
+            assert!(!is_audio(Path::new(name)), "{name}");
+        }
+        let mut name = b"opaque \xff <FILE_PATH> ".to_vec();
+        name.extend_from_slice(b".WAV");
+        assert!(is_audio(Path::new(&std::ffi::OsString::from_vec(name))));
+        assert!(!is_audio(Path::new(&std::ffi::OsString::from_vec(b"track.\xffmp3".to_vec()))));
     }
 }

@@ -226,6 +226,10 @@ Viewport preparation is bounded to 2048 × 1024 character cells.
 File Browser enumerates and sorts directories outside callbacks, then inserts up
 to 256 rows per tick. Original PathBuf values drive navigation and document
 arguments; lossy text is used only for labels and the editable path display.
+The desktop routes case-insensitive MP3/WAV/FLAC/OGG extensions to Music Player,
+supported images to Image Viewer, PDFs to PDF Reader, and other files to the
+configured Text editor. Audio opens preserve the original OS path and reuse and
+restore the native player; its worker loads and starts the selected track.
 Native windows and all tracked terminal instances participate in arrangement,
 palette updates, Terminal Lock visibility snapshots, and desktop shutdown.
 

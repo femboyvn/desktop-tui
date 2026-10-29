@@ -461,6 +461,7 @@ impl MyDesktop {
     fn open_file(&mut self, path: PathBuf) {
         if crate::runtime::files::is_image(&path) { self.open_image(Some(path)); }
         else if crate::runtime::files::is_pdf(&path) { self.open_pdf(Some(path)); }
+        else if crate::runtime::files::is_audio(&path) { self.open_music(Some(path)); }
         else if let Err(error) = self.open_document(path) { dialogs::error("Cannot open file", &format!("{error:#}")); }
     }
     fn open_browser(&mut self) {
@@ -476,16 +477,21 @@ impl MyDesktop {
             Err(error) => dialogs::error("Cannot open File Browser", &format!("{error:#}")),
         }
     }
-    fn open_music(&mut self) {
+    fn open_music(&mut self, path: Option<PathBuf>) {
         let handle = self.music_window;
         if let Some(window) = self.window_mut(handle)
             && !window.is_closing() {
+            if let Some(path) = path { window.open(path); }
             window.set_visible(true);
             window.request_focus();
             return;
         }
         match MusicWindow::new() {
-            Ok(window) => { self.music_window = self.add_window(window); self.track_window(WindowTarget::Music(self.music_window)); }
+            Ok(mut window) => {
+                if let Some(path) = path { window.open(path); }
+                self.music_window = self.add_window(window);
+                self.track_window(WindowTarget::Music(self.music_window));
+            }
             Err(error) => dialogs::error("Cannot open Music Player", &format!("{error:#}")),
         }
     }
@@ -530,7 +536,7 @@ impl MyDesktop {
             }
             AppId::ImageViewer => self.open_image(None),
             AppId::FileBrowser => self.open_browser(),
-            AppId::MusicPlayer => self.open_music(),
+            AppId::MusicPlayer => self.open_music(None),
             AppId::PdfReader => self.open_pdf(None),
             AppId::Game(kind) => self.open_game(kind),
         }
@@ -969,6 +975,68 @@ mod tests {
     use crate::config::preferences::Rgb;
     use crate::test_support::{TestDir, UI_LOCK};
     use virtual_terminal::{Input, Output};
+    #[test]
+    fn audio_files_open_in_the_native_music_player_instead_of_the_editor() {
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let _entered = runtime.enter();
+        let dir = TestDir::new();
+        let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
+        // A routing regression must not depend on an installed editor or open an interactive child.
+        let editor = desktop.shortcuts.iter_mut().find(|shortcut| shortcut.name == "Text editor").unwrap();
+        editor.command = "/bin/true".into();
+        editor.args.clear();
+        let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
+        DesktopEvents::on_start(&mut desktop);
+        desktop.open_file(dir.path().join("track 文.MP3"));
+        let opened_music = desktop.windowt(desktop.music_window).is_some();
+        let opened_editor = !desktop.document_windows.is_empty();
+        MenuEvents::on_command(&mut desktop, Handle::None, Handle::None, Commands::Exit);
+        app.run();
+        runtime.block_on(crate::runtime::processes::finish_shutdown());
+        assert!(opened_music, "audio files should open Music Player");
+        assert!(!opened_editor, "audio files should not open Text editor");
+    }
+    #[test]
+    fn audio_file_associations_reuse_restore_and_reopen_the_music_window() {
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
+        DesktopEvents::on_start(&mut desktop);
+        desktop.launch_application(AppId::MusicPlayer);
+        let player = desktop.music_window;
+        let target = WindowTarget::Music(player);
+        // Missing files exercise routing without opening an audio output device.
+        for name in ["track 文.MP3", "another <FILE_PATH>.wAv", "lossless.FLAC", "recording.OgG"] {
+            desktop.hide_window(target);
+            desktop.open_file(dir.path().join(name));
+            assert_eq!(desktop.music_window, player);
+            assert!(desktop.document_windows.is_empty());
+            let info = desktop.window_info(target).unwrap();
+            assert!(info.visible);
+            assert_eq!(info.caption, format!("Music Player — {name}"));
+            desktop.sync_taskbar();
+            assert_eq!(desktop.window_tasks.len(), 1);
+        }
+        desktop.hide_window(target);
+        let visibility = desktop.hide_for_terminal_lock();
+        desktop.restore_after_terminal_unlock(visibility);
+        assert!(!desktop.window_info(target).unwrap().visible);
+        desktop.launch_application(AppId::MusicPlayer);
+        assert_eq!(desktop.music_window, player);
+        assert_eq!(desktop.window_info(target).unwrap().caption, "Music Player — recording.OgG");
+        desktop.close_window(target);
+        desktop.sync_taskbar();
+        assert!(desktop.window_tasks.is_empty());
+        desktop.open_file(dir.path().join("reopened.wav"));
+        assert_ne!(desktop.music_window, player);
+        let reopened = WindowTarget::Music(desktop.music_window);
+        assert_eq!(desktop.window_info(reopened).unwrap().caption, "Music Player — reopened.wav");
+        MenuEvents::on_command(&mut desktop, Handle::None, Handle::None, Commands::Exit);
+        assert!(desktop.window_info(reopened).is_none());
+        app.run();
+    }
     #[test]
     fn pdf_documents_route_to_a_native_reader_and_follow_window_lifecycle() {
         let _ui_lock = UI_LOCK.lock().unwrap();

@@ -2,6 +2,7 @@ use super::image_viewer::home_directory;
 use crate::runtime::music::{MusicPlayer, PlaybackState, Snapshot};
 use appcui::dialogs::{Location, OpenFileDialogFlags};
 use appcui::prelude::*;
+use std::path::PathBuf;
 use std::time::Duration;
 
 fn time_label(seconds: f64) -> String {
@@ -66,6 +67,11 @@ impl MusicWindow {
         if let Some(status) = window.control_mut(status) { status.request_focus(); }
         window.timer().ok_or_else(|| anyhow::anyhow!("Music Player timer unavailable"))?.start(Duration::from_millis(100));
         Ok(window)
+    }
+    pub fn open(&mut self, path: PathBuf) {
+        let status = self.status;
+        if let Some(status) = self.control_mut(status) { status.player.open(path); }
+        self.refresh();
     }
     fn refresh(&mut self) -> bool {
         let handle = self.status;
@@ -137,6 +143,26 @@ impl WindowEvents for MusicWindow {
 mod tests {
     use super::*;
     use crate::test_support::{TestDir, UI_LOCK};
+    #[test]
+    fn opening_document_paths_preserves_os_bytes_and_replaces_the_selected_track() {
+        use std::os::unix::ffi::OsStringExt;
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let app = App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let mut window = MusicWindow::new().unwrap();
+        let path = dir.path().join(std::ffi::OsString::from_vec(b"space \xff <FILE_PATH>.WAV".to_vec()));
+        window.open(path.clone());
+        let status = window.status;
+        assert_eq!(window.control(status).unwrap().player.snapshot().path, Some(path.clone()));
+        assert_eq!(window.control(status).unwrap().snapshot.path, Some(path));
+        let next = dir.path().join("next 文.mp3");
+        window.open(next.clone());
+        assert_eq!(window.control(status).unwrap().player.snapshot().path, Some(next.clone()));
+        assert_eq!(window.control(status).unwrap().snapshot.path, Some(next));
+        assert_eq!(window.title(), "Music Player — next 文.mp3");
+        window.shutdown();
+        app.run();
+    }
     #[test]
     fn keyboard_volume_bounds_and_hidden_errors_use_native_window_without_a_device() {
         let _ui_lock = UI_LOCK.lock().unwrap();

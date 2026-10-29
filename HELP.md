@@ -64,6 +64,9 @@ Application > Utility > Music Player opens the built-in player. No
 separate player installation is needed. Click Open or press Ctrl+O to
 choose a local MP3, WAV, FLAC, or Ogg Vorbis file, up to 128 MiB and eight channels.
 Sample rates from 8 to 192 kHz are supported.
+Opening MP3, WAV, FLAC, or Ogg Vorbis files in File Browser starts playback
+in the same Music Player window. A new track replaces the current one and
+restores the player if hidden.
 Click Play/Pause or press Space; S stops playback. Left/Right seek ten
 seconds and +/- changes volume by 5%. The window shows the filename,
 elapsed/total time, volume, and inline errors. One file plays at a time.
@@ -88,7 +91,9 @@ Up (Alt+U) opens the parent, Refresh (Alt+R) reloads, and Hidden
 show name, type, byte size, and local modification time. Failed
 background reads leave the previous listing usable.
 
-Open supported images in Image Viewer and PDFs in PDF Reader. Other regular files open in
+Open supported images in Image Viewer, PDFs in PDF Reader, and MP3, WAV,
+FLAC, or Ogg Vorbis files in Music Player. File extensions are case-insensitive.
+Other regular files open in
 independent Text editor document windows, preserving any running
 editor. The selected absolute path is one OS argument, appended
 after configured templates are resolved. Display labels may replace

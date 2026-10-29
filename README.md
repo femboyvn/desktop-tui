@@ -189,7 +189,9 @@ and 8–192 kHz). Click
 seconds, and **+/-** to change volume by 5%. The window shows the filename,
 elapsed/total time, volume, and any errors. It streams decoded samples while
 retaining the bounded encoded file in memory; file loading and audio operations
-run outside the UI thread. This version plays one file at a time.
+run outside the UI thread. This version plays one file at a time. Opening audio
+from File Browser starts playback in the same player window, replacing the current
+track and restoring the window if it was hidden.
 
 Hide the window to keep playing, then restore it through **Application > Background
 windows**. Terminal Lock also preserves playback; Close and Desktop Exit stop it.
@@ -208,9 +210,16 @@ modification time. Directory reads happen in the background. Failed reads leave
 the previous listing available. Filesystem names are preserved as OS paths;
 non-UTF-8 bytes appear as replacement characters only in labels.
 
-Open a PNG, JPEG, WebP, GIF, or BMP from the browser to view it. PDF files open
-in PDF Reader (including `.PDF` extensions). Other regular
-files open in the configured Text editor in independent document windows. Each
+Files open in their default Desktop-TUI app. Extensions are case-insensitive:
+
+| File extensions | Default app |
+| --- | --- |
+| `.mp3`, `.wav`, `.flac`, `.ogg` (Ogg Vorbis) | Music Player |
+| `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | Image Viewer |
+| `.pdf` | PDF Reader |
+| Other regular files | Configured Text editor, in independent document windows |
+
+For Text editor documents, each
 selected absolute path is appended as one argument after resolving the editor's
 configured command/argument templates. Spaces, Unicode, raw OS filename bytes,
 and literal placeholder text in that selected path are preserved. An already
