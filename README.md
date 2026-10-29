@@ -25,7 +25,7 @@ Features:
 - [x] Change tilling options
 - [x] Can let the user select a file or a folder to use its path as a command argument
 - [x] Categorized Application menu with starter launchers
-- [x] Native File Browser, Image Viewer, and Music Player
+- [x] Native File Browser, Image Viewer, PDF Reader, and Music Player
 - [x] Built-in Snake, 2048, and Minesweeper
 - [x] Clock
 - [x] Offline Help and saved desktop/terminal palettes
@@ -141,7 +141,7 @@ visible windows when space is limited; selecting one opens its Focus/Hide/Close
 actions. The status panel remains responsive.
 External windows with additional commands expose them through **App commands...**.
 
-Nine starters are available even with an empty shortcut directory:
+Ten starters are available even with an empty shortcut directory:
 
 | Category | Application | Executable |
 | --- | --- | --- |
@@ -149,6 +149,7 @@ Nine starters are available even with an empty shortcut directory:
 | System | Terminal | `sh` |
 | Utility | System Performance | `btm` ([bottom](https://github.com/ClementTsang/bottom)) |
 | Utility | Image Viewer | Native |
+| Utility | PDF Reader | Native (Poppler rendering) |
 | Utility | Text editor | `nano` |
 | Utility | Music Player | Native (compiled audio engine) |
 | Games | Snake | Native |
@@ -207,7 +208,8 @@ modification time. Directory reads happen in the background. Failed reads leave
 the previous listing available. Filesystem names are preserved as OS paths;
 non-UTF-8 bytes appear as replacement characters only in labels.
 
-Open a PNG, JPEG, WebP, GIF, or BMP from the browser to view it. Other regular
+Open a PNG, JPEG, WebP, GIF, or BMP from the browser to view it. PDF files open
+in PDF Reader (including `.PDF` extensions). Other regular
 files open in the configured Text editor in independent document windows. Each
 selected absolute path is appended as one argument after resolving the editor's
 configured command/argument templates. Spaces, Unicode, raw OS filename bytes,
@@ -225,6 +227,25 @@ Aspect ratio and orientation are preserved, and transparency uses the current
 window theme background. Animated formats show their first frame. Input is
 limited to 32 MiB and 16 megapixels, with decoder allocation limits. Decoding
 and viewport preparation run in a bounded worker that reuses decoded pixels.
+
+**PDF Reader** opens under **Application > Utility > PDF Reader**, or by opening
+a PDF in File Browser. Click **Open** or press **Ctrl+O** to choose a local PDF.
+Use **Prev/Next**, **PageUp/PageDown**, or **P/N** to change pages; **Home/End**
+jump to the first/last page. **+/-** and the mouse wheel zoom by 1.25; **F** or
+**Fit** fits the page. Arrows and mouse dragging pan. Zoom is 25–1600% relative
+to Fit, which adapts when the window resizes. The window shows the filename,
+page number, loading state, and inline errors. Opening another PDF replaces the
+document in the same reader window.
+
+PDF rendering requires **`pdfinfo` and `pdftoppm` on PATH**, provided by
+[Poppler](https://poppler.freedesktop.org/) (`poppler-utils` on Debian/Ubuntu,
+`poppler` on Arch). No extra Rust dependency is needed. Input is limited to
+64 MiB; one page at a time is rasterized to at most 2048 pixels per edge, so
+detail at high zoom is limited by that raster. Each helper has a 15-second
+timeout. Loading and rendering run in a bounded background worker. Close and
+Desktop Exit cancel active helpers and reap them. Password-protected PDFs that
+require a password show an error; password entry, text selection, search, and
+PDF editing are outside this version.
 
 Native windows and document windows participate in tiling, palette updates,
 Terminal Lock visibility restoration, and Desktop > Exit. Closing and reopening

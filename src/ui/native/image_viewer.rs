@@ -86,7 +86,7 @@ impl ImageCanvas {
     fn scale(&self) -> f64 {
         match self.render.mode {
             Zoom::Scale(scale) => scale,
-            Zoom::Fit => self.frame.as_ref().map_or(1.0, |frame| frame.geometry.scale),
+            Zoom::Fit | Zoom::FitScale(_) => self.frame.as_ref().map_or(1.0, |frame| frame.geometry.scale),
         }
     }
     fn zoom(&mut self, factor: f64) {

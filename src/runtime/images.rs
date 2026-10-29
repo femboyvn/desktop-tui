@@ -107,7 +107,7 @@ pub(crate) fn decode(path: &Path) -> anyhow::Result<RgbaImage> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) enum Zoom { Fit, Scale(f64) }
+pub(crate) enum Zoom { Fit, Scale(f64), FitScale(f64) }
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct RenderRequest {
     pub size: (u32, u32),
@@ -128,6 +128,8 @@ pub(crate) fn geometry(dimensions: (u32, u32), request: RenderRequest) -> Geomet
     let scale = match request.mode {
         Zoom::Fit => (view_width / width).min(view_height / height).min(4.0),
         Zoom::Scale(scale) => if scale.is_finite() { scale.clamp(0.05, 4.0) } else { 1.0 },
+        Zoom::FitScale(factor) => (view_width / width).min(view_height / height).min(4.0)
+            * if factor.is_finite() { factor.clamp(0.25, 16.0) } else { 1.0 },
     };
     let max_x = ((width - view_width / scale) / 2.0).max(0.0);
     let max_y = ((height - view_height / scale) / 2.0).max(0.0);

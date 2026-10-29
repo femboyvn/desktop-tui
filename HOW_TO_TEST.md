@@ -118,6 +118,7 @@ menu item to launch it. Check only the matrix rows relevant to the patch.
 | Placeholder dialogs | Exercise file and folder selection, cancellation, and paths containing spaces using explicit argument arrays. Confirm arguments reach the child intact and cancellation prevents launch. |
 | Application menu | At 80×24 and a larger size, check Desktop / Application / Tilling order, all four standard categories, disabled empty entries, additional categories, starter overrides, and Apps overflow with the panel enabled and disabled. Only visible open windows belong after Tilling |; use overflow to reach Hide/Close, then restore through Application > Background windows. Include native apps, independent documents, Help, and repeated close/reopen. Confirm focus restoration and released taskbar/menu handles. |
 | Native image viewer | Open each supported format; check EXIF orientation, transparency across a palette change, first frame of animation, fit/actual/zoom bounds, arrows, dragging, and outer/window resize. Test invalid/missing/unsupported images and both size limits. Close during decode and reopen another file. |
+| Native PDF reader | With Poppler installed, open multi-page text and scanned PDFs from Utility and File Browser. Check Ctrl+O and cancellation, Prev/Next, PgUp/PgDn, P/N, Home/End, fit, zoom/wheel, pan/drag, tiny viewports, and resize. Test missing helpers, missing/invalid/oversized/password-protected input, spaces/Unicode/opaque paths, hide/restore, theme, tiling, lock, close while loading, reopen, and Exit; no helper processes should remain. |
 | Native file browser | Navigate home, relative/absolute paths, Up, Refresh, hidden files, unreadable folders, and large directories. Open images and multiple editor documents. Use spaces, Unicode, non-UTF-8 names, and literal placeholder text; confirm each selected path reaches the editor as one argument and a running editor remains open. |
 | Native music player | Open MP3, WAV, FLAC, and Ogg Vorbis files. Check click/keyboard Open, Play/Pause, Stop, ten-second seeking, volume bounds, progress, invalid/missing/oversized input, and unavailable output devices. Hide, lock, restore, tile, resize, and change theme while playing. Close during loading, reopen, then Exit; playback must stop. Use a working real audio session to verify audible output. |
 | Native games | Open Snake, 2048, and Minesweeper from Application > Games. Check arrows/WASD, R restart, scores, 2048 merges, and Minesweeper Space/Enter/F plus left/right clicks. Snake must pause on lost focus, hiding, locking, and a small window; Space/P resumes. Hide/restore each board, close/reopen, tile, resize, change theme, then Exit. Verify readable instructions and the resize prompt at small sizes. |
@@ -152,3 +153,11 @@ for catalogs is in `src/config/catalog.rs`; image, filesystem, worker, and proce
 coverage is in `src/runtime/`; native navigation tests are in `src/ui/native/`.
 The AppCUI debug backend exercises UI integration without starting the interactive
 desktop. Real-terminal smoke checks above remain necessary for visual/input approval.
+
+PDF parsing, bounds, timeout/cancellation, navigation, zoom, and desktop lifecycle
+tests run in the normal suite. Run the opt-in two-page rendering regression on
+a host with Poppler's `pdfinfo` and `pdftoppm` installed:
+
+```sh
+cargo test --locked runtime::pdf::tests::poppler_renders -- --ignored
+```

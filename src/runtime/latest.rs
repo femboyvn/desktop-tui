@@ -13,10 +13,14 @@ pub(crate) struct LatestWorker<Q, R> {
     state: Arc<(Mutex<State<Q, R>>, Condvar)>,
 }
 impl<Q: Send + 'static, R: Send + 'static> LatestWorker<Q, R> {
-    pub fn new(mut work: impl FnMut(Q) -> R + Send + 'static) -> std::io::Result<Self> {
+    pub fn new(work: impl FnMut(Q) -> R + Send + 'static) -> std::io::Result<Self> {
+        Self::new_tracked(work).map(|(worker, _)| worker)
+    }
+    /// Retain the join handle when children must be reaped before process exit.
+    pub fn new_tracked(mut work: impl FnMut(Q) -> R + Send + 'static) -> std::io::Result<(Self, std::thread::JoinHandle<()>)> {
         let state = Arc::new((Mutex::new(State { revision: 0, request: None, result: None, closed: false }), Condvar::new()));
         let shared = Arc::clone(&state);
-        std::thread::Builder::new().name("desktop-native-worker".into()).spawn(move || {
+        let thread = std::thread::Builder::new().name("desktop-native-worker".into()).spawn(move || {
             let (lock, wake) = &*shared;
             loop {
                 let (revision, request) = {
@@ -35,7 +39,7 @@ impl<Q: Send + 'static, R: Send + 'static> LatestWorker<Q, R> {
                 if revision == state.revision { state.result = Some((revision, result)); }
             }
         })?;
-        Ok(Self { state })
+        Ok((Self { state }, thread))
     }
     pub fn submit(&mut self, request: Q) {
         let (lock, wake) = &*self.state;

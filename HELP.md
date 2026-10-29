@@ -14,7 +14,7 @@ System, Utility, User, and Games are always present; extra categories
 follow alphabetically. Empty categories show No apps yet.
 
 File Browser, Terminal (sh), System Performance (btm / bottom),
-Image Viewer, Text editor (nano), native Music Player, and the games
+Image Viewer, PDF Reader, Text editor (nano), native Music Player, and the games
 Snake, 2048, and Minesweeper are
 available with an empty shortcut folder. External tools must be installed separately.
 System Performance uses bottom’s default-light theme to match the
@@ -88,7 +88,7 @@ Up (Alt+U) opens the parent, Refresh (Alt+R) reloads, and Hidden
 show name, type, byte size, and local modification time. Failed
 background reads leave the previous listing usable.
 
-Open supported images in Image Viewer. Other regular files open in
+Open supported images in Image Viewer and PDFs in PDF Reader. Other regular files open in
 independent Text editor document windows, preserving any running
 editor. The selected absolute path is one OS argument, appended
 after configured templates are resolved. Display labels may replace
@@ -113,6 +113,27 @@ viewport preparation happen in a bounded background worker. Files
 are limited to 32 MiB and 16 megapixels. Corrupt, unsupported, or
 oversized images show an error; Ctrl+O can open another file.
 There is no image editing or animation playback.
+
+## PDF Reader
+
+Application > Utility > PDF Reader opens the native reader. Click Open
+or press Ctrl+O to choose a local PDF; File Browser also opens PDFs here.
+Prev/Next, PageUp/PageDown, or P/N change pages. Home/End jump to the
+first/last page. +/- or the wheel zoom by 1.25; F or Fit fits the page.
+Arrows and dragging pan. Zoom ranges from 25 to 1600 percent of Fit;
+Fit adapts to window size. Opening another PDF replaces the current one.
+
+Install Poppler's pdfinfo and pdftoppm on PATH (poppler-utils on
+Debian/Ubuntu, poppler on Arch). Missing helpers, invalid input, and
+PDFs requiring a password show inline errors; Ctrl+O opens another file.
+The reader preserves scanned pages and page layout as terminal images.
+Text selection, search, editing, and password entry are not supported.
+
+Input is limited to 64 MiB. One page is rasterized at a time, up to
+2048 pixels per edge; high zoom cannot add detail beyond that raster.
+Helpers time out after 15 seconds. Loading/rendering run in a background
+worker. Hide and Terminal Lock preserve the document and page; Close
+and Desktop Exit cancel active rendering and reap helper processes.
 
 ## Window controls
 

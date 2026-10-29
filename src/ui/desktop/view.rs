@@ -9,7 +9,7 @@ use crate::platform::linux::{StatusMonitor, SystemAction, SystemActionRunner, Sy
 use crate::ui::locking::{LockSetupDialog, TerminalLockScreen};
 use crate::ui::preferences::PreferencesDialog;
 use crate::ui::terminal::TuiWindow;
-use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow};
+use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow, PdfWindow};
 use crate::ui::build_theme;
 use appcui::prelude::appbar::MenuButton;
 use appcui::prelude::menu::{Command, SingleChoice};
@@ -53,6 +53,7 @@ pub struct MyDesktop {
     image_window: Handle<ImageWindow>,
     browser_window: Handle<BrowserWindow>,
     music_window: Handle<MusicWindow>,
+    pdf_window: Handle<PdfWindow>,
     game_windows: HashMap<GameKind, Handle<GameWindow>>,
     document_windows: Vec<Handle<TuiWindow>>,
     pub status_label: Handle<appbar::Label>,
@@ -62,7 +63,7 @@ pub struct MyDesktop {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum WindowTarget {
-    Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Game(Handle<GameWindow>), Help(Handle<HelpWindow>),
+    Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Pdf(Handle<PdfWindow>), Game(Handle<GameWindow>), Help(Handle<HelpWindow>),
 }
 #[derive(Clone, PartialEq)]
 struct WindowInfo { target: WindowTarget, caption: String, visible: bool, shortcut: Option<usize> }
@@ -82,6 +83,7 @@ struct LockVisibility {
     image: Option<(Handle<ImageWindow>, bool)>,
     browser: Option<(Handle<BrowserWindow>, bool)>,
     music: Option<(Handle<MusicWindow>, bool)>,
+    pdf: Option<(Handle<PdfWindow>, bool)>,
     games: Vec<(Handle<GameWindow>, bool)>,
 }
 
@@ -118,6 +120,7 @@ impl MyDesktop {
             image_window: Handle::None,
             browser_window: Handle::None,
             music_window: Handle::None,
+            pdf_window: Handle::None,
             game_windows: HashMap::new(),
             document_windows: Vec::new(),
             status: StatusMonitor::default(),
@@ -135,6 +138,8 @@ impl MyDesktop {
         }
         let image = self.image_window;
         if let Some(window) = self.window_mut(image) { window.apply_background(preferences.desktop.surface); }
+        let pdf = self.pdf_window;
+        if let Some(window) = self.window_mut(pdf) { window.apply_background(preferences.desktop.surface); }
         self.preferences = preferences;
         self.refresh_panel();
     }
@@ -164,6 +169,11 @@ impl MyDesktop {
                 let caption = if title == "Image Viewer" { title.to_owned() } else { format!("Image Viewer: {title}") };
                 (caption, window.is_visible(), None)
             }
+            WindowTarget::Pdf(handle) => {
+                let window = self.windowt(handle)?;
+                if window.is_closing() { return None; }
+                (window.title().to_owned(), window.is_visible(), None)
+            }
             WindowTarget::Music(handle) => {
                 let window = self.windowt(handle)?;
                 if window.is_closing() { return None; }
@@ -184,6 +194,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
+            WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
         }
@@ -194,6 +205,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
+            WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); window.set_visible(false); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
         }
@@ -204,6 +216,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
+            WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.close(); },
         }
@@ -318,7 +331,7 @@ impl MyDesktop {
     }
     fn hide_for_terminal_lock(&mut self) -> LockVisibility {
         self.terminal_locked = true;
-        let mut visibility = LockVisibility { terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None, games: Vec::new() };
+        let mut visibility = LockVisibility { terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None, pdf: None, games: Vec::new() };
         for handle in self.terminal_handles() {
             if let Some(window) = self.window_mut(handle) {
                 visibility.terminals.push((handle, window.is_visible()));
@@ -333,6 +346,11 @@ impl MyDesktop {
         let browser = self.browser_window;
         if let Some(window) = self.window_mut(browser) {
             visibility.browser = Some((browser, window.is_visible()));
+            window.set_visible(false);
+        }
+        let pdf = self.pdf_window;
+        if let Some(window) = self.window_mut(pdf) {
+            visibility.pdf = Some((pdf, window.is_visible()));
             window.set_visible(false);
         }
         let music = self.music_window;
@@ -359,6 +377,8 @@ impl MyDesktop {
         if let Some((handle, visible)) = visibility.image
             && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         if let Some((handle, visible)) = visibility.browser
+            && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
+        if let Some((handle, visible)) = visibility.pdf
             && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         if let Some((handle, visible)) = visibility.music
             && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
@@ -424,6 +444,24 @@ impl MyDesktop {
             Ok(window) => { self.image_window = self.add_window(window); self.track_window(WindowTarget::Image(self.image_window)); }
             Err(error) => dialogs::error("Cannot open Image Viewer", &format!("{error:#}")),
         }
+    }
+    fn open_pdf(&mut self, path: Option<PathBuf>) {
+        let handle = self.pdf_window;
+        if let Some(window) = self.window_mut(handle) && !window.is_closing() {
+            if let Some(path) = path { window.open(path); }
+            window.set_visible(true);
+            window.request_focus();
+            return;
+        }
+        match PdfWindow::new(path, self.preferences.desktop.surface) {
+            Ok(window) => { self.pdf_window = self.add_window(window); self.track_window(WindowTarget::Pdf(self.pdf_window)); }
+            Err(error) => dialogs::error("Cannot open PDF Reader", &format!("{error:#}")),
+        }
+    }
+    fn open_file(&mut self, path: PathBuf) {
+        if crate::runtime::files::is_image(&path) { self.open_image(Some(path)); }
+        else if crate::runtime::files::is_pdf(&path) { self.open_pdf(Some(path)); }
+        else if let Err(error) = self.open_document(path) { dialogs::error("Cannot open file", &format!("{error:#}")); }
     }
     fn open_browser(&mut self) {
         let handle = self.browser_window;
@@ -493,6 +531,7 @@ impl MyDesktop {
             AppId::ImageViewer => self.open_image(None),
             AppId::FileBrowser => self.open_browser(),
             AppId::MusicPlayer => self.open_music(),
+            AppId::PdfReader => self.open_pdf(None),
             AppId::Game(kind) => self.open_game(kind),
         }
     }
@@ -746,6 +785,7 @@ impl MenuEvents for MyDesktop {
                 WindowTarget::Browser(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Image(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Music(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
+                WindowTarget::Pdf(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Game(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Help(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
             }
@@ -813,6 +853,8 @@ impl MenuEvents for MyDesktop {
                 let handle = self.browser_window;
                 if let Some(window) = self.window_mut(handle) { window.shutdown(); }
                 let handle = self.music_window;
+                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
+                let handle = self.pdf_window;
                 if let Some(window) = self.window_mut(handle) { window.shutdown(); }
                 for handle in self.game_windows.values().copied().collect::<Vec<_>>() {
                     if let Some(window) = self.window_mut(handle) { window.shutdown(); }
@@ -891,10 +933,7 @@ impl TimerEvents for MyDesktop {
         }
         let handle = self.browser_window;
         let open_path = self.window_mut(handle).and_then(BrowserWindow::take_open_path);
-        if let Some(path) = open_path {
-            if crate::runtime::files::is_image(&path) { self.open_image(Some(path)); }
-            else if let Err(error) = self.open_document(path) { dialogs::error("Cannot open file", &format!("{error:#}")); }
-        }
+        if let Some(path) = open_path { self.open_file(path); }
         let documents = std::mem::take(&mut self.document_windows);
         self.document_windows = documents.into_iter().filter(|handle| self.windowt(*handle).is_some()).collect();
         let settings = &self.preferences.panel;
@@ -930,6 +969,41 @@ mod tests {
     use crate::config::preferences::Rgb;
     use crate::test_support::{TestDir, UI_LOCK};
     use virtual_terminal::{Input, Output};
+    #[test]
+    fn pdf_documents_route_to_a_native_reader_and_follow_window_lifecycle() {
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let path = dir.path().join("document 文.PDF");
+        std::fs::write(&path, crate::test_support::two_page_pdf()).unwrap();
+        let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
+        DesktopEvents::on_start(&mut desktop);
+        desktop.open_file(path.clone());
+        let reader = desktop.pdf_window;
+        assert!(desktop.windowt(reader).is_some());
+        assert!(desktop.document_windows.is_empty());
+        let target = WindowTarget::Pdf(reader);
+        desktop.hide_window(target);
+        let visibility = desktop.hide_for_terminal_lock();
+        desktop.restore_after_terminal_unlock(visibility);
+        assert!(!desktop.window_info(target).unwrap().visible);
+        desktop.launch_application(AppId::PdfReader);
+        assert_eq!(desktop.pdf_window, reader);
+        let visibility = desktop.hide_for_terminal_lock();
+        assert!(!desktop.window_info(target).unwrap().visible);
+        desktop.restore_after_terminal_unlock(visibility);
+        assert!(desktop.window_info(target).unwrap().visible);
+        desktop.apply_preferences(Preferences::default());
+        desktop.close_window(target);
+        desktop.sync_taskbar();
+        assert!(desktop.window_tasks.is_empty());
+        desktop.open_file(path);
+        assert_ne!(desktop.pdf_window, reader);
+        let reopened = WindowTarget::Pdf(desktop.pdf_window);
+        MenuEvents::on_command(&mut desktop, Handle::None, Handle::None, Commands::Exit);
+        assert!(desktop.window_info(reopened).is_none());
+        app.run();
+    }
     #[test]
     fn games_launch_restore_lock_and_close_as_independent_native_windows() {
         let _ui_lock = UI_LOCK.lock().unwrap();
@@ -1053,7 +1127,7 @@ mod tests {
         let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
         let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
         DesktopEvents::on_start(&mut desktop);
-        assert_eq!(desktop.application_commands.len(), 9);
+        assert_eq!(desktop.application_commands.len(), 10);
         let browser_command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::FileBrowser).unwrap().0;
         MenuEvents::on_command(&mut desktop, Handle::None, browser_command, Commands::LaunchApplication);
         let browser = desktop.browser_window;

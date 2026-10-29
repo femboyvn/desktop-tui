@@ -29,3 +29,28 @@ impl Drop for TestDir {
 
 // AppCUI owns one runtime per process, so UI tests must not overlap.
 pub static UI_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+pub fn two_page_pdf() -> Vec<u8> {
+    let objects = [
+        "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+        "<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << >> /Contents 5 0 R >>".to_owned(),
+        "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 300] /Resources << >> /Contents 6 0 R >>".to_owned(),
+        "1 0 0 rg 0 0 200 300 re f\n".to_owned(),
+        "0 0 1 rg 0 0 200 300 re f\n".to_owned(),
+    ];
+    let mut pdf = "%PDF-1.4\n".to_owned();
+    let mut offsets = vec![0];
+    for (index, object) in objects.iter().enumerate() {
+        offsets.push(pdf.len());
+        pdf.push_str(&format!("{} 0 obj\n", index + 1));
+        if index >= 4 { pdf.push_str(&format!("<< /Length {} >>\nstream\n{}endstream", object.len(), object)); }
+        else { pdf.push_str(object); }
+        pdf.push_str("\nendobj\n");
+    }
+    let xref = pdf.len();
+    pdf.push_str("xref\n0 7\n0000000000 65535 f \n");
+    for offset in &offsets[1..] { pdf.push_str(&format!("{offset:010} 00000 n \n")); }
+    pdf.push_str(&format!("trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n"));
+    pdf.into_bytes()
+}

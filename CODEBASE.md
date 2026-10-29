@@ -80,7 +80,8 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/runtime/latest.rs](src/runtime/latest.rs), [src/runtime/images.rs](src/runtime/images.rs), [src/runtime/files.rs](src/runtime/files.rs) | Bounded latest-request workers, image decode/geometry/render preparation, and directory enumeration. |
 | [src/runtime/processes.rs](src/runtime/processes.rs) | Managed PTY runner, independent PID observation, asynchronous process-tree cleanup, and shutdown task draining. |
 | [src/runtime/music.rs](src/runtime/music.rs) | Bounded audio input, retained encoded streams, coalesced playback worker/state snapshots, and device cleanup after the event loop. |
-| [src/ui/native/](src/ui/native/) | Native Image Viewer, File Browser, Music Player, and game windows and controls. |
+| [src/runtime/pdf.rs](src/runtime/pdf.rs) | Bounded anonymous PDF snapshots, Poppler metadata/page rendering, cancellation, timeouts, and helper reaping after the event loop. |
+| [src/ui/native/](src/ui/native/) | Native Image Viewer, PDF Reader, File Browser, Music Player, and game windows and controls. |
 | [src/ui/native/games.rs](src/ui/native/games.rs), [src/ui/native/games/](src/ui/native/games/) | Shared game window/input/rendering and bounded Snake, 2048, and Minesweeper rules. |
 | [src/config/shortcuts.rs](src/config/shortcuts.rs) | Serde types generated through `nestify::nest!`; `parse_shortcut_dir` loads, deduplicates, and sorts shortcuts. |
 | [src/ui/desktop/view.rs](src/ui/desktop/view.rs) | `MyDesktop`, app-bar menus, shortcut-to-window handles, launch/show/hide/close commands, arrangement, preferences/locking integration, and panel updates. |
@@ -162,7 +163,7 @@ The complete user example lives in [README.md](README.md). Source definitions in
 - `name` and `command` are required; top-level `args` defaults to an empty vector.
 - Optional top-level `category` defaults to User when absent or blank. System,
   Utility, User, and Games precede alphabetically ordered additional categories.
-  Native File Browser/Image Viewer/Music Player and game entries remain separate from custom
+  Native File Browser/Image Viewer/PDF Reader/Music Player and game entries remain separate from custom
   shortcuts; names matching Terminal, System Performance, or Text editor override
   external starters.
 - The `taskbar`, `window`, and `terminal` tables are required. Taskbar position is
@@ -230,6 +231,17 @@ palette updates, Terminal Lock visibility snapshots, and desktop shutdown.
 
 Native timer callbacks defer result polling while hidden, including during Terminal
 Lock. Failed terminal launch dialogs are also deferred until the window is visible.
+
+PDF Reader uses `PdfWorker` around the latest-request queue, retaining a join
+handle for shutdown after AppCUI releases its controls. Poppler's `pdfinfo` and
+`pdftoppm` must be installed on PATH. A regular file is copied into an anonymous
+Linux memfd capped at 64 MiB; helpers read that snapshot through stdin, so paths
+are never interpolated into commands. Each helper has a 15-second timeout,
+bounded stdout/stderr pipes, and kill/wait cleanup on failure or cancellation.
+Only one page raster (at most 2048 pixels per edge) is cached. The existing
+image renderer prepares its viewport; `Zoom::FitScale` applies 25–1600% relative
+to Fit without changing Image Viewer's absolute zoom limits. File Browser routes
+case-insensitive `.pdf` extensions to the reader. Errors render inside its window.
 
 The three native games share `GameWindow` and `GameControl`, with one instance per
 `GameKind` and deterministic rules in private modules. They do no I/O and spawn

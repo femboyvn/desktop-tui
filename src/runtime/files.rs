@@ -38,6 +38,9 @@ pub(crate) fn list_directory(path: &Path, hidden: bool) -> anyhow::Result<Listin
 pub(crate) fn is_image(path: &Path) -> bool {
     path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ["png", "jpg", "jpeg", "webp", "gif", "bmp"].iter().any(|candidate| ext.eq_ignore_ascii_case(candidate)))
 }
+pub(crate) fn is_pdf(path: &Path) -> bool {
+    path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+}
 
 #[cfg(test)]
 mod tests {
@@ -85,5 +88,10 @@ mod tests {
     fn detects_supported_images_case_insensitively() {
         for name in ["a.PNG", "a.jpeg", "a.jpg", "a.webp", "a.gif", "a.bmp"] { assert!(is_image(Path::new(name))); }
         for name in ["a.svg", "a.png.txt", "no extension"] { assert!(!is_image(Path::new(name))); }
+    }
+    #[test]
+    fn detects_pdf_documents_without_matching_other_extensions() {
+        for name in ["document.pdf", "- 文.PDF", "mixed.PdF"] { assert!(is_pdf(Path::new(name))); }
+        for name in ["pdf", "document.pdf.txt", "document.png"] { assert!(!is_pdf(Path::new(name))); }
     }
 }
