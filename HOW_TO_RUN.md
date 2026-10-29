@@ -9,6 +9,9 @@ current runtime limits, see [CODEBASE.md](CODEBASE.md).
 - A Unix-like environment: the child-terminal dependency uses Unix PTYs.
 - Rust and Cargo supporting edition 2024, plus a native compiler/linker. There
   is no pinned toolchain or established minimum supported Rust version.
+- A C compiler for the compiled native Music Player output backend.
+  Playback uses the host's sound device and audio session; no separate music
+  player is required.
 - Registry access for the first build, unless the required dependencies are
   already cached. Keep the tracked [Cargo.lock](Cargo.lock).
 - A real terminal for the desktop. The configured backend is CrossTerm with
@@ -66,8 +69,9 @@ an explicit shortcut directory is used. Typical locations are:
 
 No sample shortcuts are copied into the default directory. Platform-specific
 configuration paths do not establish runtime support beyond the Unix PTY
-requirement. An empty directory still provides the five starter apps through Application.
+requirement. An empty directory still provides the six starter apps through Application.
 External starters (`sh`, `btm`, and `nano`) require separately installed tools.
+Music Player is native and compiled into the desktop binary.
 
 ## Try a controlled command
 
@@ -132,5 +136,6 @@ Use [HOW_TO_TEST.md](HOW_TO_TEST.md) for checks and reporting. Follow
 the behavior rather than working around it in a shortcut.
 
 Native apps are available under **Application > System > File Browser** and
-**Application > Utility > Image Viewer**. See [README.md](README.md#applications-and-files)
-for supported image formats, limits, controls, and Text editor document handling.
+**Application > Utility > Image Viewer / Music Player**. See
+[README.md](README.md#applications-and-files) for image/audio formats, limits,
+controls, and Text editor document handling.

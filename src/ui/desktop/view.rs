@@ -9,7 +9,7 @@ use crate::platform::linux::{StatusMonitor, SystemAction, SystemActionRunner, Sy
 use crate::ui::locking::{LockSetupDialog, TerminalLockScreen};
 use crate::ui::preferences::PreferencesDialog;
 use crate::ui::terminal::TuiWindow;
-use crate::ui::native::{self, ImageWindow, BrowserWindow};
+use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow};
 use crate::ui::build_theme;
 use appcui::prelude::appbar::MenuButton;
 use appcui::prelude::menu::{Command, SingleChoice};
@@ -52,6 +52,7 @@ pub struct MyDesktop {
     pub app_windows: HashMap<usize, Handle<TuiWindow>>,
     image_window: Handle<ImageWindow>,
     browser_window: Handle<BrowserWindow>,
+    music_window: Handle<MusicWindow>,
     document_windows: Vec<Handle<TuiWindow>>,
     pub status_label: Handle<appbar::Label>,
     status: StatusMonitor,
@@ -60,7 +61,7 @@ pub struct MyDesktop {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum WindowTarget {
-    Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Help(Handle<HelpWindow>),
+    Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Help(Handle<HelpWindow>),
 }
 #[derive(Clone, PartialEq)]
 struct WindowInfo { target: WindowTarget, caption: String, visible: bool, shortcut: Option<usize> }
@@ -79,6 +80,7 @@ struct LockVisibility {
     help: Vec<(Handle<HelpWindow>, bool)>,
     image: Option<(Handle<ImageWindow>, bool)>,
     browser: Option<(Handle<BrowserWindow>, bool)>,
+    music: Option<(Handle<MusicWindow>, bool)>,
 }
 
 impl MyDesktop {
@@ -113,6 +115,7 @@ impl MyDesktop {
             status_label: Handle::None,
             image_window: Handle::None,
             browser_window: Handle::None,
+            music_window: Handle::None,
             document_windows: Vec::new(),
             status: StatusMonitor::default(),
             apps_button: Handle::None,
@@ -158,6 +161,11 @@ impl MyDesktop {
                 let caption = if title == "Image Viewer" { title.to_owned() } else { format!("Image Viewer: {title}") };
                 (caption, window.is_visible(), None)
             }
+            WindowTarget::Music(handle) => {
+                let window = self.windowt(handle)?;
+                if window.is_closing() { return None; }
+                (window.title().to_owned(), window.is_visible(), None)
+            }
             WindowTarget::Help(handle) => ("Help".into(), self.windowt(handle)?.is_visible(), None),
         };
         Some(WindowInfo { target, caption, visible, shortcut })
@@ -167,6 +175,7 @@ impl MyDesktop {
             WindowTarget::Terminal(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
+            WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
         }
     }
@@ -175,6 +184,7 @@ impl MyDesktop {
             WindowTarget::Terminal(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
+            WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
         }
     }
@@ -183,6 +193,7 @@ impl MyDesktop {
             WindowTarget::Terminal(handle) => if let Some(window) = self.window_mut(handle) { window.close_command(); },
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
+            WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.close(); },
         }
     }
@@ -296,7 +307,7 @@ impl MyDesktop {
     }
     fn hide_for_terminal_lock(&mut self) -> LockVisibility {
         self.terminal_locked = true;
-        let mut visibility = LockVisibility { terminals: Vec::new(), help: Vec::new(), image: None, browser: None };
+        let mut visibility = LockVisibility { terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None };
         for handle in self.terminal_handles() {
             if let Some(window) = self.window_mut(handle) {
                 visibility.terminals.push((handle, window.is_visible()));
@@ -313,6 +324,11 @@ impl MyDesktop {
             visibility.browser = Some((browser, window.is_visible()));
             window.set_visible(false);
         }
+        let music = self.music_window;
+        if let Some(window) = self.window_mut(music) {
+            visibility.music = Some((music, window.is_visible()));
+            window.set_visible(false);
+        }
         for handle in self.help_windows.clone() {
             if let Some(window) = self.window_mut(handle) { visibility.help.push((handle, window.is_visible())); window.set_visible(false); }
         }
@@ -325,6 +341,8 @@ impl MyDesktop {
         if let Some((handle, visible)) = visibility.image
             && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         if let Some((handle, visible)) = visibility.browser
+            && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
+        if let Some((handle, visible)) = visibility.music
             && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         for (handle, visible) in visibility.help { if let Some(window) = self.window_mut(handle) { window.set_visible(visible); } }
         self.terminal_locked = false;
@@ -401,6 +419,19 @@ impl MyDesktop {
             Err(error) => dialogs::error("Cannot open File Browser", &format!("{error:#}")),
         }
     }
+    fn open_music(&mut self) {
+        let handle = self.music_window;
+        if let Some(window) = self.window_mut(handle)
+            && !window.is_closing() {
+            window.set_visible(true);
+            window.request_focus();
+            return;
+        }
+        match MusicWindow::new() {
+            Ok(window) => { self.music_window = self.add_window(window); self.track_window(WindowTarget::Music(self.music_window)); }
+            Err(error) => dialogs::error("Cannot open Music Player", &format!("{error:#}")),
+        }
+    }
     fn open_document(&mut self, path: PathBuf) -> anyhow::Result<()> {
         let editor = self.shortcuts.iter().find(|shortcut| shortcut.name == "Text editor")
             .ok_or_else(|| anyhow::anyhow!("Configure a Text editor shortcut to open this file."))?;
@@ -423,6 +454,7 @@ impl MyDesktop {
             }
             AppId::ImageViewer => self.open_image(None),
             AppId::FileBrowser => self.open_browser(),
+            AppId::MusicPlayer => self.open_music(),
         }
     }
 
@@ -670,6 +702,7 @@ impl MenuEvents for MyDesktop {
                 WindowTarget::Terminal(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Browser(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Image(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
+                WindowTarget::Music(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Help(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
             }
         }
@@ -734,6 +767,8 @@ impl MenuEvents for MyDesktop {
                 let handle = self.image_window;
                 if let Some(window) = self.window_mut(handle) { window.shutdown(); }
                 let handle = self.browser_window;
+                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
+                let handle = self.music_window;
                 if let Some(window) = self.window_mut(handle) { window.shutdown(); }
                 self.close();
                 return;
@@ -927,7 +962,7 @@ mod tests {
         let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
         let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
         DesktopEvents::on_start(&mut desktop);
-        assert_eq!(desktop.application_commands.len(), 5);
+        assert_eq!(desktop.application_commands.len(), 6);
         let browser_command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::FileBrowser).unwrap().0;
         MenuEvents::on_command(&mut desktop, Handle::None, browser_command, Commands::LaunchApplication);
         let browser = desktop.browser_window;
@@ -939,17 +974,34 @@ mod tests {
         let viewer = desktop.image_window;
         desktop.launch_application(AppId::ImageViewer);
         assert!(desktop.image_window == viewer);
+        let music_command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::MusicPlayer).unwrap().0;
+        MenuEvents::on_command(&mut desktop, Handle::None, music_command, Commands::LaunchApplication);
+        let music = desktop.music_window;
+        desktop.hide_window(WindowTarget::Music(music));
+        desktop.launch_application(AppId::MusicPlayer);
+        assert!(desktop.music_window == music);
+        assert!(desktop.window_mut(music).unwrap().is_visible());
         desktop.window_mut(viewer).unwrap().set_visible(false);
         let visibility = desktop.hide_for_terminal_lock();
         assert!(!desktop.window_mut(browser).unwrap().is_visible());
         assert!(!desktop.window_mut(viewer).unwrap().is_visible());
+        assert!(!desktop.window_mut(music).unwrap().is_visible());
         let mut preferences = desktop.preferences.clone();
         preferences.desktop.surface = Rgb(1,2,3);
         desktop.apply_preferences(preferences);
         desktop.restore_after_terminal_unlock(visibility);
         assert!(desktop.window_mut(browser).unwrap().is_visible());
         assert!(!desktop.window_mut(viewer).unwrap().is_visible());
+        assert!(desktop.window_mut(music).unwrap().is_visible());
+        desktop.hide_window(WindowTarget::Music(music));
+        let visibility = desktop.hide_for_terminal_lock();
+        desktop.restore_after_terminal_unlock(visibility);
+        assert!(!desktop.window_mut(music).unwrap().is_visible());
+        desktop.focus_window(WindowTarget::Music(music));
         desktop.arrange_windows(desktop::ArrangeWindowsMethod::Grid);
+        assert!(matches!(WindowEvents::on_cancel(desktop.window_mut(music).unwrap()), ActionRequest::Allow));
+        desktop.launch_application(AppId::MusicPlayer);
+        assert!(desktop.music_window != music);
         desktop.window_mut(viewer).unwrap().shutdown();
         desktop.open_image(Some(image));
         assert!(desktop.image_window != viewer);

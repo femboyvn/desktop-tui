@@ -26,6 +26,9 @@ The focused command guides are [HOW_TO_RUN.md](HOW_TO_RUN.md) and
 ## Setup and commands
 
 Use a Rust toolchain that supports edition 2024, Cargo, and a native compiler/linker.
+The native Music Player uses a C compiler to build its miniaudio device bridge;
+Symphonia handles decoding and seeking in Rust. Its codecs and backend are compiled into the desktop;
+runtime playback uses the host's working audio drivers and session.
 Install the rustfmt and Clippy components if needed:
 
 ```sh
@@ -76,7 +79,8 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/config/catalog.rs](src/config/catalog.rs) | Starter merge, application IDs, categories, and native/external catalog entries. |
 | [src/runtime/latest.rs](src/runtime/latest.rs), [src/runtime/images.rs](src/runtime/images.rs), [src/runtime/files.rs](src/runtime/files.rs) | Bounded latest-request workers, image decode/geometry/render preparation, and directory enumeration. |
 | [src/runtime/processes.rs](src/runtime/processes.rs) | Managed PTY runner, independent PID observation, asynchronous process-tree cleanup, and shutdown task draining. |
-| [src/ui/native/](src/ui/native/) | Native Image Viewer and File Browser windows and controls. |
+| [src/runtime/music.rs](src/runtime/music.rs) | Bounded audio input, retained encoded streams, coalesced playback worker/state snapshots, and device cleanup after the event loop. |
+| [src/ui/native/](src/ui/native/) | Native Image Viewer, File Browser, and Music Player windows and controls. |
 | [src/config/shortcuts.rs](src/config/shortcuts.rs) | Serde types generated through `nestify::nest!`; `parse_shortcut_dir` loads, deduplicates, and sorts shortcuts. |
 | [src/ui/desktop/view.rs](src/ui/desktop/view.rs) | `MyDesktop`, app-bar menus, shortcut-to-window handles, launch/show/hide/close commands, arrangement, preferences/locking integration, and panel updates. |
 | [src/ui/terminal/window.rs](src/ui/terminal/window.rs) | `TuiWindow`, child command/channels, canvas updates, resize synchronization, shutdown, file/folder selection. |
@@ -142,7 +146,10 @@ modules and expose shared types and entry points through crate-scoped re-exports
    cleanup. A supervisor uses bmart (also used by virtual-terminal) to stop the
    child process tree asynchronously and retains the runner until child wait
    completes. Desktop Exit includes native windows and document handles; `main`
-   drains managed runner tasks after the UI loop releases its controls.
+   drains managed runner tasks and joins audio workers after the UI loop releases
+   its controls. Music workers coalesce desired controls, stream from bounded
+   encoded input. A bounded PCM buffer feeds a nonblocking audio callback;
+   closure silences it immediately, and device teardown joins its callback thread.
    The desktop denies AppCUI's Escape close request so an Escape prefix from an
    Alt sequence cannot exit the application.
 
@@ -154,8 +161,9 @@ The complete user example lives in [README.md](README.md). Source definitions in
 - `name` and `command` are required; top-level `args` defaults to an empty vector.
 - Optional top-level `category` defaults to User when absent or blank. System,
   Utility, User, and Games precede alphabetically ordered additional categories.
-  Native File Browser/Image Viewer entries remain separate from custom shortcuts;
-  names matching Terminal, System Performance, or Text editor override starters.
+  Native File Browser/Image Viewer/Music Player entries remain separate from custom
+  shortcuts; names matching Terminal, System Performance, or Text editor override
+  external starters.
 - The `taskbar`, `window`, and `terminal` tables are required. Taskbar position is
   optional; `additional_commands` defaults to empty. Each additional command has
   a required name, executable, and argument list.

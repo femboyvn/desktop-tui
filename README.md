@@ -25,7 +25,7 @@ Features:
 - [x] Change tilling options
 - [x] Can let the user select a file or a folder to use its path as a command argument
 - [x] Categorized Application menu with starter launchers
-- [x] Native File Browser and Image Viewer
+- [x] Native File Browser, Image Viewer, and Music Player
 - [x] Clock
 - [x] Offline Help and saved desktop/terminal palettes
 - [x] Linux screen lock, shutdown, and restart controls
@@ -140,7 +140,7 @@ visible windows when space is limited; selecting one opens its Focus/Hide/Close
 actions. The status panel remains responsive.
 External windows with additional commands expose them through **App commands...**.
 
-Five starters are available even with an empty shortcut directory:
+Six starters are available even with an empty shortcut directory:
 
 | Category | Application | Executable |
 | --- | --- | --- |
@@ -149,6 +149,7 @@ Five starters are available even with an empty shortcut directory:
 | Utility | System Performance | `btm` ([bottom](https://github.com/ClementTsang/bottom)) |
 | Utility | Image Viewer | Native |
 | Utility | Text editor | `nano` |
+| Utility | Music Player | Native (compiled audio engine) |
 
 The System Performance starter uses bottom’s `default-light` theme for readable
 text on the default light terminal background. Override its shortcut to choose
@@ -157,8 +158,27 @@ a different theme or arguments.
 External tools must be installed separately and available on PATH. A shortcut
 named Terminal, System Performance, or Text editor replaces that external
 starter, including its command, options, and category. A missing category
-places a shortcut in User. File Browser and Image Viewer have their own native
+places a shortcut in User. File Browser, Image Viewer, and Music Player have their own native
 identities even when custom shortcuts use the same names. No games are bundled.
+
+**Music Player** is built into Desktop-TUI; it requires no separate player installation.
+Open **Application > Utility > Music Player**, then click **Open** or press **Ctrl+O**
+to select a local MP3, WAV, FLAC, or Ogg Vorbis file (up to 128 MiB, eight channels,
+and 8–192 kHz). Click
+**Play/Pause** or press **Space**, use **S** to stop, **Left/Right** to seek ten
+seconds, and **+/-** to change volume by 5%. The window shows the filename,
+elapsed/total time, volume, and any errors. It streams decoded samples while
+retaining the bounded encoded file in memory; file loading and audio operations
+run outside the UI thread. This version plays one file at a time.
+
+Hide the window to keep playing, then restore it through **Application > Background
+windows**. Terminal Lock also preserves playback; Close and Desktop Exit stop it.
+The compiled [Symphonia decoders](https://github.com/pdeljanov/Symphonia) and
+[miniaudio output backend](https://github.com/mackron/miniaudio) use the system's
+working sound device and audio session. Building from source needs a C compiler.
+The optional [mp3blaster shortcut](shortcuts/mp3blaster.toml)
+launches the separate external player if you prefer its interface; it is independent
+of the native Music Player and still needs mp3blaster installed on PATH.
 
 **File Browser** starts in your home directory. Enter an absolute or relative
 path in the path field and press Enter, or open a directory in the listing.

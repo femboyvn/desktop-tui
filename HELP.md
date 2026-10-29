@@ -14,12 +14,12 @@ System, Utility, User, and Games are always present; extra categories
 follow alphabetically. Empty categories show No apps yet.
 
 File Browser, Terminal (sh), System Performance (btm / bottom),
-Image Viewer, and Text editor (nano) are available with an empty
-shortcut folder. External tools must be installed separately.
+Image Viewer, Text editor (nano), and the native Music Player are
+available with an empty shortcut folder. External tools must be installed separately.
 System Performance uses bottom’s default-light theme to match the
 default terminal background. A custom shortcut can choose another theme.
 Shortcuts with the same external starter names replace them.
-Native browser/viewer identities remain separate.
+Native browser/viewer/player identities remain separate.
 
 Window buttons after Tilling | show only open, visible windows.
 A button focuses its window and offers Hide (run in background) and Close.
@@ -28,6 +28,26 @@ additional commands, which can open a file or
 folder picker when a shortcut uses `<FILE_PATH>` or
 `<FOLDER_PATH>`. Additional commands open separate windows.
 Choose Close to stop the primary application process.
+
+## Music Player
+
+Application > Utility > Music Player opens the built-in player. No
+separate player installation is needed. Click Open or press Ctrl+O to
+choose a local MP3, WAV, FLAC, or Ogg Vorbis file, up to 128 MiB and eight channels.
+Sample rates from 8 to 192 kHz are supported.
+Click Play/Pause or press Space; S stops playback. Left/Right seek ten
+seconds and +/- changes volume by 5%. The window shows the filename,
+elapsed/total time, volume, and inline errors. One file plays at a time.
+
+Hide (run in background) keeps playing; Application > Background windows
+restores the player. Terminal Lock preserves playback. Close and Desktop
+Exit stop it. File reads and audio operations run in a background worker.
+The encoded file stays in bounded memory while decoded samples stream.
+
+The compiled audio engine uses the system's sound device and audio
+session. If output is unavailable, check system sound and reopen the file.
+The optional shortcuts/mp3blaster.toml example is an independent external
+player; only that example requires mp3blaster to be installed separately.
 
 ## File Browser
 

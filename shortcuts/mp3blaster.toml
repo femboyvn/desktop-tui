@@ -1,0 +1,21 @@
+name = "mp3blaster"
+category = "Utility"
+
+# Install mp3blaster separately; the desktop launches its interactive TUI.
+command = "mp3blaster"
+args = []
+
+[taskbar]
+
+[[taskbar.additional_commands]]
+name = "Open audio file"
+command = "mp3blaster"
+args = ["--dont-quit", "<FILE_PATH>"]
+
+[window]
+resizable = true
+close_button = true
+fixed_position = false
+
+[terminal]
+padding = [0, 0]

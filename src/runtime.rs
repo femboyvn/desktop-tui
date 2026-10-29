@@ -7,3 +7,4 @@ pub(crate) mod latest;
 pub(crate) mod images;
 pub(crate) mod files;
 pub(crate) mod processes;
+pub(crate) mod music;

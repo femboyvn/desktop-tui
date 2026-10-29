@@ -51,6 +51,7 @@ async fn main() -> anyhow::Result<()> {
 
     app.run();
 
+    runtime::music::finish_shutdown();
     runtime::processes::finish_shutdown().await;
     Ok(())
 }
