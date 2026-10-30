@@ -126,7 +126,7 @@ menu item to launch it. Check only the matrix rows relevant to the patch.
 | Native PDF reader | With Poppler installed, open multi-page text and scanned PDFs from Utility and File Browser. Check Ctrl+O and cancellation, Prev/Next, PgUp/PgDn, P/N, Home/End, fit, zoom/wheel, pan/drag, tiny viewports, and resize. Test missing helpers, missing/invalid/oversized/password-protected input, spaces/Unicode/opaque paths, hide/restore, theme, tiling, lock, close while loading, reopen, and Exit; no helper processes should remain. |
 | Native file browser | Navigate home, relative/absolute paths, Up, Refresh, hidden files, unreadable folders, and large directories. Open images and multiple editor documents. Use spaces, Unicode, non-UTF-8 names, and literal placeholder text; confirm each selected path reaches the editor as one argument and a running editor remains open. |
 | Native ASCII Paint | Launch from Utility and confirm singleton restore. Create default/minimum/maximum canvases; reject invalid sizes. Click the bottom-left size or use Resize/Ctrl+R to crop/expand; undo/redo dimensions and cropped RGB cells. Check bottom-right cursor coordinates, footer alignment, and footer clicks never painting. Convert images with Image to ASCII/Ctrl+I in color/monochrome, including alpha, aspect correction, output limits, unsaved prompting, cancellation, failed decode, and saving/exporting the converted art. Select printable brushes, exact RGB colors, and left/right palette swatches. Paint/erase clicks and continuous drags, toggle Eraser, use arrows/Space/Enter/Backspace/Delete, wheel in both axes, and PgUp/PgDn. Check 64-action grouped undo/redo and undoable Clear. Save/reopen colored projects, import LF/CRLF/tab text, export padded colorless LF text without clearing dirty state, and route `.asciipaint` from File Browser while `.txt`/`.asc` still use Text editor. Reject invalid/version/size/dimension/non-ASCII files and failed destinations without losing art or replacing existing files. Cancel pickers and Save/Discard/Cancel for New/Open/Close/Exit/Shutdown/Restart; a failed or canceled save must stop continuation and leave other apps running. Hide/restore and lock/unlock during I/O or pending prompts, resize to tiny/large viewports, tile, and change theme while checking cell RGB and canvas preservation. Test actual power actions only in a disposable VM. |
-| Native music player | Open MP3, WAV, FLAC, and Ogg Vorbis files from the picker and File Browser, including mixed-case extensions and spaces/Unicode/opaque filenames. Confirm browser opens reuse and restore the player, replace the track, and never open an editor. Check click/keyboard Open, Play/Pause, Stop, ten-second seeking, volume bounds, progress, invalid/missing/oversized input, and unavailable output devices. Hide, lock, restore, tile, resize, and change theme while playing. Close during loading, reopen, then Exit; playback must stop. Use a working real audio session to verify audible output. |
+| Native music player | Open MP3, WAV, FLAC, and Ogg Vorbis files from the picker and File Browser, including mixed-case extensions and spaces/Unicode/opaque filenames. Confirm browser opens reuse and restore the player, replace the track, and never open an editor. Check click/keyboard Open, Play/Pause, Stop, ten-second seeking, volume bounds, progress, invalid/missing/oversized input, and unavailable output devices. Verify audible playback alongside the live ASCII spectrum, including volume/mute, falling peaks, silence, and clearing on pause, stop, seek, replacement, completion, errors, and close. Hide/restore and lock/unlock during playback must show current levels. Tile, resize to narrow/tiny surfaces, and change theme while playing; controls/help/errors retain priority and columns stay thin, the themed rectangle encloses bars/peaks and frequency labels (1k, 2k, 4k, 8k, 16k) stay aligned below its bottom border without overlapping, and bars merge or disappear as space runs out. Check an 8 kHz file ends at 4k. Close during loading, reopen, then Exit; playback must stop. Use a working real audio session for these checks. |
 | Native games | Open Snake, 2048, and Minesweeper from Application > Games. Check arrows/WASD, R restart, scores, 2048 merges, and Minesweeper Space/Enter/F plus left/right clicks. Snake must pause on lost focus, hiding, locking, and a small window; Space/P resumes. Hide/restore each board, close/reopen, tile, resize, change theme, then Exit. Verify readable instructions and the resize prompt at small sizes. |
 | Mixed window lifecycle | Tile native and terminal/document windows together; change theme and Terminal Lock with some hidden. Restore the original visibility. Close and reopen native windows, close individual documents, then Exit and check for leftover child processes. |
 | Child lifecycle | Exercise normal exit, a missing executable, menu Close, Ctrl+C, and Desktop Exit. Observe errors and responsiveness, and use the host's process tools to check for leftover children. |
@@ -180,3 +180,22 @@ cargo test --locked ascii_paint
 ```
 
 These headless tests do not replace the ASCII Paint real-terminal matrix above.
+
+Music Player spectrum tests live in `src/runtime/music/spectrum.rs`; they use
+synthetic bass/mid/treble tones, silence, fixed volume scaling, opposite-phase
+stereo, eight-channel input, sample rates from 8 to 192 kHz, bounded capture, and
+elapsed-time decay. `src/runtime/music.rs` exercises callback contention and
+post-volume capture without audio hardware, plus transport/history resets.
+`src/ui/native/music_player.rs` checks exact ASCII bars/peaks, thin columns on wide
+surfaces, rectangle corners/edges with labels below the frame, frequency-label
+placement and crowding, theme attributes, wrapped errors,
+narrow/tiny surfaces, spectrum-only refreshes, and restoration. The runtime tests
+also preserve an 8 kHz track's 4k axis endpoint across pause, stop, and completion.
+Run the focused checks before the full suite:
+
+```sh
+cargo test --locked music
+```
+
+These checks do not open an output device or verify audible/animated playback;
+record the Music Player real-terminal cases above separately.

@@ -80,6 +80,7 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/runtime/latest.rs](src/runtime/latest.rs), [src/runtime/images.rs](src/runtime/images.rs), [src/runtime/files.rs](src/runtime/files.rs) | Bounded latest-request workers, image decode/geometry/render preparation, and directory enumeration. |
 | [src/runtime/processes.rs](src/runtime/processes.rs) | Managed PTY runner, independent PID observation, asynchronous process-tree cleanup, and shutdown task draining. |
 | [src/runtime/music.rs](src/runtime/music.rs) | Bounded audio input, retained encoded streams, coalesced playback worker/state snapshots, and device cleanup after the event loop. |
+| [src/runtime/music/spectrum.rs](src/runtime/music/spectrum.rs) | Preallocated bounded capture, per-channel Hann/FFT analysis, 16 logarithmic bands, and bar/peak decay. |
 | [src/runtime/ascii_paint.rs](src/runtime/ascii_paint.rs) | Bounded RGB cell document, grouped undo/redo, project/text validation, atomic writes, and one-operation file worker. |
 | [src/ui/native/ascii_paint.rs](src/ui/native/ascii_paint.rs) | Paint canvas input/rendering, brush/dimensions dialogs, file actions, and unsaved-action guard. |
 | [src/runtime/pdf.rs](src/runtime/pdf.rs) | Bounded anonymous PDF snapshots, Poppler metadata/page rendering, cancellation, timeouts, and helper reaping after the event loop. |
@@ -213,6 +214,29 @@ These describe the current implementation, not promises to preserve defects:
   is not a rule to copy into new fallible code. See the coding conventions.
 
 ## Native application workers
+
+Music Player's nonblocking audio callback captures recently played, post-volume
+interleaved samples into a preallocated ring holding one FFT window. Capture uses
+`try_lock`; contention skips visualization capture while audio continues. The
+100 ms playback worker copies and drains the ring, releases its lock, then uses
+Symphonia's FFT separately for each channel and combines channel power, preserving
+opposite-phase stereo. FFT length is the next power of two covering 50 ms, capped
+at 16,384 frames per channel. A Hann window and energy normalization feed 16
+logarithmic bands from 40 Hz to min(16 kHz, Nyquist) with fixed −60–0 dB scaling.
+Snapshots carry default-zero normalized levels and peaks, plus the analysis upper
+frequency for accurate axis labels even when paused, stopped, or finished. Attack
+is immediate; bars fall one full height in 250 ms and peaks in one second, using elapsed worker
+time. Empty capture decays to silence. Transport changes clear captured history
+and display state; a visualization revision preserves resets across coalesced
+pause/resume. Closure silences the callback immediately and worker teardown clears
+capture. Hidden/locked windows keep analysis running and poll current snapshots on
+restore. The native music control paints theme-colored ASCII bars beneath wrapped
+text, limits columns to two characters, and merges bands to fit narrow surfaces.
+A rectangle using the theme's line color encloses the bars and peaks; labels sit
+outside its bottom edge on the same logarithmic frequency axis up to the track's
+analysis limit. Overlapping labels are omitted. Three bar rows, two border rows,
+and a label row must fit after the text. The default player window uses 70% of
+desktop height to leave space for the frame.
 
 Preference > Background loads ASCII text through a latest-request worker, then
 keeps the validated copy in the dialog draft until Save. Its read-only preview

@@ -9,6 +9,54 @@ fn time_label(seconds: f64) -> String {
     let seconds = seconds.max(0.0) as u64;
     format!("{}:{:02}", seconds / 60, seconds % 60)
 }
+fn paint_spectrum(surface: &mut Surface, theme: &Theme, snapshot: &Snapshot, top: usize) {
+    let frame_width = surface.size().width.min(4096) as usize;
+    let rows = (surface.size().height as usize).saturating_sub(top);
+    if frame_width < 3 || rows < 6 { return; }
+    // Reserve the border and label row, leaving at least three rows for bars.
+    surface.draw_rect(Rect::new(0, top as i32, (frame_width - 1) as i32, (top + rows - 2) as i32), LineType::Single, theme.lines.normal);
+    let width = frame_width - 2;
+    let height = rows - 3;
+    let top = top + 1;
+    let bars = width.div_ceil(2).min(snapshot.levels.len());
+    let bar_character = Character::with_attributes('#', theme.text.enphasized_1);
+    let peak_character = Character::with_attributes('-', theme.text.enphasized_2);
+    for bar in 0..bars {
+        let from = bar * snapshot.levels.len() / bars;
+        let to = (bar + 1) * snapshot.levels.len() / bars;
+        let level = snapshot.levels[from..to].iter().copied().fold(0.0_f32, f32::max).clamp(0.0, 1.0);
+        let peak = snapshot.peaks[from..to].iter().copied().fold(level, f32::max).clamp(0.0, 1.0);
+        // Keep columns thin as the window grows, centered in their band slots.
+        let slot_left = bar * (width + 1) / bars;
+        let slot_end = ((bar + 1) * (width + 1) / bars - 1).min(width);
+        let bar_width = (slot_end - slot_left).min(2);
+        let left = 1 + slot_left + (slot_end - slot_left - bar_width) / 2;
+        let right = left + bar_width - 1;
+        let filled = (level * height as f32).ceil() as usize;
+        for row in top + height - filled..top + height {
+            surface.fill_horizontal_line(left as i32, row as i32, right as i32, bar_character);
+        }
+        let peak_height = (peak * height as f32).ceil() as usize;
+        if peak_height > 0 {
+            surface.fill_horizontal_line(left as i32, (top + height - peak_height) as i32, right as i32, peak_character);
+        }
+    }
+    let labels = [(40.0_f32,"40"), (63.0,"63"), (125.0,"125"), (250.0,"250"), (500.0,"500"),
+        (1000.0,"1k"), (2000.0,"2k"), (4000.0,"4k"), (8000.0,"8k"), (16000.0,"16k")];
+    let log_range = (snapshot.spectrum_max_hz / 40.0).ln();
+    let mut next_label = width + 1;
+    // Prefer the high-frequency endpoint when labels would collide. Draw only
+    // whole labels, with a space between them, on the same log scale as the FFT.
+    for (frequency, label) in labels.into_iter().rev() {
+        if frequency > snapshot.spectrum_max_hz || label.len() > width { continue; }
+        let center = ((frequency / 40.0).ln() / log_range * (width - 1) as f32).round() as usize;
+        let start = center.saturating_sub(label.len() / 2).min(width - label.len());
+        if start + label.len() < next_label {
+            surface.write_string((start + 1) as i32, (top + height + 1) as i32, label, theme.text.normal, false);
+            next_label = start;
+        }
+    }
+}
 #[CustomControl(overwrite = OnPaint+OnKeyPressed+OnMouseEvent)]
 struct MusicStatus { player: MusicPlayer, snapshot: Snapshot }
 impl MusicStatus {
@@ -50,6 +98,7 @@ impl OnPaint for MusicStatus {
                 row += 1;
             }
         }
+        paint_spectrum(surface, theme, snapshot, row);
     }
 }
 
@@ -59,7 +108,7 @@ impl MusicWindow {
     pub fn new() -> anyhow::Result<Self> {
         let status = MusicStatus::new()?;
         let mut window = Self {
-            base: Window::new("Music Player", layout!("a:c,w:75%,h:60%"), window::Flags::Sizeable),
+            base: Window::new("Music Player", layout!("a:c,w:75%,h:70%"), window::Flags::Sizeable),
             status: Handle::None, closing: false,
         };
         window.status = window.add(status);
@@ -143,6 +192,173 @@ impl WindowEvents for MusicWindow {
 mod tests {
     use super::*;
     use crate::test_support::{TestDir, UI_LOCK};
+    fn span(surface: &Surface, left: i32, y: i32, width: u32) -> String {
+        (0..width).map(|x| surface.char(left + x as i32, y).unwrap().code).collect()
+    }
+    fn row(surface: &Surface, y: i32) -> String {
+        span(surface, 0, y, surface.size().width)
+    }
+    #[test]
+    fn spectrum_rectangle_encloses_bars_and_keeps_labels_below_its_bottom_edge() {
+        let mut snapshot = Snapshot::default();
+        snapshot.levels.fill(1.0);
+        snapshot.peaks.fill(1.0);
+        let mut theme = Theme::new(Themes::Light);
+        theme.lines.normal.foreground = Color::RGB(21, 43, 65);
+        let mut surface = Surface::new(5,6);
+        surface.clear(Character::with_attributes(' ', theme.window.normal));
+        paint_spectrum(&mut surface, &theme, &snapshot, 0);
+        assert_eq!(row(&surface, 0), "┌───┐");
+        assert_eq!(row(&surface, 1), "│- -│");
+        assert_eq!(row(&surface, 2), "│# #│");
+        assert_eq!(row(&surface, 3), "│# #│");
+        assert_eq!(row(&surface, 4), "└───┘");
+        assert_eq!(row(&surface, 5), " 16k ");
+        assert_eq!(surface.char(0,0).unwrap().foreground, theme.lines.normal.foreground);
+        for (width, height) in [(1,6), (2,6), (5,5)] {
+            let mut surface = Surface::new(width,height);
+            surface.clear(Character::with_attributes(' ', theme.window.normal));
+            paint_spectrum(&mut surface, &theme, &snapshot, 0);
+            for y in 0..height { assert!(row(&surface, y as i32).chars().all(|ch| ch == ' ')); }
+        }
+    }
+    #[test]
+    fn spectrum_columns_stay_thin_and_frequency_labels_follow_the_logarithmic_axis() {
+        let mut snapshot = Snapshot::default();
+        snapshot.levels.fill(1.0);
+        snapshot.peaks.fill(1.0);
+        let theme = Theme::new(Themes::Light);
+        let mut surface = Surface::new(162,7);
+        surface.clear(Character::with_attributes(' ', theme.window.normal));
+        paint_spectrum(&mut surface, &theme, &snapshot, 0);
+        let bars = span(&surface, 1, 2, 160);
+        assert_eq!(bars.matches('#').count(), 32);
+        assert!(bars.split_whitespace().all(|bar| bar == "##"));
+        let mut surface = Surface::new(66,7);
+        surface.clear(Character::with_attributes(' ', theme.window.normal));
+        paint_spectrum(&mut surface, &theme, &snapshot, 0);
+        let labels = span(&surface, 1, 6, 64);
+        for (start, label) in [(0,"40"), (4,"63"), (11,"125"), (18,"250"), (26,"500"), (33,"1k"), (40,"2k"), (47,"4k"), (55,"8k"), (61,"16k")] {
+            assert_eq!(&labels[start..start + label.len()], label, "{labels}");
+        }
+        assert_eq!(surface.char(34,6).unwrap().foreground, theme.text.normal.foreground);
+        snapshot.spectrum_max_hz = 4000.0;
+        surface.clear(Character::with_attributes(' ', theme.window.normal));
+        paint_spectrum(&mut surface, &theme, &snapshot, 0);
+        let labels = span(&surface, 1, 6, 64);
+        assert!(labels.ends_with("4k"), "{labels}");
+        assert!(!labels.contains("8k") && !labels.contains("16k"));
+        // Crowded labels are omitted whole; even tiny axes stay within bounds.
+        let mut surface = Surface::new(7,7);
+        surface.clear(Character::with_attributes(' ', theme.window.normal));
+        paint_spectrum(&mut surface, &theme, &snapshot, 0);
+        assert_eq!(row(&surface, 6), " 63 4k ");
+    }
+    #[test]
+    fn spectrum_renders_exact_bars_peaks_and_live_theme_colors_below_help() {
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let app = App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let mut status = MusicStatus::new().unwrap();
+        status.snapshot.levels[1] = 0.5;
+        status.snapshot.peaks[1] = 1.0;
+        status.snapshot.levels[2] = 1.0;
+        status.snapshot.peaks[2] = 1.0;
+        status.snapshot.levels[15] = 1.0;
+        status.snapshot.peaks[15] = 1.0;
+        for preset in [Themes::Light, Themes::DarkGray, Themes::Default] {
+            let mut theme = Theme::new(preset);
+            theme.text.enphasized_1.foreground = Color::RGB(23, 45, 67);
+            theme.text.enphasized_2.foreground = Color::RGB(89, 123, 234);
+            let mut surface = Surface::new(66, 14);
+            status.on_paint(&mut surface, &theme);
+            assert!(row(&surface, 6).starts_with("+/- Volume"));
+            assert!(row(&surface, 7).starts_with('┌') && row(&surface, 7).ends_with('┐'));
+            assert_eq!(span(&surface, 1, 8, 12), "    --  --  ");
+            assert_eq!(span(&surface, 1, 9, 12), "        ##  ");
+            assert_eq!(span(&surface, 1, 10, 12), "    ##  ##  ");
+            assert_eq!(span(&surface, 1, 11, 12), "    ##  ##  ");
+            assert_eq!(span(&surface, 61, 11, 4), " ## ");
+            assert!(row(&surface, 12).starts_with('└') && row(&surface, 12).ends_with('┘'));
+            assert!(row(&surface, 13).contains("1k"));
+            assert_eq!(surface.char(5, 10).unwrap().foreground, theme.text.enphasized_1.foreground);
+            assert_eq!(surface.char(5, 8).unwrap().foreground, theme.text.enphasized_2.foreground);
+            assert_eq!(surface.char(5, 10).unwrap().background, theme.window.normal.background);
+        }
+        status.player.close();
+        app.run();
+    }
+    #[test]
+    fn narrow_spectrum_merges_neighboring_bands_and_tiny_surfaces_prioritize_text() {
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let app = App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let mut status = MusicStatus::new().unwrap();
+        status.snapshot.levels = [1.0; 16];
+        status.snapshot.peaks = [1.0; 16];
+        let theme = Theme::new(Themes::Light);
+        for (width, height) in [(0,0), (1,1), (64,9), (64,10), (64,12), (20,8)] {
+            let mut surface = Surface::new(width, height);
+            status.on_paint(&mut surface, &theme);
+            for y in 7..height { assert!(!row(&surface, y as i32).contains('#')); }
+        }
+        // Two help lines occupy 21 rows; three bar rows, a frame, and labels fit.
+        status.snapshot.levels = [0.0; 16];
+        status.snapshot.peaks = [0.0; 16];
+        status.snapshot.levels[4] = 1.0;
+        status.snapshot.peaks[4] = 1.0;
+        status.snapshot.levels[9] = 0.5;
+        status.snapshot.peaks[9] = 1.0;
+        status.snapshot.levels[15] = 1.0;
+        status.snapshot.peaks[15] = 1.0;
+        let mut surface = Surface::new(5,32);
+        status.on_paint(&mut surface, &theme);
+        assert_eq!(row(&surface, 26), "┌───┐");
+        assert_eq!(row(&surface, 27), "│- -│");
+        assert_eq!(row(&surface, 28), "│# #│");
+        assert_eq!(row(&surface, 29), "│# #│");
+        assert_eq!(row(&surface, 30), "└───┘");
+        assert_eq!(row(&surface, 31), " 16k ");
+        status.player.close();
+        app.run();
+    }
+    #[test]
+    fn wrapped_errors_keep_all_rows_before_spectrum() {
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let app = App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let mut status = MusicStatus::new().unwrap();
+        status.snapshot.error = Some("Cannot open audio output. Check system sound, then reopen the file.".into());
+        status.snapshot.levels = [1.0; 16];
+        status.snapshot.peaks = [1.0; 16];
+        let theme = Theme::new(Themes::Light);
+        let mut surface = Surface::new(20,10);
+        status.on_paint(&mut surface, &theme);
+        assert_eq!(row(&surface, 5), "Cannot open audio ou");
+        assert_eq!(row(&surface, 6), "tput. Check system s");
+        assert_eq!(row(&surface, 7), "ound, then reopen th");
+        assert_eq!(row(&surface, 8), "e file.             ");
+        assert_eq!(row(&surface, 9), "                    ");
+        status.player.close();
+        app.run();
+    }
+    #[test]
+    fn spectrum_only_changes_refresh_and_restoration_uses_current_snapshot() {
+        let _ui_lock = UI_LOCK.lock().unwrap();
+        let app = App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let mut window = MusicWindow::new().unwrap();
+        let handle = window.status;
+        assert!(!window.refresh());
+        window.control_mut(handle).unwrap().snapshot.levels[0] = 0.5;
+        assert!(matches!(TimerEvents::on_update(&mut window, 0), EventProcessStatus::Processed));
+        assert_eq!(window.control(handle).unwrap().snapshot.levels, [0.0; 16]);
+        window.control_mut(handle).unwrap().snapshot.peaks[15] = 1.0;
+        window.set_visible(false);
+        assert!(matches!(TimerEvents::on_update(&mut window, 0), EventProcessStatus::Ignored));
+        window.set_visible(true);
+        assert!(matches!(TimerEvents::on_update(&mut window, 0), EventProcessStatus::Processed));
+        assert_eq!(window.control(handle).unwrap().snapshot.peaks, [0.0; 16]);
+        assert!(!window.refresh());
+        window.shutdown();
+        app.run();
+    }
     #[test]
     fn opening_document_paths_preserves_os_bytes_and_replaces_the_selected_track() {
         use std::os::unix::ffi::OsStringExt;

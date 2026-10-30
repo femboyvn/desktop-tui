@@ -30,6 +30,7 @@ Use [HOW_TO_RUN.md](HOW_TO_RUN.md) for a controlled launch environment and
 | ANSI, colors, cursor, or text | `src/runtime/terminal.rs` | Controlled byte inputs and surface/state assertions, including affected boundary cases. |
 | Child command, canvas, resize, dialogs | `src/ui/terminal/window.rs` | Test extracted pure logic where useful; manually exercise the lifecycle/UI paths. |
 | Menu, launch, arrangement, clock | `src/ui/desktop/view.rs`, `src/ui/desktop/panel.rs` | Test deterministic logic; manually check app-bar/window integration. |
+| Music playback, spectrum, status rendering | `src/runtime/music.rs`, `src/runtime/music/spectrum.rs`, `src/ui/native/music_player.rs` | Synthetic tones, callback contention/volume, transport resets, exact surface cells, and spectrum-only refreshes; real audio/terminal checks. |
 
 Prefer private helpers in the owning module. Keep filesystem, process, dialog,
 or UI effects at the boundary when that gives the core logic a simple testable

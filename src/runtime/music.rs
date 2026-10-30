@@ -12,7 +12,10 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, Weak};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+mod spectrum;
+use spectrum::{BANDS, Capture, Spectrum};
 
 pub(crate) const MAX_AUDIO_BYTES: u64 = 128 * 1024 * 1024;
 
@@ -22,23 +25,29 @@ pub(crate) enum PlaybackState { Idle, Loading, Playing, Paused, Stopped, Finishe
 pub(crate) struct Snapshot {
     pub path: Option<PathBuf>, pub state: PlaybackState, pub position: f64,
     pub duration: f64, pub volume: f32, pub error: Option<String>,
+    pub levels: [f32; BANDS], pub peaks: [f32; BANDS],
+    pub spectrum_max_hz: f32,
     seek_revision: u64,
 }
 impl Default for Snapshot {
     fn default() -> Self {
-        Self { path: None, state: PlaybackState::Idle, position: 0.0, duration: 0.0, volume: 0.7, error: None, seek_revision: 0 }
+        Self { path: None, state: PlaybackState::Idle, position: 0.0, duration: 0.0, volume: 0.7, error: None, seek_revision: 0,
+            levels: [0.0; BANDS], peaks: [0.0; BANDS], spectrum_max_hz: 16000.0 }
     }
+}
+impl Snapshot {
+    fn clear_spectrum(&mut self) { self.levels.fill(0.0); self.peaks.fill(0.0); }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Transport { Playing, Paused, Stopped }
 #[derive(Clone)]
 struct Request {
     revision: u64, generation: u64, path: Option<PathBuf>, transport: Transport,
-    seek_revision: u64, seek_to: f64, volume: f32,
+    seek_revision: u64, seek_to: f64, volume: f32, spectrum_revision: u64,
 }
 impl Default for Request {
     fn default() -> Self {
-        Self { revision: 0, generation: 0, path: None, transport: Transport::Stopped, seek_revision: 0, seek_to: 0.0, volume: 0.7 }
+        Self { revision: 0, generation: 0, path: None, transport: Transport::Stopped, seek_revision: 0, seek_to: 0.0, volume: 0.7, spectrum_revision: 0 }
     }
 }
 struct Shared { request: Request, snapshot: Snapshot, closed: bool, silence: Arc<AtomicBool> }
@@ -90,6 +99,9 @@ impl MusicPlayer {
     pub fn toggle(&self) {
         self.change(|shared| {
             shared.request.transport = match shared.request.transport { Transport::Playing => Transport::Paused, _ => Transport::Playing };
+            // Preserve resets even if a quick pause/resume coalesces in the worker.
+            shared.request.spectrum_revision = shared.request.spectrum_revision.wrapping_add(1);
+            shared.snapshot.clear_spectrum();
         });
     }
     pub fn stop(&self) {
@@ -97,6 +109,7 @@ impl MusicPlayer {
             shared.request.transport = Transport::Stopped;
             shared.request.seek_to = 0.0;
             shared.request.seek_revision = shared.request.seek_revision.wrapping_add(1);
+            shared.snapshot.clear_spectrum();
         });
     }
     pub fn seek_by(&self, seconds: f64) {
@@ -105,6 +118,7 @@ impl MusicPlayer {
             let base = if shared.request.seek_revision != shared.snapshot.seek_revision { shared.request.seek_to } else { shared.snapshot.position };
             shared.request.seek_to = (base + seconds).clamp(0.0, (shared.snapshot.duration - 0.01).max(0.0));
             shared.request.seek_revision = shared.request.seek_revision.wrapping_add(1);
+            shared.snapshot.clear_spectrum();
         });
     }
     pub fn adjust_volume(&self, change: f32) {
@@ -116,7 +130,12 @@ impl MusicPlayer {
 }
 impl Drop for MusicPlayer { fn drop(&mut self) { self.close(); } }
 fn close(state: &SharedState) {
-    if let Ok(mut shared) = state.0.lock() { shared.closed = true; shared.silence.store(true, Ordering::Release); state.1.notify_one(); }
+    if let Ok(mut shared) = state.0.lock() {
+        shared.closed = true;
+        shared.snapshot.clear_spectrum();
+        shared.silence.store(true, Ordering::Release);
+        state.1.notify_one();
+    }
 }
 /// Called after the UI loop; no UI callback waits for audio I/O or device teardown.
 pub(crate) fn finish_shutdown() {
@@ -293,11 +312,13 @@ impl Track {
 
 struct Output {
     queue: Mutex<VecDeque<f32>>, playing: AtomicBool, closed: Arc<AtomicBool>,
+    capture: Mutex<Capture>,
     played: AtomicU64, volume: AtomicU32, channels: usize,
 }
 impl Output {
-    fn new(channels: usize, closed: Arc<AtomicBool>) -> Self {
+    fn new(rate: u32, channels: usize, closed: Arc<AtomicBool>) -> Self {
         Self { queue: Mutex::new(VecDeque::new()), playing: AtomicBool::new(false), closed,
+            capture: Mutex::new(Capture::new(rate, channels)),
             played: AtomicU64::new(0), volume: AtomicU32::new(0.7_f32.to_bits()), channels }
     }
     fn render(&self, output: &mut [f32]) {
@@ -305,13 +326,18 @@ impl Output {
         if self.closed.load(Ordering::Acquire) || !self.playing.load(Ordering::Acquire) { return; }
         // A real-time callback never waits for the decoder/seek worker.
         let Ok(mut queue) = self.queue.try_lock() else { return; };
+        if self.closed.load(Ordering::Acquire) || !self.playing.load(Ordering::Acquire) { return; }
         let volume = f32::from_bits(self.volume.load(Ordering::Relaxed));
         let mut count = 0;
-        for sample in output {
+        for sample in output.iter_mut() {
             let Some(value) = queue.pop_front() else { break; };
             *sample = if value.is_finite() { (value * volume).clamp(-1.0, 1.0) } else { 0.0 };
             count += 1;
         }
+        // Visualization contention only drops captured samples, never audio.
+        // Keep the queue guard until capture finishes so transport resets can
+        // synchronize with in-flight callbacks before clearing captured history.
+        if let Ok(mut capture) = self.capture.try_lock() { capture.push(&output[..count]); }
         self.played.fetch_add((count / self.channels) as u64, Ordering::Relaxed);
     }
 }
@@ -347,32 +373,46 @@ impl Drop for NativeDevice {
 }
 struct NativePlayer {
     track: Option<Track>, device: Option<NativeDevice>, output: Option<Arc<Output>>,
+    spectrum: Option<Spectrum>, spectrum_revision: u64, spectrum_time: Instant,
     closed: Arc<AtomicBool>, seek_revision: u64, base_position: f64,
 }
 impl NativePlayer {
-    fn new(closed: Arc<AtomicBool>) -> Self { Self { track: None, device: None, output: None, closed, seek_revision: u64::MAX, base_position: 0.0 } }
+    fn new(closed: Arc<AtomicBool>) -> Self {
+        Self { track: None, device: None, output: None, spectrum: None, spectrum_revision: u64::MAX, spectrum_time: Instant::now(),
+            closed, seek_revision: u64::MAX, base_position: 0.0 }
+    }
 }
 impl Playback for NativePlayer {
     fn open(&mut self, path: &Path, active: &dyn Fn() -> bool) -> anyhow::Result<()> {
         self.stop();
         self.track = None;
         let track = Track::open_cancellable(path, active)?;
-        self.output = Some(Arc::new(Output::new(track.channels, self.closed.clone())));
+        self.output = Some(Arc::new(Output::new(track.rate, track.channels, self.closed.clone())));
+        self.spectrum = Some(Spectrum::new(track.rate, track.channels));
         self.track = Some(track);
         Ok(())
     }
     fn update(&mut self, request: &Request, active: &dyn Fn() -> bool) -> anyhow::Result<Snapshot> {
         let duration = self.track.as_ref().map_or(0.0, |track| track.duration);
+        let spectrum_max_hz = self.track.as_ref().map_or(16000.0, |track| (track.rate as f32 / 2.0).min(16000.0));
         if request.transport == Transport::Stopped {
             self.stop();
-            return Ok(Snapshot { state: PlaybackState::Stopped, duration, ..Snapshot::default() });
+            return Ok(Snapshot { state: PlaybackState::Stopped, duration, spectrum_max_hz, ..Snapshot::default() });
         }
         let track = self.track.as_mut().ok_or_else(|| anyhow::anyhow!("Open an audio file first."))?;
         let output = self.output.as_ref().unwrap();
         output.volume.store(request.volume.to_bits(), Ordering::Relaxed);
-        if self.seek_revision != request.seek_revision {
+        let seeking = self.seek_revision != request.seek_revision;
+        if seeking || self.spectrum_revision != request.spectrum_revision || request.transport == Transport::Paused {
             output.playing.store(false, Ordering::Release);
-            output.queue.lock().map_err(|_| anyhow::anyhow!("Audio buffer unavailable"))?.clear();
+            let mut queue = output.queue.lock().map_err(|_| anyhow::anyhow!("Audio buffer unavailable"))?;
+            if seeking { queue.clear(); }
+            if let Ok(mut capture) = output.capture.lock() { capture.clear(); }
+            if let Some(spectrum) = &mut self.spectrum { spectrum.clear(); }
+            self.spectrum_time = Instant::now();
+            self.spectrum_revision = request.spectrum_revision;
+        }
+        if seeking {
             output.played.store(0, Ordering::Relaxed);
             track.seek(request.seek_to)?;
             self.base_position = request.seek_to;
@@ -389,22 +429,29 @@ impl Playback for NativePlayer {
         if !active() { return Ok(Snapshot::default()); }
         if track.eof && output.queue.lock().map_err(|_| anyhow::anyhow!("Audio buffer unavailable"))?.is_empty() {
             self.stop();
-            return Ok(Snapshot { state: PlaybackState::Finished, position: duration, duration, ..Snapshot::default() });
+            return Ok(Snapshot { state: PlaybackState::Finished, position: duration, duration, spectrum_max_hz, ..Snapshot::default() });
         }
         if self.device.is_none() && request.transport == Transport::Playing {
             self.device = Some(NativeDevice::open(track.rate, &track.channel_map, output.clone())?);
         }
+        let now = Instant::now();
+        let (levels, peaks) = self.spectrum.as_mut().unwrap().update(&output.capture, now.duration_since(self.spectrum_time));
+        self.spectrum_time = now;
         output.playing.store(request.transport == Transport::Playing, Ordering::Release);
         let position = (self.base_position + output.played.load(Ordering::Relaxed) as f64 / f64::from(track.rate)).min(duration);
-        Ok(Snapshot { state: if request.transport == Transport::Paused { PlaybackState::Paused } else { PlaybackState::Playing }, position, duration, ..Snapshot::default() })
+        Ok(Snapshot { state: if request.transport == Transport::Paused { PlaybackState::Paused } else { PlaybackState::Playing }, position, duration, levels, peaks, spectrum_max_hz, ..Snapshot::default() })
     }
     fn stop(&mut self) {
         if let Some(output) = &self.output {
             output.playing.store(false, Ordering::Release);
             self.device = None;
             if let Ok(mut queue) = output.queue.lock() { queue.clear(); }
+            if let Ok(mut capture) = output.capture.lock() { capture.clear(); }
             output.played.store(0, Ordering::Relaxed);
         }
+        if let Some(spectrum) = &mut self.spectrum { spectrum.clear(); }
+        self.spectrum_time = Instant::now();
+        self.spectrum_revision = u64::MAX;
         self.seek_revision = u64::MAX;
         self.base_position = 0.0;
     }
@@ -441,6 +488,121 @@ mod tests {
         }
     }
     fn test_player() -> MusicPlayer { MusicPlayer::with_backend(TestPlayback { started: None, release: None, plays: Arc::default() }).unwrap() }
+    #[test]
+    fn spectrum_labels_keep_the_tracks_nyquist_limit_when_paused_stopped_or_finished() {
+        let dir = TestDir::new();
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audio/tone.wav");
+        let mut encoded = std::fs::read(fixture).unwrap();
+        let block_align = u16::from_le_bytes(encoded[32..34].try_into().unwrap());
+        encoded[24..28].copy_from_slice(&8000_u32.to_le_bytes());
+        encoded[28..32].copy_from_slice(&(8000 * u32::from(block_align)).to_le_bytes());
+        let path = dir.path().join("low-rate.wav");
+        std::fs::write(&path, encoded).unwrap();
+        let mut player = NativePlayer::new(Arc::new(AtomicBool::new(false)));
+        player.open(&path, &|| true).unwrap();
+        let mut request = Request { transport: Transport::Paused, seek_revision: 1, ..Request::default() };
+        assert_eq!(player.update(&request, &|| true).unwrap().spectrum_max_hz, 4000.0);
+        request.transport = Transport::Stopped;
+        assert_eq!(player.update(&request, &|| true).unwrap().spectrum_max_hz, 4000.0);
+        request.transport = Transport::Paused;
+        player.update(&request, &|| true).unwrap();
+        player.track.as_mut().unwrap().eof = true;
+        player.output.as_ref().unwrap().queue.lock().unwrap().clear();
+        let finished = player.update(&request, &|| true).unwrap();
+        assert_eq!(finished.state, PlaybackState::Finished);
+        assert_eq!(finished.spectrum_max_hz, 4000.0);
+    }
+    #[test]
+    fn spectrum_capture_contention_never_interrupts_post_volume_audio() {
+        let output = Output::new(48000, 2, Arc::new(AtomicBool::new(false)));
+        output.playing.store(true, Ordering::Release);
+        output.volume.store(0.5_f32.to_bits(), Ordering::Relaxed);
+        let capture = output.capture.lock().unwrap();
+        output.queue.lock().unwrap().extend([0.4, -0.4, 0.8, -0.8]);
+        let mut samples = [0.0; 6];
+        output.render(&mut samples);
+        assert_eq!(samples, [0.2, -0.2, 0.4, -0.4, 0.0, 0.0]);
+        assert_eq!(output.played.load(Ordering::Relaxed), 2);
+        drop(capture);
+        let mut spectrum = spectrum::Spectrum::new(48000, 2);
+        assert_eq!(spectrum.update(&output.capture, Duration::ZERO).0, [0.0; 16]);
+        let tone: Vec<_> = (0..4096).flat_map(|frame| {
+            let sample = (std::f32::consts::TAU * 1000.0 * frame as f32 / 48000.0).sin();
+            [sample, -sample]
+        }).collect();
+        for (volume, expected) in [(1.0_f32, 1.0), (0.1, 2.0 / 3.0), (0.0, 0.0)] {
+            output.volume.store(volume.to_bits(), Ordering::Relaxed);
+            output.queue.lock().unwrap().extend(tone.iter().copied());
+            output.render(&mut vec![0.0; tone.len()]);
+            spectrum.clear();
+            let level = spectrum.update(&output.capture, Duration::ZERO).0[8];
+            assert!((level - expected).abs() < 0.01, "volume {volume}: {level}");
+        }
+    }
+    #[test]
+    fn transport_changes_clear_display_immediately_even_with_a_busy_worker() {
+        let player = test_player();
+        for action in 0..5 {
+            {
+                let mut shared = player.shared.0.lock().unwrap();
+                shared.snapshot.levels = [1.0; 16];
+                shared.snapshot.peaks = [1.0; 16];
+            }
+            match action {
+                0 => player.toggle(), 1 => player.stop(), 2 => player.seek_by(10.0),
+                3 => player.open(PathBuf::from("next.wav")), _ => player.close(),
+            }
+            let snapshot = player.snapshot();
+            assert_eq!(snapshot.levels, [0.0; 16], "action {action}");
+            assert_eq!(snapshot.peaks, [0.0; 16], "action {action}");
+        }
+    }
+    fn prime_spectrum(player: &mut NativePlayer) {
+        let output = player.output.as_ref().unwrap();
+        let rate = player.track.as_ref().unwrap().rate;
+        let frames = (rate as usize).div_ceil(20).next_power_of_two();
+        let samples: Vec<_> = (0..frames).flat_map(|frame| {
+            let sample = (std::f32::consts::TAU * 1000.0 * frame as f32 / rate as f32).sin();
+            std::iter::repeat_n(sample, output.channels)
+        }).collect();
+        output.queue.lock().unwrap().clear();
+        output.queue.lock().unwrap().extend(samples.iter().copied());
+        output.playing.store(true, Ordering::Release);
+        output.render(&mut vec![0.0; samples.len()]);
+        assert!(player.spectrum.as_mut().unwrap().update(&output.capture, Duration::ZERO).0.iter().any(|level| *level > 0.9));
+        // Leave both analyzed history and unconsumed capture to be cleared.
+        output.queue.lock().unwrap().extend(samples.iter().copied());
+        output.render(&mut vec![0.0; samples.len()]);
+    }
+    #[test]
+    fn pause_seek_stop_replacement_and_completion_remove_captured_history() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/audio/tone.wav");
+        let mut player = NativePlayer::new(Arc::new(AtomicBool::new(false)));
+        let mut request = Request { transport: Transport::Paused, seek_revision: 1, ..Request::default() };
+        for action in 0..5 {
+            player.open(&path, &|| true).unwrap();
+            player.update(&request, &|| true).unwrap();
+            prime_spectrum(&mut player);
+            let old_output = player.output.as_ref().unwrap().clone();
+            match action {
+                0 => {},
+                1 => { request.seek_to = 0.1; request.seek_revision += 1; },
+                2 => request.transport = Transport::Stopped,
+                3 => { player.open(&path, &|| true).unwrap(); },
+                _ => {
+                    player.track.as_mut().unwrap().eof = true;
+                    old_output.queue.lock().unwrap().clear();
+                },
+            }
+            let snapshot = player.update(&request, &|| true).unwrap();
+            assert_eq!(snapshot.levels, [0.0; 16], "action {action}");
+            assert_eq!(snapshot.peaks, [0.0; 16], "action {action}");
+            let spectrum = player.spectrum.as_mut().unwrap();
+            assert_eq!(spectrum.update(&old_output.capture, Duration::ZERO), ([0.0; 16], [0.0; 16]), "action {action}");
+            if action == 4 { assert_eq!(snapshot.state, PlaybackState::Finished); }
+            request.transport = Transport::Paused;
+        }
+    }
     #[test]
     fn controls_coalesce_and_clamp_seek_and_volume() {
         let player = test_player();
@@ -517,7 +679,7 @@ mod tests {
     #[test]
     fn audio_callback_applies_volume_pause_and_immediate_close_silence() {
         let closed = Arc::new(AtomicBool::new(false));
-        let output = Output::new(2, closed.clone());
+        let output = Output::new(48000, 2, closed.clone());
         output.queue.lock().unwrap().extend([0.2, -0.4, 0.6, -0.8]);
         output.playing.store(true, Ordering::Release);
         output.volume.store(0.5_f32.to_bits(), Ordering::Relaxed);

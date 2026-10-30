@@ -249,6 +249,18 @@ run outside the UI thread. This version plays one file at a time. Opening audio
 from File Browser starts playback in the same player window, replacing the current
 track and restoring the window if it was hidden.
 
+Below the controls and wrapped help, 16 live frequency bars use ASCII `#` with
+falling `-` peak markers inside a rectangle in the current desktop theme. Columns
+stay at most two characters wide, with frequency labels beneath the frame
+(40, 63, 125, 250, 500, 1k, 2k, 4k, 8k, 16k). Bass is on the left and treble on
+the right; labels follow the track's
+sample-rate limit and crowded labels are omitted. The visualization follows playback
+volume, including mute; it does not change the audio's frequency balance. Narrow windows merge neighboring
+bands. The framed spectrum needs six rows after text: three for bars, two for the
+border, and one for labels.
+Pause, Stop, seeking, replacing a track, completion, errors, and Close clear the
+bars and peaks. Hidden or locked playback keeps the analysis current for restore.
+
 Hide the window to keep playing, then restore it through **Application > Background
 windows**. Terminal Lock also preserves playback; Close and Desktop Exit stop it.
 The compiled [Symphonia decoders](https://github.com/pdeljanov/Symphonia) and
