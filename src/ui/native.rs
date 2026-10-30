@@ -10,3 +10,6 @@ pub(crate) use music_player::MusicWindow;
 pub(crate) use games::GameWindow;
 pub(crate) use pdf_reader::PdfWindow;
 pub(crate) use image_viewer::select_image;
+
+mod ascii_paint;
+pub(crate) use ascii_paint::PaintWindow;

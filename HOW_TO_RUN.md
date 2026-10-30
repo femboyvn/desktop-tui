@@ -69,9 +69,9 @@ an explicit shortcut directory is used. Typical locations are:
 
 No sample shortcuts are copied into the default directory. Platform-specific
 configuration paths do not establish runtime support beyond the Unix PTY
-requirement. An empty directory still provides the ten starter apps through Application.
+requirement. An empty directory still provides the eleven starter apps through Application.
 External starters (`sh`, `btm`, and `nano`) require separately installed tools.
-Music Player is native and compiled into the desktop binary.
+Music Player and ASCII Paint are native and compiled into the desktop binary.
 Snake, 2048, and Minesweeper are built in under Application > Games.
 
 ## Try a controlled command
@@ -137,9 +137,9 @@ Use [HOW_TO_TEST.md](HOW_TO_TEST.md) for checks and reporting. Follow
 the behavior rather than working around it in a shortcut.
 
 Native apps are available under **Application > System > File Browser** and
-**Application > Utility > Image Viewer / PDF Reader / Music Player**, with Snake, 2048,
+**Application > Utility > Image Viewer / PDF Reader / Music Player / ASCII Paint**, with Snake, 2048,
 and Minesweeper under **Application > Games**. See
 [README.md](README.md#applications-and-files) for image/audio formats, limits,
-controls, and Text editor document handling. PDF Reader needs Poppler's
+controls, ASCII Paint projects/text export, and Text editor document handling. PDF Reader needs Poppler's
 `pdfinfo` and `pdftoppm` on PATH (`poppler-utils` on Debian/Ubuntu or `poppler`
 on Arch); rendering runs outside the UI and needs no graphical session.

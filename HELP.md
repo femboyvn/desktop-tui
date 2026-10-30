@@ -14,7 +14,7 @@ System, Utility, User, and Games are always present; extra categories
 follow alphabetically. Empty categories show No apps yet.
 
 File Browser, Terminal (sh), System Performance (btm / bottom),
-Image Viewer, PDF Reader, Text editor (nano), native Music Player, and the games
+Image Viewer, PDF Reader, Text editor (nano), native Music Player, ASCII Paint, and the games
 Snake, 2048, and Minesweeper are
 available with an empty shortcut folder. External tools must be installed separately.
 System Performance uses bottom’s default-light theme to match the
@@ -58,6 +58,51 @@ Hide and Terminal Lock preserve every game's board. Restore through
 Application > Background windows or the game's launcher. If the
 window shows Resize window to play, enlarge it to use game controls.
 
+## ASCII Paint
+
+Application > Utility > ASCII Paint opens one canvas window; its launcher
+restores that window. New defaults to 80 by 24 cells and accepts 1–200
+columns and 1–80 rows. Resize / Ctrl+R or the size at bottom left changes
+canvas dimensions, preserving the top-left artwork and blank-filling new cells.
+Undo restores cropped cells. Cursor coordinates sit at bottom right.
+Window resizing changes only the view; theme changes preserve cell RGB colors.
+
+Brush / RGB sets a printable ASCII character and foreground/background
+#RRGGBB colors. Printable keys select the brush character. Left-click a
+palette swatch for foreground; right-click for background. Left-click or
+drag paints; right-click or drag erases to the original blank colors.
+Eraser toggles erasing. Arrows move and reveal the cursor; Space/Enter
+stamps and Backspace/Delete erases. Wheel scrolls vertically/horizontally;
+PageUp/PageDown scroll vertically. Undo/Redo keeps 64 actions, groups
+mouse strokes, and can undo Clear.
+
+Ctrl+N: New. Ctrl+O: Open. Ctrl+S: Save. Ctrl+Shift+S: Save As.
+Ctrl+E: Export Text. Ctrl+Z: Undo. Ctrl+Y: Redo.
+Ctrl+R: Resize canvas. Ctrl+I: Image to ASCII.
+
+Image to ASCII converts PNG/JPEG/WebP/GIF/BMP to editable untitled art.
+Choose maximum columns/rows and preserved colors or monochrome. It fits
+proportions with tall-cell correction, maps brightness to ASCII density,
+and blends transparency onto black. Image limits are 32 MiB and 16 megapixels;
+only the first animation frame is used. Failed/canceled conversion preserves
+artwork; unsaved work is prompted before replacement.
+
+Save uses colored .asciipaint projects, version 1 TOML up to 2 MiB.
+Open also imports .txt/.asc as unsaved untitled artwork: printable ASCII,
+LF/CRLF, tabs expanded to four-column stops, at most 16 KiB before and
+after normalization, within the canvas dimension limits. File Browser
+opens .asciipaint in Paint; text files keep their Text editor association.
+Export Text writes padded, colorless LF rows to .txt/.asc and does not
+mark the project saved. File operations run in the background one at a
+time and pause editing. Errors preserve artwork and existing destinations;
+saves and exports replace files atomically.
+
+New, Open, Close, Desktop Exit, Shutdown, and Restart offer Save,
+Discard, or Cancel for unsaved artwork. Save must succeed before continuing;
+Cancel keeps the desktop and other apps running. Hide and Terminal Lock
+preserve artwork. Prompts wait until visible; restore with the launcher
+or Application > Background windows.
+
 ## Music Player
 
 Application > Utility > Music Player opens the built-in player. No
@@ -92,7 +137,8 @@ show name, type, byte size, and local modification time. Failed
 background reads leave the previous listing usable.
 
 Open supported images in Image Viewer, PDFs in PDF Reader, and MP3, WAV,
-FLAC, or Ogg Vorbis files in Music Player. File extensions are case-insensitive.
+FLAC, or Ogg Vorbis files in Music Player, and .asciipaint projects in
+ASCII Paint. File extensions are case-insensitive.
 Other regular files open in
 independent Text editor document windows, preserving any running
 editor. The selected absolute path is one OS argument, appended

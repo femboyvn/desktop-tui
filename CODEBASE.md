@@ -80,8 +80,10 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/runtime/latest.rs](src/runtime/latest.rs), [src/runtime/images.rs](src/runtime/images.rs), [src/runtime/files.rs](src/runtime/files.rs) | Bounded latest-request workers, image decode/geometry/render preparation, and directory enumeration. |
 | [src/runtime/processes.rs](src/runtime/processes.rs) | Managed PTY runner, independent PID observation, asynchronous process-tree cleanup, and shutdown task draining. |
 | [src/runtime/music.rs](src/runtime/music.rs) | Bounded audio input, retained encoded streams, coalesced playback worker/state snapshots, and device cleanup after the event loop. |
+| [src/runtime/ascii_paint.rs](src/runtime/ascii_paint.rs) | Bounded RGB cell document, grouped undo/redo, project/text validation, atomic writes, and one-operation file worker. |
+| [src/ui/native/ascii_paint.rs](src/ui/native/ascii_paint.rs) | Paint canvas input/rendering, brush/dimensions dialogs, file actions, and unsaved-action guard. |
 | [src/runtime/pdf.rs](src/runtime/pdf.rs) | Bounded anonymous PDF snapshots, Poppler metadata/page rendering, cancellation, timeouts, and helper reaping after the event loop. |
-| [src/ui/native/](src/ui/native/) | Native Image Viewer, PDF Reader, File Browser, Music Player, and game windows and controls. |
+| [src/ui/native/](src/ui/native/) | Native Image Viewer, PDF Reader, File Browser, Music Player, ASCII Paint, and game windows and controls. |
 | [src/ui/native/games.rs](src/ui/native/games.rs), [src/ui/native/games/](src/ui/native/games/) | Shared game window/input/rendering and bounded Snake, 2048, and Minesweeper rules. |
 | [src/config/shortcuts.rs](src/config/shortcuts.rs) | Serde types generated through `nestify::nest!`; `parse_shortcut_dir` loads, deduplicates, and sorts shortcuts. |
 | [src/ui/desktop/view.rs](src/ui/desktop/view.rs) | `MyDesktop`, app-bar menus, shortcut-to-window handles, launch/show/hide/close commands, arrangement, preferences/locking integration, and panel updates. |
@@ -165,7 +167,7 @@ The complete user example lives in [README.md](README.md). Source definitions in
 - `name` and `command` are required; top-level `args` defaults to an empty vector.
 - Optional top-level `category` defaults to User when absent or blank. System,
   Utility, User, and Games precede alphabetically ordered additional categories.
-  Native File Browser/Image Viewer/PDF Reader/Music Player and game entries remain separate from custom
+  Native File Browser/Image Viewer/PDF Reader/Music Player/ASCII Paint and game entries remain separate from custom
   shortcuts; names matching Terminal, System Performance, or Text editor override
   external starters.
 - The `taskbar`, `window`, and `terminal` tables are required. Taskbar position is
@@ -222,6 +224,40 @@ settings. Desktop `OnPaint` centers the saved text using the palette's desktop
 text/background colors and clips it to the surface. Rendering does no I/O;
 source files are not needed after saving. Color presets preserve the draft art.
 
+ASCII Paint owns a bounded `Document` (1–200 columns by 1–80 rows), with
+row-major printable ASCII cells and explicit foreground/background RGB values.
+Its original blank cell supplies erase/Clear colors. History retains 64 actions,
+groups each mouse stroke, and compares dimensions/cells with a saved snapshot for
+dirty state, including undo across a save. Explicit canvas resizing preserves the
+top-left overlap and blank-fills expansion; history restores cropped cells and
+dimensions. Window resizing affects only the viewport. A reserved footer displays
+clickable size at the left and one-based cursor coordinates at the right. Palette
+changes recolor the surrounding UI while cell RGB stays fixed.
+
+`PaintWorker` accepts one immutable Open/Save/Export/ConvertImage operation at a
+time; editing is frozen until completion. Version 1 TOML `.asciipaint` stores dimensions, the
+original blank cell, and row-major cells, capped at 2 MiB. `.txt`/`.asc` imports
+reuse background validation and bounded 16 KiB reads, CRLF normalization, and
+four-column tab expansion, then enforce canvas dimensions. Imports are dirty and
+untitled. Colorless exports preserve row padding and use LF; they do not update
+the saved snapshot. Saves/exports use a same-directory temporary file and atomic
+rename; failures retain the artwork and existing destination.
+
+Image conversion reuses the image decoder and its regular-file, 32 MiB, 16 megapixel,
+and orientation checks. It composites alpha onto black before sampling, fits chosen
+cell bounds with 2:1 cell-height correction, and maps luminance to printable ASCII
+density. Foreground can retain sampled RGB or use white for monochrome. Conversion
+returns dirty untitled artwork only on success and uses the same unsaved-action
+guard and modal reentry protection as other file actions.
+
+The desktop keeps one Paint window and routes only `.asciipaint` files from File
+Browser to it; existing text associations stay unchanged. Paint queues New,
+Open, Close, and desktop Exit/Shutdown/Restart behind Save/Discard/Cancel.
+A chosen save must succeed before continuation. Cancellation preserves other
+apps. Pending prompts and results wait while hidden/locked; restoration uses the
+launcher or Background windows. Desktop actions wait for Paint's guard before
+closing other windows or issuing a system request.
+
 Each Image Viewer and File Browser window owns a latest-request worker with one active job, one pending
 request, and one result. New requests replace pending work and invalidate older
 results. Closing cancels pending work without joining from a callback; worker
@@ -239,7 +275,7 @@ File Browser enumerates and sorts directories outside callbacks, then inserts up
 to 256 rows per tick. Original PathBuf values drive navigation and document
 arguments; lossy text is used only for labels and the editable path display.
 The desktop routes case-insensitive MP3/WAV/FLAC/OGG extensions to Music Player,
-supported images to Image Viewer, PDFs to PDF Reader, and other files to the
+supported images to Image Viewer, PDFs to PDF Reader, `.asciipaint` to ASCII Paint, and other files to the
 configured Text editor. Audio opens preserve the original OS path and reuse and
 restore the native player; its worker loads and starts the selected track.
 Native windows and all tracked terminal instances participate in arrangement,

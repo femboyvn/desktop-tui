@@ -9,7 +9,7 @@ use crate::platform::linux::{StatusMonitor, SystemAction, SystemActionRunner, Sy
 use crate::ui::locking::{LockSetupDialog, TerminalLockScreen};
 use crate::ui::preferences::PreferencesDialog;
 use crate::ui::terminal::TuiWindow;
-use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow, PdfWindow};
+use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow, PdfWindow, PaintWindow};
 use crate::ui::build_theme;
 use appcui::prelude::appbar::MenuButton;
 use appcui::prelude::menu::{Command, SingleChoice};
@@ -54,6 +54,8 @@ pub struct MyDesktop {
     browser_window: Handle<BrowserWindow>,
     music_window: Handle<MusicWindow>,
     pdf_window: Handle<PdfWindow>,
+    paint_window: Handle<PaintWindow>,
+    pending_desktop: Option<DesktopIntent>,
     game_windows: HashMap<GameKind, Handle<GameWindow>>,
     document_windows: Vec<Handle<TuiWindow>>,
     pub status_label: Handle<appbar::Label>,
@@ -63,7 +65,7 @@ pub struct MyDesktop {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum WindowTarget {
-    Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Pdf(Handle<PdfWindow>), Game(Handle<GameWindow>), Help(Handle<HelpWindow>),
+    Paint(Handle<PaintWindow>), Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Pdf(Handle<PdfWindow>), Game(Handle<GameWindow>), Help(Handle<HelpWindow>),
 }
 #[derive(Clone, PartialEq)]
 struct WindowInfo { target: WindowTarget, caption: String, visible: bool, shortcut: Option<usize> }
@@ -77,7 +79,11 @@ fn taskbar_caption(title: &str) -> String {
     caption.replace('&', "&&")
 }
 
+#[derive(Clone, Copy)]
+enum DesktopIntent { Exit, Power(SystemAction) }
+
 struct LockVisibility {
+    paint: Option<(Handle<PaintWindow>, bool)>,
     terminals: Vec<(Handle<TuiWindow>, bool)>,
     help: Vec<(Handle<HelpWindow>, bool)>,
     image: Option<(Handle<ImageWindow>, bool)>,
@@ -121,6 +127,7 @@ impl MyDesktop {
             browser_window: Handle::None,
             music_window: Handle::None,
             pdf_window: Handle::None,
+            paint_window: Handle::None, pending_desktop: None,
             game_windows: HashMap::new(),
             document_windows: Vec::new(),
             status: StatusMonitor::default(),
@@ -169,6 +176,11 @@ impl MyDesktop {
                 let caption = if title == "Image Viewer" { title.to_owned() } else { format!("Image Viewer: {title}") };
                 (caption, window.is_visible(), None)
             }
+            WindowTarget::Paint(handle) => {
+                let window = self.windowt(handle)?;
+                if window.is_closing() { return None; }
+                (window.title().to_owned(), window.is_visible(), None)
+            }
             WindowTarget::Pdf(handle) => {
                 let window = self.windowt(handle)?;
                 if window.is_closing() { return None; }
@@ -194,6 +206,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
+            WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
@@ -205,6 +218,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
+            WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); window.set_visible(false); },
             WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); window.set_visible(false); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
@@ -216,6 +230,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
+            WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.request_close(); },
             WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.close(); },
@@ -331,12 +346,17 @@ impl MyDesktop {
     }
     fn hide_for_terminal_lock(&mut self) -> LockVisibility {
         self.terminal_locked = true;
-        let mut visibility = LockVisibility { terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None, pdf: None, games: Vec::new() };
+        let mut visibility = LockVisibility { paint: None, terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None, pdf: None, games: Vec::new() };
         for handle in self.terminal_handles() {
             if let Some(window) = self.window_mut(handle) {
                 visibility.terminals.push((handle, window.is_visible()));
                 window.set_visible(false);
             }
+        }
+        let paint = self.paint_window;
+        if let Some(window) = self.window_mut(paint) {
+            visibility.paint = Some((paint, window.is_visible()));
+            window.suspend(); window.set_visible(false);
         }
         let image = self.image_window;
         if let Some(window) = self.window_mut(image) {
@@ -371,6 +391,8 @@ impl MyDesktop {
         visibility
     }
     fn restore_after_terminal_unlock(&mut self, visibility: LockVisibility) {
+        if let Some((handle, visible)) = visibility.paint
+            && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         for (handle, visible) in visibility.terminals {
             if let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         }
@@ -425,8 +447,71 @@ impl MyDesktop {
         }
         let confirmed =
             action == SystemAction::Lock || ConfirmSystemAction::new(action).show() == Some(true);
+        if confirmed && action != SystemAction::Lock { self.guard_desktop(DesktopIntent::Power(action)); return; }
         if let Err(error) = self.system_actions.request(action, confirmed) {
             dialogs::error("System request failed", &error);
+        }
+    }
+
+    fn guard_desktop(&mut self, intent: DesktopIntent) {
+        if self.pending_desktop.is_some() { return; }
+        let handle = self.paint_window;
+        if let Some(window) = self.window_mut(handle) && !window.is_closing() {
+            window.request_guard();
+            self.pending_desktop = Some(intent);
+        } else { self.complete_desktop(intent); }
+    }
+    fn complete_desktop(&mut self, intent: DesktopIntent) {
+        match intent {
+            DesktopIntent::Power(action) => if let Err(error) = self.system_actions.request(action, true) {
+                dialogs::error("System request failed", &error);
+            },
+            DesktopIntent::Exit => {
+                let paint = self.paint_window;
+                if let Some(window) = self.window_mut(paint) { window.shutdown(); }
+                for handle in self.terminal_handles() {
+                    if let Some(win) = self.window_mut(handle) {
+                        win.close_command();
+                    }
+                }
+
+                let handle = self.image_window;
+                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
+                let handle = self.browser_window;
+                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
+                let handle = self.music_window;
+                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
+                let handle = self.pdf_window;
+                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
+                for handle in self.game_windows.values().copied().collect::<Vec<_>>() {
+                    if let Some(window) = self.window_mut(handle) { window.shutdown(); }
+                }
+                self.close();
+            }
+        }
+    }
+    fn poll_desktop_guard(&mut self) {
+        if self.pending_desktop.is_none() { return; }
+        let handle = self.paint_window;
+        let result = match self.window_mut(handle) {
+            Some(window) if !window.is_closing() => window.take_guard_result(),
+            _ => Some(true),
+        };
+        if let Some(approved) = result && let Some(intent) = self.pending_desktop.take() && approved { self.complete_desktop(intent); }
+    }
+    fn open_paint(&mut self, path: Option<PathBuf>) {
+        let handle = self.paint_window;
+        if let Some(window) = self.window_mut(handle) && !window.is_closing() {
+            if let Some(path) = path { window.open(path); }
+            window.set_visible(true); window.request_focus(); return;
+        }
+        match PaintWindow::new(path) {
+            Ok(mut window) => {
+                window.constrain_to(self.desktop_rect().size());
+                self.paint_window = self.add_window(window);
+                self.track_window(WindowTarget::Paint(self.paint_window));
+            }
+            Err(error) => dialogs::error("Cannot open ASCII Paint", &format!("{error:#}")),
         }
     }
 
@@ -459,7 +544,8 @@ impl MyDesktop {
         }
     }
     fn open_file(&mut self, path: PathBuf) {
-        if crate::runtime::files::is_image(&path) { self.open_image(Some(path)); }
+        if path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("asciipaint")) { self.open_paint(Some(path)); }
+        else if crate::runtime::files::is_image(&path) { self.open_image(Some(path)); }
         else if crate::runtime::files::is_pdf(&path) { self.open_pdf(Some(path)); }
         else if crate::runtime::files::is_audio(&path) { self.open_music(Some(path)); }
         else if let Err(error) = self.open_document(path) { dialogs::error("Cannot open file", &format!("{error:#}")); }
@@ -537,6 +623,7 @@ impl MyDesktop {
             AppId::ImageViewer => self.open_image(None),
             AppId::FileBrowser => self.open_browser(),
             AppId::MusicPlayer => self.open_music(None),
+            AppId::AsciiPaint => self.open_paint(None),
             AppId::PdfReader => self.open_pdf(None),
             AppId::Game(kind) => self.open_game(kind),
         }
@@ -605,6 +692,8 @@ impl OnPaint for MyDesktop {
 impl OnResize for MyDesktop {
     fn on_resize(&mut self, _old_size: Size, _new_size: Size) {
         let available = self.desktop_rect().size();
+        let paint = self.paint_window;
+        if let Some(window) = self.window_mut(paint) { window.constrain_to(available); }
         for handle in self.game_windows.values().copied().collect::<Vec<_>>() {
             if let Some(window) = self.window_mut(handle) { window.constrain_to(available); }
         }
@@ -801,6 +890,7 @@ impl MenuEvents for MyDesktop {
                 WindowTarget::Browser(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Image(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Music(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
+                WindowTarget::Paint(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Pdf(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Game(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Help(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
@@ -857,27 +947,7 @@ impl MenuEvents for MyDesktop {
             Commands::TerminalLock => self.lock_terminal(),
             Commands::Shutdown => self.request_system_action(SystemAction::Shutdown),
             Commands::Restart => self.request_system_action(SystemAction::Restart),
-            Commands::Exit => {
-                for handle in self.terminal_handles() {
-                    if let Some(win) = self.window_mut(handle) {
-                        win.close_command();
-                    }
-                }
-
-                let handle = self.image_window;
-                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
-                let handle = self.browser_window;
-                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
-                let handle = self.music_window;
-                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
-                let handle = self.pdf_window;
-                if let Some(window) = self.window_mut(handle) { window.shutdown(); }
-                for handle in self.game_windows.values().copied().collect::<Vec<_>>() {
-                    if let Some(window) = self.window_mut(handle) { window.shutdown(); }
-                }
-                self.close();
-                return;
-            }
+            Commands::Exit => { self.guard_desktop(DesktopIntent::Exit); return; }
             Commands::OpenApp
             | Commands::CloseApp
             | Commands::AppVisibilityToggle
@@ -947,6 +1017,7 @@ impl TimerEvents for MyDesktop {
         if self.terminal_locked {
             return EventProcessStatus::Ignored;
         }
+        self.poll_desktop_guard();
         let handle = self.browser_window;
         let open_path = self.window_mut(handle).and_then(BrowserWindow::take_open_path);
         if let Some(path) = open_path { self.open_file(path); }
@@ -1016,6 +1087,88 @@ mod tests {
         assert_eq!(row(&surface, 2), "         ");
     }
 
+    #[test]
+    fn paint_launcher_routes_projects_restores_singleton_and_preserves_lock_visibility() {
+        let _lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let mut desktop = MyDesktop::new(vec![],Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
+        DesktopEvents::on_start(&mut desktop);
+        desktop.open_file(dir.path().join("drawing 文.ASCIIPAINT"));
+        let paint = desktop.paint_window;
+        assert!(desktop.windowt(paint).is_some()); assert!(desktop.document_windows.is_empty());
+        desktop.hide_window(WindowTarget::Paint(paint));
+        let visibility = desktop.hide_for_terminal_lock();
+        desktop.restore_after_terminal_unlock(visibility);
+        assert!(!desktop.window_info(WindowTarget::Paint(paint)).unwrap().visible);
+        desktop.launch_application(AppId::AsciiPaint);
+        assert_eq!(desktop.paint_window,paint);
+        assert!(desktop.window_info(WindowTarget::Paint(paint)).unwrap().visible);
+        let visibility = desktop.hide_for_terminal_lock();
+        assert!(!desktop.window_info(WindowTarget::Paint(paint)).unwrap().visible);
+        desktop.restore_after_terminal_unlock(visibility);
+        assert!(desktop.window_info(WindowTarget::Paint(paint)).unwrap().visible);
+        desktop.apply_preferences(Preferences::default());
+        OnResize::on_resize(&mut desktop,Size::new(80,24),Size::new(20,10));
+        assert!(desktop.windowt(paint).is_some());
+        app.run();
+    }
+    #[test]
+    fn deferred_paint_guard_keeps_other_windows_running_until_approval() {
+        let _lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        struct RecordActions;
+        impl SystemActionRunner for RecordActions { fn run(&self, _: SystemAction) -> Result<(),String> { Ok(()) } }
+        let mut desktop = MyDesktop::new(vec![],Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(RecordActions));
+        let _app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
+        DesktopEvents::on_start(&mut desktop);
+        desktop.open_paint(None); desktop.open_game(GameKind::Puzzle2048);
+        let paint = desktop.paint_window;
+        let game = desktop.game_windows[&GameKind::Puzzle2048];
+        desktop.hide_window(WindowTarget::Paint(paint));
+        desktop.guard_desktop(DesktopIntent::Power(SystemAction::Shutdown));
+        assert!(desktop.pending_desktop.is_some());
+        desktop.poll_desktop_guard();
+        assert!(!desktop.system_actions.is_pending());
+        assert!(!desktop.windowt(game).unwrap().is_closing());
+        let visibility = desktop.hide_for_terminal_lock();
+        assert!(matches!(TimerEvents::on_update(&mut desktop,0),EventProcessStatus::Ignored));
+        desktop.restore_after_terminal_unlock(visibility);
+        // A hidden clean document also defers approval until it becomes visible.
+        assert!(desktop.pending_desktop.is_some());
+        desktop.focus_window(WindowTarget::Paint(paint));
+        let window = desktop.window_mut(paint).unwrap();
+        TimerEvents::on_update(window,0);
+        desktop.poll_desktop_guard();
+        assert!(desktop.pending_desktop.is_none());
+        assert!(desktop.system_actions.is_pending());
+        assert!(!desktop.windowt(game).unwrap().is_closing());
+    }
+    #[test]
+    fn canceled_paint_guard_aborts_exit_and_power_without_closing_other_apps() {
+        let _lock = UI_LOCK.lock().unwrap();
+        for intent in [DesktopIntent::Exit, DesktopIntent::Power(SystemAction::Shutdown), DesktopIntent::Power(SystemAction::Restart)] {
+            let dir = TestDir::new();
+            let text = dir.path().join("import.asc"); std::fs::write(&text,"art").unwrap();
+            let mut desktop = MyDesktop::new(vec![],Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(NoSystemActions));
+            let _app = App::debug(80,24,"Key.Pressed(Escape)").app_bar().timers_count(32).build().unwrap();
+            DesktopEvents::on_start(&mut desktop);
+            desktop.open_paint(Some(text)); desktop.open_game(GameKind::Puzzle2048);
+            let paint = desktop.paint_window; let game = desktop.game_windows[&GameKind::Puzzle2048];
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !desktop.windowt(paint).unwrap().title().contains('*') {
+                TimerEvents::on_update(desktop.window_mut(paint).unwrap(),0);
+                assert!(Instant::now() < deadline); std::thread::sleep(Duration::from_millis(1));
+            }
+            desktop.guard_desktop(intent);
+            TimerEvents::on_update(desktop.window_mut(paint).unwrap(),0);
+            desktop.poll_desktop_guard();
+            assert!(desktop.pending_desktop.is_none()); assert!(!desktop.system_actions.is_pending());
+            assert!(!desktop.windowt(game).unwrap().is_closing());
+            assert!(!desktop.windowt(paint).unwrap().is_closing());
+            assert!(desktop.windowt(paint).unwrap().title().contains('*'));
+        }
+    }
     #[test]
     fn audio_files_open_in_the_native_music_player_instead_of_the_editor() {
         let _ui_lock = UI_LOCK.lock().unwrap();
@@ -1236,7 +1389,7 @@ mod tests {
         let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
         let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
         DesktopEvents::on_start(&mut desktop);
-        assert_eq!(desktop.application_commands.len(), 10);
+        assert_eq!(desktop.application_commands.len(), 11);
         let browser_command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::FileBrowser).unwrap().0;
         MenuEvents::on_command(&mut desktop, Handle::None, browser_command, Commands::LaunchApplication);
         let browser = desktop.browser_window;

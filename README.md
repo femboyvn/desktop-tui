@@ -25,7 +25,7 @@ Features:
 - [x] Change tilling options
 - [x] Can let the user select a file or a folder to use its path as a command argument
 - [x] Categorized Application menu with starter launchers
-- [x] Native File Browser, Image Viewer, PDF Reader, and Music Player
+- [x] Native File Browser, Image Viewer, PDF Reader, Music Player, and ASCII Paint
 - [x] Built-in Snake, 2048, and Minesweeper
 - [x] Clock
 - [x] Offline Help and saved desktop/terminal palettes
@@ -142,7 +142,7 @@ visible windows when space is limited; selecting one opens its Focus/Hide/Close
 actions. The status panel remains responsive.
 External windows with additional commands expose them through **App commands...**.
 
-Ten starters are available even with an empty shortcut directory:
+Eleven starters are available even with an empty shortcut directory:
 
 | Category | Application | Executable |
 | --- | --- | --- |
@@ -153,6 +153,7 @@ Ten starters are available even with an empty shortcut directory:
 | Utility | PDF Reader | Native (Poppler rendering) |
 | Utility | Text editor | `nano` |
 | Utility | Music Player | Native (compiled audio engine) |
+| Utility | ASCII Paint | Native |
 | Games | Snake | Native |
 | Games | 2048 | Native |
 | Games | Minesweeper | Native |
@@ -181,6 +182,60 @@ press Space/P to resume after returning. Windows too small for the board show a
 resize prompt and ignore game input. Score and session best for Snake/2048 stay
 in memory until the window closes. Close and relaunch for a fresh window.
 Game windows stay within the available desktop area when the terminal shrinks.
+
+**ASCII Paint** opens under **Application > Utility > ASCII Paint**. It keeps one
+canvas window; selecting the launcher again restores it. A fresh canvas is 80×24
+cells. **New** and **Resize** accept 1–200 columns and 1–80 rows. Click the size
+at the bottom left or use **Resize / Ctrl+R** to change an existing canvas.
+Artwork stays anchored at the top left; growing adds blank cells, and Undo
+restores cropped cells after shrinking. Cursor coordinates appear at the bottom
+right. Resizing the window changes only the view; palette changes preserve cell
+RGB colors.
+
+Use **Brush / RGB** to select a printable ASCII character and foreground/background
+`#RRGGBB` colors. Printable keys select the brush character. Left/right-click a
+palette swatch to set foreground/background. Left-click or drag paints; right-click
+or drag erases to the canvas's original blank colors. **Eraser** toggles erasing.
+Arrows move the cursor and reveal it, **Space/Enter** stamps, and
+**Backspace/Delete** erases. The mouse wheel scrolls vertically or horizontally;
+**PageUp/PageDown** scroll vertically. **Undo/Redo** retains up to 64 actions,
+groups a drag into one stroke, and can undo **Clear**.
+
+| ASCII Paint action | Shortcut |
+| --- | --- |
+| New / Open | Ctrl+N / Ctrl+O |
+| Save / Save As | Ctrl+S / Ctrl+Shift+S |
+| Export Text | Ctrl+E |
+| Resize canvas / Image to ASCII | Ctrl+R / Ctrl+I |
+| Undo / Redo | Ctrl+Z / Ctrl+Y |
+
+**Image to ASCII / Ctrl+I** converts PNG, JPEG, WebP, GIF, or BMP into an
+editable untitled drawing. Choose maximum columns/rows and whether to preserve
+image colors; disable that option for monochrome. Conversion fits the image
+within those dimensions, preserving proportions and accounting for tall terminal
+cells. Brightness selects ASCII character density; transparency blends onto black.
+The existing limits of 32 MiB input and 16 megapixels apply. Images honor
+orientation metadata and use the first animation frame. Conversion runs in the
+background and follows the
+unsaved-work prompt before replacing artwork; cancellation or failure keeps the
+current drawing. Save the result as a project or export it as text.
+
+**Save** writes a colored `.asciipaint` project (version 1 TOML, up to 2 MiB).
+**Open** also imports `.txt`/`.asc`: printable ASCII only, LF/CRLF line endings,
+tabs expanded to four-column stops, with both input and normalized text limited
+to 16 KiB and the same canvas dimension limits. Imported text is an unsaved,
+untitled project. These text files still open in Text editor from File Browser;
+`.asciipaint` files open in Paint. **Export Text** writes colorless, padded rows
+with LF endings to `.txt`/`.asc`; exporting does not mark the colored project saved.
+Only one file operation runs at a time, with editing paused until it completes.
+Failed opens preserve the canvas; failed saves preserve the existing destination.
+Writes replace the destination atomically.
+
+Unsaved artwork prompts **Save / Discard / Cancel** before New, Open, closing,
+Desktop Exit, Shutdown, or Restart. Save must finish successfully before the
+action continues; cancellation leaves the desktop and other apps running.
+Hide and Terminal Lock preserve artwork, and prompts wait until Paint is visible.
+Restore it through its launcher or **Application > Background windows**.
 
 **Music Player** is built into Desktop-TUI; it requires no separate player installation.
 Open **Application > Utility > Music Player**, then click **Open** or press **Ctrl+O**
@@ -218,6 +273,7 @@ Files open in their default Desktop-TUI app. Extensions are case-insensitive:
 | `.mp3`, `.wav`, `.flac`, `.ogg` (Ogg Vorbis) | Music Player |
 | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | Image Viewer |
 | `.pdf` | PDF Reader |
+| `.asciipaint` | ASCII Paint |
 | Other regular files | Configured Text editor, in independent document windows |
 
 For Text editor documents, each
@@ -260,8 +316,8 @@ PDF editing are outside this version.
 Native windows and document windows participate in tiling, palette updates,
 Terminal Lock visibility restoration, and Desktop > Exit. Closing and reopening
 a worker-backed app creates a fresh worker; results from its previous instance are
-discarded. File mutations, image editing, and animation playback are outside
-this version.
+discarded. ASCII Paint saves its own artwork; File Browser file mutations, raster
+image editing, and animation playback are outside this version.
 
 ## Development
 

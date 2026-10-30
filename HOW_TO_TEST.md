@@ -125,6 +125,7 @@ menu item to launch it. Check only the matrix rows relevant to the patch.
 | Native image viewer | Open each supported format; check EXIF orientation, transparency across a palette change, first frame of animation, fit/actual/zoom bounds, arrows, dragging, and outer/window resize. Test invalid/missing/unsupported images and both size limits. Close during decode and reopen another file. |
 | Native PDF reader | With Poppler installed, open multi-page text and scanned PDFs from Utility and File Browser. Check Ctrl+O and cancellation, Prev/Next, PgUp/PgDn, P/N, Home/End, fit, zoom/wheel, pan/drag, tiny viewports, and resize. Test missing helpers, missing/invalid/oversized/password-protected input, spaces/Unicode/opaque paths, hide/restore, theme, tiling, lock, close while loading, reopen, and Exit; no helper processes should remain. |
 | Native file browser | Navigate home, relative/absolute paths, Up, Refresh, hidden files, unreadable folders, and large directories. Open images and multiple editor documents. Use spaces, Unicode, non-UTF-8 names, and literal placeholder text; confirm each selected path reaches the editor as one argument and a running editor remains open. |
+| Native ASCII Paint | Launch from Utility and confirm singleton restore. Create default/minimum/maximum canvases; reject invalid sizes. Click the bottom-left size or use Resize/Ctrl+R to crop/expand; undo/redo dimensions and cropped RGB cells. Check bottom-right cursor coordinates, footer alignment, and footer clicks never painting. Convert images with Image to ASCII/Ctrl+I in color/monochrome, including alpha, aspect correction, output limits, unsaved prompting, cancellation, failed decode, and saving/exporting the converted art. Select printable brushes, exact RGB colors, and left/right palette swatches. Paint/erase clicks and continuous drags, toggle Eraser, use arrows/Space/Enter/Backspace/Delete, wheel in both axes, and PgUp/PgDn. Check 64-action grouped undo/redo and undoable Clear. Save/reopen colored projects, import LF/CRLF/tab text, export padded colorless LF text without clearing dirty state, and route `.asciipaint` from File Browser while `.txt`/`.asc` still use Text editor. Reject invalid/version/size/dimension/non-ASCII files and failed destinations without losing art or replacing existing files. Cancel pickers and Save/Discard/Cancel for New/Open/Close/Exit/Shutdown/Restart; a failed or canceled save must stop continuation and leave other apps running. Hide/restore and lock/unlock during I/O or pending prompts, resize to tiny/large viewports, tile, and change theme while checking cell RGB and canvas preservation. Test actual power actions only in a disposable VM. |
 | Native music player | Open MP3, WAV, FLAC, and Ogg Vorbis files from the picker and File Browser, including mixed-case extensions and spaces/Unicode/opaque filenames. Confirm browser opens reuse and restore the player, replace the track, and never open an editor. Check click/keyboard Open, Play/Pause, Stop, ten-second seeking, volume bounds, progress, invalid/missing/oversized input, and unavailable output devices. Hide, lock, restore, tile, resize, and change theme while playing. Close during loading, reopen, then Exit; playback must stop. Use a working real audio session to verify audible output. |
 | Native games | Open Snake, 2048, and Minesweeper from Application > Games. Check arrows/WASD, R restart, scores, 2048 merges, and Minesweeper Space/Enter/F plus left/right clicks. Snake must pause on lost focus, hiding, locking, and a small window; Space/P resumes. Hide/restore each board, close/reopen, tile, resize, change theme, then Exit. Verify readable instructions and the resize prompt at small sizes. |
 | Mixed window lifecycle | Tile native and terminal/document windows together; change theme and Terminal Lock with some hidden. Restore the original visibility. Close and reopen native windows, close individual documents, then Exit and check for leftover child processes. |
@@ -166,3 +167,16 @@ a host with Poppler's `pdfinfo` and `pdftoppm` installed:
 ```sh
 cargo test --locked runtime::pdf::tests::poppler_renders -- --ignored
 ```
+
+ASCII Paint document, history, normalization, serialization, bounded file I/O,
+atomic-write failure, and worker tests live in `src/runtime/ascii_paint.rs`.
+Canvas keyboard/mouse, footer placement, canvas resizing, image conversion,
+viewport, rendering, dialogs, and save continuation tests live in `src/ui/native/ascii_paint.rs`; catalog and desktop lifecycle/routing
+coverage lives in `src/config/catalog.rs` and `src/ui/desktop/view.rs`. Run focused
+checks before the full suite, and verify each filter actually selects tests:
+
+```sh
+cargo test --locked ascii_paint
+```
+
+These headless tests do not replace the ASCII Paint real-terminal matrix above.
