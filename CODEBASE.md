@@ -296,12 +296,31 @@ half-cell pixel geometry; explicit zoom is 5–400%, while Fit may be smaller.
 Viewport preparation is bounded to 2048 × 1024 character cells.
 
 File Browser enumerates and sorts directories outside callbacks, then inserts up
-to 256 rows per tick. Original PathBuf values drive navigation and document
+to 256 entries per tick. A custom BrowserEntries control shares entries and selection
+between the default responsive icon grid and Details; its row geometry drives
+painting, hit testing, keyboard navigation, scrolling, and selection reveal.
+It owns context menus and invalidates targets on navigation/resize/closure.
+The File information menu action and Alt+Enter queue an entry snapshot for
+BrowserWindow's timer to show in a read-only, scrollable FileInformationDialog.
+It uses the name/path/kind/size/modified values already collected by the directory
+worker, without new filesystem I/O in callbacks; Refresh obtains updated metadata.
+BrowserWindow queues typed BrowserAction requests (Open/OpenWith/OpenTerminal)
+for the desktop timer. The scrollable desktop OpenWithDialog uses stable AppId
+values and labels compatible native viewers separately from every external shortcut.
+Original PathBuf values drive navigation and document
 arguments; lossy text is used only for labels and the editable path display.
 The desktop routes case-insensitive MP3/WAV/FLAC/OGG extensions to Music Player,
 supported images to Image Viewer, PDFs to PDF Reader, `.asciipaint` to ASCII Paint, and other files to the
 configured Text editor. Audio opens preserve the original OS path and reuse and
 restore the native player; its worker loads and starts the selected track.
+Open with external choices and browser terminals use independent tracked terminal
+handles rather than the shortcut singleton map. TuiWindow's LaunchContext binds a
+selected file and parent, or a selected folder, before byte-preserving template
+expansion; the file is appended only when no FILE_PATH template exists. These
+contexts set the child directory through virtual-terminal's current_dir API,
+without changing the desktop process directory. Default and document constructors
+retain their existing picker and append behavior. ProcessGuard owns cleanup for
+all terminal instances, including these launches and asynchronous launch failures.
 Native windows and all tracked terminal instances participate in arrangement,
 palette updates, Terminal Lock visibility snapshots, and desktop shutdown.
 

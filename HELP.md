@@ -130,11 +130,38 @@ player; only that example requires mp3blaster to be installed separately.
 
 Application > System > File Browser starts in your home directory.
 Enter an absolute or relative path, or double-click a folder in the listing.
-Double-click a regular file to open it; Enter opens the selected row.
+Double-click a regular file to open it; Enter opens the selected entry.
+New windows use an icon grid. View (Alt+V) switches Grid/Details while
+keeping the selection visible. Use arrows, Home/End, PageUp/PageDown,
+or the mouse wheel. Long names are clipped only for display.
 Up (Alt+U) opens the parent, Refresh (Alt+R) reloads, and Hidden
-(Alt+H) toggles dot files. Directories sort before files; columns
-show name, type, byte size, and local modification time. Failed
-background reads leave the previous listing usable.
+(Alt+H) toggles dot files. Directories sort before files; Details shows
+name, type, byte size, and local modification time. Failed background
+reads leave the previous listing usable.
+
+Right-click selects without opening. Shift+F10 opens the selected entry's
+menu; Escape dismisses it. Regular files offer Open, Open with, and
+Open in terminal. Folders offer Open and Open in terminal. Special
+entries offer a terminal at their parent. Right-click blank space for
+Open terminal here in the current folder. All menus offer Refresh,
+Hidden, Grid, and Details.
+
+File information in an entry's menu, or Alt+Enter on the selected entry,
+opens a read-only dialog with name, full path, type, byte size, and modified
+time. Scroll long text; Tab switches between the text and Close button.
+Close or Escape dismisses the dialog. Values come from the latest listing;
+Refresh updates them. Folder and special-entry sizes are not calculated.
+
+Open with lists compatible native viewers and every configured shortcut,
+labeled native/shortcut. Enter or double-click chooses; Escape cancels.
+External choices create independent windows. FILE_PATH templates use the
+selected file; FOLDER_PATH uses its parent. With no FILE_PATH template,
+the selected file is appended once. Paths retain their original bytes,
+including literal template text. The child starts in the file's parent.
+Open in terminal creates a fresh configured Terminal window in the selected
+folder, file's parent, or current folder. Its FOLDER_PATH binding uses that
+folder. View changes last only in the current window; graphical Linux apps
+are not discovered.
 
 Open supported images in Image Viewer, PDFs in PDF Reader, and MP3, WAV,
 FLAC, or Ogg Vorbis files in Music Player, and .asciipaint projects in

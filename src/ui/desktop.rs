@@ -4,3 +4,5 @@ mod panel;
 mod view;
 
 pub(crate) use view::MyDesktop;
+
+mod open_with;

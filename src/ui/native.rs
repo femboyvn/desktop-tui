@@ -5,7 +5,7 @@ mod games;
 mod pdf_reader;
 
 pub(crate) use image_viewer::ImageWindow;
-pub(crate) use browser::BrowserWindow;
+pub(crate) use browser::{BrowserWindow, BrowserAction};
 pub(crate) use music_player::MusicWindow;
 pub(crate) use games::GameWindow;
 pub(crate) use pdf_reader::PdfWindow;

@@ -8,7 +8,8 @@ use crate::config::catalog::{self, AppId, GameKind};
 use crate::platform::linux::{StatusMonitor, SystemAction, SystemActionRunner, SystemActions};
 use crate::ui::locking::{LockSetupDialog, TerminalLockScreen};
 use crate::ui::preferences::PreferencesDialog;
-use crate::ui::terminal::TuiWindow;
+use crate::ui::terminal::{TuiWindow, LaunchContext};
+use super::open_with::OpenWithDialog;
 use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow, PdfWindow, PaintWindow};
 use crate::ui::build_theme;
 use appcui::prelude::appbar::MenuButton;
@@ -595,6 +596,46 @@ impl MyDesktop {
         Ok(())
     }
 
+    fn launch_independent(&mut self, index: usize, context: LaunchContext<'_>, title: &str) -> anyhow::Result<()> {
+        let shortcut = self.shortcuts.get(index).ok_or_else(|| anyhow::anyhow!("This shortcut is no longer available."))?;
+        let window = TuiWindow::new_with_context(title,shortcut.command.clone(),shortcut.args.clone(),
+            shortcut.window.clone(),shortcut.terminal.clone(),&self.preferences.terminal,context)?;
+        let handle = self.add_window(window);
+        self.document_windows.push(handle);
+        self.track_window(WindowTarget::Terminal(handle));
+        Ok(())
+    }
+    fn open_with_application(&mut self, path: PathBuf, id: AppId) -> anyhow::Result<()> {
+        match id {
+            AppId::External(index) => {
+                let name = self.shortcuts.get(index).ok_or_else(|| anyhow::anyhow!("This shortcut is no longer available."))?.name.clone();
+                let title = format!("{name} — {}",path.file_name().unwrap_or(path.as_os_str()).to_string_lossy());
+                self.launch_independent(index,LaunchContext::File(&path),&title)?;
+            }
+            AppId::ImageViewer => self.open_image(Some(path)), AppId::PdfReader => self.open_pdf(Some(path)),
+            AppId::MusicPlayer => self.open_music(Some(path)), AppId::AsciiPaint => self.open_paint(Some(path)),
+            _ => return Err(anyhow::anyhow!("This application cannot open files.")),
+        }
+        Ok(())
+    }
+    fn open_browser_terminal(&mut self, folder: PathBuf) -> anyhow::Result<()> {
+        let index = self.shortcuts.iter().position(|shortcut| shortcut.name == "Terminal")
+            .ok_or_else(|| anyhow::anyhow!("Configure a Terminal shortcut to open this folder."))?;
+        self.launch_independent(index,LaunchContext::Folder(&folder),&format!("Terminal — {}",folder.display()))
+    }
+    fn dispatch_browser_action(&mut self, action: native::BrowserAction) {
+        let result = match action {
+            native::BrowserAction::Open(path) => { self.open_file(path); Ok(()) }
+            native::BrowserAction::OpenWith(path) => {
+                match OpenWithDialog::new(&path,&self.shortcuts).show() {
+                    Some(id) => self.open_with_application(path,id), None => Ok(()),
+                }
+            }
+            native::BrowserAction::OpenTerminal(folder) => self.open_browser_terminal(folder),
+        };
+        if let Err(error) = result { dialogs::error("Cannot open selection",&format!("{error:#}")); }
+    }
+
     fn open_game(&mut self, kind: GameKind) {
         if let Some(handle) = self.game_windows.get(&kind).copied()
             && let Some(window) = self.window_mut(handle)
@@ -1019,8 +1060,8 @@ impl TimerEvents for MyDesktop {
         }
         self.poll_desktop_guard();
         let handle = self.browser_window;
-        let open_path = self.window_mut(handle).and_then(BrowserWindow::take_open_path);
-        if let Some(path) = open_path { self.open_file(path); }
+        let action = self.window_mut(handle).and_then(BrowserWindow::take_action);
+        if let Some(action) = action { self.dispatch_browser_action(action); }
         let documents = std::mem::take(&mut self.document_windows);
         self.document_windows = documents.into_iter().filter(|handle| self.windowt(*handle).is_some()).collect();
         let settings = &self.preferences.panel;
@@ -1056,6 +1097,50 @@ mod tests {
     use crate::config::preferences::Rgb;
     use crate::test_support::{TestDir, UI_LOCK};
     use virtual_terminal::{Input, Output};
+    #[test]
+    fn browser_launches_bind_paths_set_child_directory_and_track_independent_windows() {
+        use std::os::unix::ffi::{OsStrExt,OsStringExt};
+        let _lock = UI_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap(); let _entered = runtime.enter();
+        let dir = TestDir::new();
+        let folder = dir.path().join(std::ffi::OsString::from_vec(["文 folder ".as_bytes(),b"\xff"].concat())); std::fs::create_dir(&folder).unwrap();
+        let path = folder.join(std::ffi::OsString::from_vec(b"file \xff <FOLDER_PATH>".to_vec())); std::fs::write(&path,b"x").unwrap();
+        let capture = dir.path().join("argv");
+        let terminal_capture = dir.path().join("cwd");
+        let mut shortcuts = catalog::with_starters(vec![]);
+        shortcuts[0].command = "/bin/sh".into();
+        shortcuts[0].args = vec!["-c".into(),"printf '%s' \"$PWD\" > \"$1\"; printf T; read answer".into(),"terminal".into(),terminal_capture.to_string_lossy().into_owned()];
+        let mut chosen = shortcuts[0].clone(); chosen.name = "Image Viewer".into();
+        chosen.args = vec!["-c".into(),"printf '%s\\0' \"$PWD\" \"$@\" > \"$1\"; printf A; read answer".into(),"chosen".into(),capture.to_string_lossy().into_owned(),"<FILE_PATH>".into(),"<FOLDER_PATH>".into()];
+        shortcuts.push(chosen);
+        let mut desktop = MyDesktop::new(shortcuts,Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
+        DesktopEvents::on_start(&mut desktop);
+        desktop.launch_application(AppId::External(0)); let original = desktop.app_windows[&0];
+        pump_until(desktop.window_mut(original).unwrap(),'T');
+        desktop.open_with_application(path.clone(),AppId::External(3)).unwrap();
+        desktop.open_with_application(path.clone(),AppId::External(3)).unwrap();
+        let documents = desktop.document_windows.clone();
+        assert_eq!(documents.len(),2);
+        for handle in &documents { pump_until(desktop.window_mut(*handle).unwrap(),'A'); }
+        let bytes = std::fs::read(&capture).unwrap();
+        let values: Vec<_> = bytes.split(|byte| *byte == 0).collect();
+        assert_eq!(values,vec![folder.as_os_str().as_bytes(),capture.as_os_str().as_bytes(),path.as_os_str().as_bytes(),folder.as_os_str().as_bytes(),b""]);
+        desktop.open_browser_terminal(folder.clone()).unwrap(); desktop.open_browser_terminal(folder.clone()).unwrap();
+        let terminals = desktop.document_windows[2..].to_vec();
+        for handle in &terminals { pump_until(desktop.window_mut(*handle).unwrap(),'T'); }
+        assert_eq!(std::fs::read(terminal_capture).unwrap(),folder.as_os_str().as_bytes());
+        assert!(desktop.app_windows[&0] == original);
+        desktop.sync_taskbar(); assert_eq!(desktop.window_tasks.len(),5);
+        desktop.close_window(WindowTarget::Terminal(documents[0]));
+        assert!(!desktop.windowt(documents[1]).unwrap().is_closing());
+        assert!(!desktop.windowt(original).unwrap().is_closing());
+        let visibility = desktop.hide_for_terminal_lock();
+        for handle in &terminals { assert!(!desktop.windowt(*handle).unwrap().is_visible()); }
+        desktop.restore_after_terminal_unlock(visibility);
+        MenuEvents::on_command(&mut desktop,Handle::None,Handle::None,Commands::Exit);
+        app.run(); runtime.block_on(crate::runtime::processes::finish_shutdown());
+    }
     #[test]
     fn ascii_background_is_centered_clipped_and_repainted_with_the_palette() {
         let _ui_lock = UI_LOCK.lock().unwrap();

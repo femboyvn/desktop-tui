@@ -273,10 +273,39 @@ of the native Music Player and still needs mp3blaster installed on PATH.
 **File Browser** starts in your home directory. Enter an absolute or relative
 path in the path field and press Enter, or open a directory in the listing.
 Use **Up** (Alt+U), **Refresh** (Alt+R), and **Hidden** (Alt+H). Directories appear
-first, then entries sorted by name; columns show type, byte size, and local
-modification time. Directory reads happen in the background. Failed reads leave
+first, then entries sorted by name. New browser windows use an icon grid;
+**View** (Alt+V) switches to Details with name, type, byte size, and local
+modification time. Switching views keeps the selection visible. Arrow keys,
+Home/End, PageUp/PageDown, and the mouse wheel navigate the listing; click to
+select and Enter or double-click to open. Long names are clipped for display.
+Directory reads happen in the background. Failed reads leave
 the previous listing available. Filesystem names are preserved as OS paths;
 non-UTF-8 bytes appear as replacement characters only in labels.
+
+Right-click an entry, or press **Shift+F10** for the selected entry's menu.
+Regular files offer **Open**, **Open with…**, and **Open in terminal**;
+folders offer Open and Open in terminal. Special entries offer only Open in
+terminal at their parent. Right-click empty space for **Open terminal here**
+in the current folder. Every menu includes Refresh, Hidden, Grid, and Details;
+Escape dismisses it. Right-click selects an entry without opening it.
+
+Choose **File information…** in an entry's menu, or select it and press
+**Alt+Enter**, to open a read-only dialog with its name, full path, type, byte
+size, and modification time. Long text can be scrolled; Tab moves between the
+text and Close button. Close or Escape dismisses the dialog. Information uses
+the most recent directory listing; Refresh updates it. Folder/special-entry
+sizes display as unavailable.
+
+**Open with…** lists compatible native viewers and all configured Desktop-TUI
+shortcuts, labeled as native or shortcut. Choose with Enter or double-click;
+Escape cancels. External choices create independent windows and bind
+`<FILE_PATH>` to the selected file and `<FOLDER_PATH>` to its parent, without
+selection dialogs. If the configured executable/arguments have no `<FILE_PATH>`,
+the file is appended once as a separate argument. The child's working directory
+is the file's parent. **Open in terminal** creates a fresh window using the
+configured Terminal shortcut, with the selected folder (or a file's parent) as
+its working directory and `<FOLDER_PATH>` binding. Existing windows stay open.
+View changes last only for that browser window; there is no graphical-app discovery.
 
 Files open in their default Desktop-TUI app. Extensions are case-insensitive:
 

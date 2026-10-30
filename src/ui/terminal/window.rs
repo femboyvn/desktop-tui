@@ -18,6 +18,16 @@ use std::path::Path;
 use std::time::Duration;
 use virtual_terminal::{Command, Input, Output};
 
+/// File/Folder contexts bind browser paths without dialogs and set only this child's directory.
+/// Document retains the original constructor's picker-then-append behavior.
+#[derive(Clone, Copy, Default)]
+pub(crate) enum LaunchContext<'a> { #[default] Default, Document(&'a Path), File(&'a Path), Folder(&'a Path) }
+impl<'a> LaunchContext<'a> {
+    fn directory(self) -> Option<&'a Path> {
+        match self { Self::File(path) => path.parent(), Self::Folder(path) => Some(path), _ => None }
+    }
+}
+
 #[Window(events = [TimerEvents, WindowEvents])]
 pub struct TuiWindow {
     pub canvas: Handle<Canvas>,
@@ -45,13 +55,23 @@ impl TuiWindow {
         S: AsRef<OsStr>,
         I: IntoIterator<Item = S>,
     {
-        Self::new_with_document(app_name, program, args, window_options, terminal_options, palette, None)
+        Self::new_with_context(app_name, program, args, window_options, terminal_options, palette, LaunchContext::Default)
     }
 
     /// The document path is appended after template resolution and never interpreted as a template.
     pub fn new_with_document<S, I>(
         app_name: &str, program: S, args: I, window_options: WindowOptions,
         terminal_options: TerminalOptions, palette: &TerminalPalette, document: Option<&Path>,
+    ) -> anyhow::Result<Self>
+    where S: AsRef<OsStr>, I: IntoIterator<Item = S>,
+    {
+        Self::new_with_context(app_name, program, args, window_options, terminal_options, palette,
+            document.map_or(LaunchContext::Default,LaunchContext::Document))
+    }
+
+    pub(crate) fn new_with_context<S, I>(
+        app_name: &str, program: S, args: I, window_options: WindowOptions,
+        terminal_options: TerminalOptions, palette: &TerminalPalette, context: LaunchContext<'_>,
     ) -> anyhow::Result<Self>
     where S: AsRef<OsStr>, I: IntoIterator<Item = S>,
     {
@@ -110,11 +130,11 @@ impl TuiWindow {
 
         let mut configured = vec![program.as_ref().to_owned()];
         configured.extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
-        let (modified_program, mut modified_args) = resolve_templates(configured)?;
-        append_document(&mut modified_args, document);
+        let (modified_program, modified_args) = resolve_templates(configured,context)?;
         let launch_command = modified_program.to_string_lossy().into_owned();
-        let cmd = Command::new(modified_program).args(modified_args)
+        let mut cmd = Command::new(modified_program).args(modified_args)
             .terminal_size((inner_size.width as usize, inner_size.height as usize));
+        if let Some(directory) = context.directory() { cmd = cmd.current_dir(directory); }
         let tx = cmd.in_tx();
         let (process, rx) = processes::start(cmd);
 
@@ -261,19 +281,24 @@ impl TimerEvents for TuiWindow {
     }
 }
 
-fn resolve_templates(mut configured: Vec<OsString>) -> anyhow::Result<(OsString, Vec<OsString>)> {
+fn resolve_templates(mut configured: Vec<OsString>, context: LaunchContext<'_>) -> anyhow::Result<(OsString, Vec<OsString>)> {
     let contains = |token: &[u8]| configured.iter().any(|arg| arg.as_bytes().windows(token.len()).any(|window| window == token));
     let home = directories::UserDirs::new().map(|dirs| dirs.home_dir().to_owned()).unwrap_or_else(|| "/".into());
-    let file = if contains(b"<FILE_PATH>") {
+    let has_file_template = contains(b"<FILE_PATH>");
+    let selected_file = match context { LaunchContext::File(path) => Some(path), _ => None };
+    let selected_folder = context.directory();
+    let file = if let Some(path) = selected_file { Some(path.to_owned()) } else if has_file_template {
         Some(dialogs::open("Select file", "", Location::Path(&home), None,
             OpenFileDialogFlags::Icons | OpenFileDialogFlags::CheckIfFileExists).ok_or_else(|| anyhow!("No file selected"))?)
     } else { None };
-    let folder = if contains(b"<FOLDER_PATH>") {
+    let folder = if let Some(path) = selected_folder { Some(path.to_owned()) } else if contains(b"<FOLDER_PATH>") {
         Some(dialogs::select_folder("Select folder", Location::Path(&home), SelectFolderDialogFlags::Icons)
             .ok_or_else(|| anyhow!("No folder selected"))?)
     } else { None };
     configured = configured.iter().map(|arg| expand_argument(arg, file.as_deref(), folder.as_deref())).collect();
     let program = configured.remove(0);
+    let document = match context { LaunchContext::Document(path) => Some(path), LaunchContext::File(path) if !has_file_template => Some(path), _ => None };
+    append_document(&mut configured,document);
     Ok((program, configured))
 }
 fn expand_argument(arg: &OsStr, file: Option<&Path>, folder: Option<&Path>) -> OsString {
@@ -299,6 +324,47 @@ fn append_document(args: &mut Vec<OsString>, document: Option<&Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn contextual_launch_failure_is_deferred_when_hidden_and_releases_its_child() {
+        let _lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap(); let _entered = runtime.enter();
+        let dir = crate::test_support::TestDir::new();
+        for (program,folder) in [(dir.path().join("missing executable"),dir.path().to_owned()),(std::path::PathBuf::from("/bin/sh"),dir.path().join("missing folder"))] {
+            let app = appcui::prelude::App::debug(80,24,"Key.Pressed(Enter)").build().unwrap();
+            let options = WindowOptions { resizable: true, close_button: true, fixed_position: false, size: None };
+            let terminal = TerminalOptions { padding: None, background_color: None };
+            let mut window = TuiWindow::new_with_context("test",program.as_os_str(),Vec::<&OsStr>::new(),options,terminal,&crate::config::preferences::Preferences::default().terminal,LaunchContext::Folder(&folder)).unwrap();
+            window.set_visible(false);
+            let deadline = std::time::Instant::now()+Duration::from_secs(4);
+            while window.pending_error.is_none() {
+                TimerEvents::on_update(&mut window,0);
+                assert!(std::time::Instant::now()<deadline,"launch error was not observed");
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            assert!(!window.is_closing(),"hidden error must remain available on restore");
+            window.set_visible(true); TimerEvents::on_update(&mut window,0);
+            assert!(window.is_closing()); assert!(window.pending_error.is_none());
+            app.run();
+        }
+        runtime.block_on(processes::finish_shutdown());
+    }
+    #[test]
+    fn selected_file_binds_templates_without_reinterpreting_or_duplicating_path() {
+        let file = std::path::PathBuf::from(OsString::from_vec(["/tmp/folder 文/opaque ".as_bytes(), b"\xff <FOLDER_PATH>"].concat()));
+        let context = LaunchContext::File(&file);
+        let configured = vec![OsString::from("editor"),OsString::from("--file=<FILE_PATH>"),OsString::from("<FOLDER_PATH>")];
+        let (program,args) = resolve_templates(configured,context).unwrap();
+        assert_eq!(program,"editor");
+        let mut expected = b"--file=".to_vec(); expected.extend_from_slice(file.as_os_str().as_bytes());
+        assert_eq!(args[0].as_bytes(),expected);
+        assert_eq!(args[1],OsStr::new("/tmp/folder 文"));
+        assert_eq!(args.len(),2);
+        let (_,args) = resolve_templates(vec!["editor".into(),"--flag".into()],context).unwrap();
+        assert_eq!(args,vec![OsString::from("--flag"),file.as_os_str().to_owned()]);
+        assert_eq!(context.directory(),Some(std::path::Path::new("/tmp/folder 文")));
+        let (_,args) = resolve_templates(vec!["sh".into(),"<FOLDER_PATH>".into()],LaunchContext::Folder(std::path::Path::new("/tmp/文"))).unwrap();
+        assert_eq!(args,vec![OsString::from("/tmp/文")]);
+    }
     #[test]
     fn template_paths_are_opaque_and_document_argument_is_appended_once() {
         use std::os::unix::ffi::{OsStrExt, OsStringExt};
