@@ -42,13 +42,13 @@ impl MouseReleaseCommand {
     pub(super) fn generate_event(&self, mouse_pos: Point, sys_events: &mut VecDeque<SystemEvent>) {
         //GDT: not sure it is completely correct --> the actual state is that a mouse button is clicked
         if (mouse_pos.x != self.x) || (mouse_pos.y != self.y) {
-            sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent {
+            sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent { modifier: None,
                 x: self.x,
                 y: self.y,
                 button: self.button,
             }));
         }
-        sys_events.push_back(SystemEvent::MouseButtonUp(MouseButtonUpEvent {
+        sys_events.push_back(SystemEvent::MouseButtonUp(MouseButtonUpEvent { modifier: None,
             x: self.x,
             y: self.y,
             button: MouseButton::None,

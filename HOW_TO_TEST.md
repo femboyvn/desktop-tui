@@ -135,7 +135,7 @@ Ctrl+C with the child control focused requests termination and closes its window
 it is not forwarded as an ordinary shell interrupt. A finite command's window
 closes when the child exits. For resize and input checks, use an interactive or
 longer-running controlled child rather than relying on a short-lived print.
-The emulator is partial; distinguish a regression from an existing limitation.
+Unicode preservation and cell width are implemented; the outer terminal still controls fonts and shaping. Browser site support belongs to Carboxyl.
 
 ## Review and report evidence
 
@@ -222,3 +222,71 @@ In a real terminal, open File information from each view and check all fields,
 scroll full paths, Tab between text and Close, resize the dialog, close with both
 the button and Escape, and confirm the browser selection and files are unchanged.
 Change a file externally, Refresh, and reopen the dialog to check updated metadata.
+
+## Carboxyl and Unicode terminal regressions
+
+Run the focused application and dependency checks before the full commands above:
+
+```sh
+cargo test --locked runtime::terminal::tests
+cargo test --locked ui::terminal::
+cargo test --locked config::catalog::tests
+cargo test --locked -p appcui --lib grapheme_ -- --test-threads=1
+cargo test --locked -p appcui --lib backend::crossterm::input:: -- --test-threads=1
+cargo test --locked -p appcui --lib system::runtime_manager::regression_tests -- --test-threads=1
+cargo test --locked -p appcui --lib -- --test-threads=1
+cargo build --locked --release
+```
+
+The core tests feed every byte split, separate scalar feeds, and immediate cell
+contents/widths for decomposed Vietnamese, long combining sequences, CJK,
+variation selectors, skin tones, flags, ZWJ sequences and adjacent emoji. Surface
+and renderer tests cover clipping either half, overlap, wide/narrow replacement,
+recoloring, metadata serialization, hashes and unchanged-frame caches. Input tests
+cover exact key/mouse bytes, repeated modified keys, paste focus/modal boundaries,
+queue recovery, output budgets, geometry and child cleanup.
+
+For real-terminal checks, use the bundled Carboxyl 0.2.0 or install it separately, and serve the controlled
+[local fixture](tests/fixtures/browser.html) from the repository root:
+
+```sh
+python3 -m http.server 8765 --bind 127.0.0.1 --directory tests/fixtures
+```
+
+In a separate real terminal, run Desktop-TUI with explicit sample shortcuts,
+open Utility > Web Browser, click Carboxyl's top-row address field and enter
+`http://127.0.0.1:8765/browser.html`. At 80×24 and larger, verify links, JavaScript,
+form input, Unicode URL/form paste, images, multilingual text, history and
+scrolling. Check modified navigation, mouse/wheel coordinates and modifiers,
+double clicks and drag/release outside the window. Resize both windows and the
+outer terminal, including quiet output. Overlap windows across wide glyphs;
+check cursor focus, hiding/restoring, tiling, palette changes, lock/unlock,
+close/reopen, Ctrl+C and Desktop Exit. Verify no child/descendant remains and
+missing Carboxyl uses the normal launch-error dialog. Stop the local HTTP server
+when finished. These are manual checks, not results established by headless tests.
+
+## Portable Linux package
+
+Run the executable-resolution and package-builder regressions:
+
+```sh
+cargo test --locked platform::bundled::tests
+python3 -m unittest discover -s scripts -p 'test_package_linux.py'
+python3 scripts/package-linux.py
+```
+
+The bundle pins and verifies the Carboxyl archive SHA-256 before extraction;
+check tests reject changed downloads, unsafe archive members and wrong binary
+architectures. Extract the resulting archive into a path containing spaces,
+change to another directory, and run the extracted desktop with `--help` and
+`libexec/carboxyl --version`. Confirm 0.2.0 and inspect included license files,
+provenance and shortcut samples. These noninteractive checks verify loading and
+packaging; the real-terminal Web Browser matrix above still applies.
+
+On a compatible Linux x86-64 host (glibc 2.43+ for the pinned upstream binary),
+launch the extracted desktop without Carboxyl on PATH, then open Web Browser.
+Check same-name overrides with custom arguments and explicit executable paths,
+launching from another working directory, hiding/restoring, locking, closing,
+and no remaining child processes. Test a source/Cargo build without a companion
+to confirm normal PATH fallback, and a non-executable companion. Do not launch
+the interactive browser or desktop as an unattended packaging check.

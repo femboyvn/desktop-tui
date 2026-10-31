@@ -329,6 +329,9 @@ where
     T: Number + FromStr + 'static,
 {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         let mut response = EventProcessStatus::Ignored;
         // process buttons if visible
         if (!self.flags.contains_one(Flags::HideButtons | Flags::ReadOnly)) && (!self.edit_mode) {

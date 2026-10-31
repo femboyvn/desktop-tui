@@ -408,6 +408,7 @@ impl OnMouseEvent for TimePicker {
                     EventProcessStatus::Ignored
                 }
             }
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(dir) => {
                 match dir {
                     MouseWheelDirection::Left => self.move_to_prev_component(),

@@ -1,0 +1,14 @@
+name = "Web Browser"
+category = "Utility"
+command = "carboxyl"
+args = ["--graphics", "quadrant", "--fps", "20"]
+
+[taskbar]
+
+[window]
+resizable = true
+close_button = true
+fixed_position = false
+
+[terminal]
+padding = [0, 0]

@@ -299,6 +299,9 @@ impl OnKeyPressed for ColorPicker {
 }
 impl OnMouseEvent for ColorPicker {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         match event {
             MouseEvent::Enter => {
                 if !self.is_expanded() && self.color.name().len() as i32 > ((self.size().width as i32) - 8) {

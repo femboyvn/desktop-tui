@@ -183,6 +183,9 @@ impl OnKeyPressed for ThreeStateBox {
 
 impl OnMouseEvent for ThreeStateBox {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         match event {
             MouseEvent::Enter => {
                 if self.caption.chars_count() > (self.size().width - 4) as usize {

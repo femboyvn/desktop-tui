@@ -1,4 +1,11 @@
-# Local AppCUI dependency
+# Local dependencies
+
+Desktop-TUI uses two local Rust dependencies: AppCUI below, and the pinned
+[`tattoy-wezterm-term` 0.1.0-fork.5 core](wezterm-term/PATCHES.md). The core's
+patch record includes archive hash, VCS provenance, retained MIT license, and
+the grapheme/reply/capability corrections. The root Cargo.lock controls both.
+
+## AppCUI
 
 `appcui/` contains AppCUI 0.4.6 from the cached crates.io package, retaining
 its original source, manifest metadata, authorship, and README. The package
@@ -75,6 +82,47 @@ across the process.
 
 Keep future changes focused and document them here. This is a local dependency
 patch; it does not require synchronizing with or publishing to another project.
+
+The Carboxyl integration adds complete glyph metadata while keeping
+`Character: Copy`. `graphics/surface.rs` stores sparse lead text, column width,
+and continuation offsets. `write_grapheme`, `cell_text`, and `cell_width` expose
+that data. All writers, clears, recoloring, resize and composition preserve or
+atomically erase affected glyphs. A partially clipped wide glyph becomes spaces
+in visible cells, so it cannot overwrite an adjacent window. CrossTerm and ANSI
+renderers print each grapheme once, skip continuations, and include metadata in
+repaint caches. Debug output, SurfaceTester and event-recorder hashes include
+complete text and width.
+
+Metadata-free surfaces retain the exact SRF version 1 format. Metadata-bearing
+surfaces write version 2: the existing cell payload followed by a `u32` lead
+count, then each lead's `u32` index, `u32` width, `u64` UTF-8 byte length, and text.
+Readers reconstruct continuations and validate row bounds and overlapping spans.
+
+CrossTerm input delivers Press and Repeat with their actual Unicode character,
+preserves modified keys and BackTab, and forwards Paste. CrossTerm enables outer
+bracketed-paste capture on entry and disables it on close. `OnKeyPressed::on_paste`
+opts controls into whole-payload handling. Otherwise the runtime re-resolves
+focus and modal/menu boundaries while delivering typed-character fallback.
+Mouse events carry local modifiers and use the control's origin when clipped.
+`WheelAt` and `OverAt` offer coordinates/modifiers before legacy fallback;
+native controls explicitly decline these metadata variants. DoubleClick retains
+the native second-press callback and captures its matching release. Legacy
+backend event constructors were updated for compatibility; Linux CrossTerm is
+the supported, verified build target.
+
+Additional regressions and the complete dependency suite:
+
+```sh
+cargo test --locked -p appcui --lib grapheme_ -- --test-threads=1
+cargo test --locked -p appcui --lib backend::crossterm::input -- --test-threads=1
+cargo test --locked -p appcui --lib system::runtime_manager::regression_tests -- --test-threads=1
+cargo test --locked -p appcui --lib -- --test-threads=1
+```
+
+At the integration baseline, the full suite has one existing failure:
+`ui::menu::tests::check_submenus_open` expects hash `0x60340250EC2EF1C2` but gets
+`0xF51C6661294D459A`. It reproduces on untouched revision `15fcb77` with
+`CROSSTERM,TRUE_COLORS`; no fixture was changed to hide this mismatch.
 
 The file-picker backdrop regression is in
 `src/system/runtime_manager/regression_tests.rs`:

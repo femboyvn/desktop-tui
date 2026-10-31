@@ -282,6 +282,7 @@ impl GenericScrollBar {
                 }
                 ProcessEventResult::PassToControl
             }
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => ProcessEventResult::PassToControl,
             MouseEvent::Wheel(_) => ProcessEventResult::PassToControl,
         }
     }

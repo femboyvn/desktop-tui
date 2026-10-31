@@ -372,6 +372,9 @@ impl OnPaint for Tab {
 }
 impl OnMouseEvent for Tab {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         match event {
             MouseEvent::Enter => EventProcessStatus::Ignored,
             MouseEvent::Leave => {
@@ -407,6 +410,7 @@ impl OnMouseEvent for Tab {
             MouseEvent::Released(_) => EventProcessStatus::Ignored,
             MouseEvent::DoubleClick(_) => EventProcessStatus::Ignored,
             MouseEvent::Drag(_) => EventProcessStatus::Ignored,
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(_) => EventProcessStatus::Ignored,
         }
     }

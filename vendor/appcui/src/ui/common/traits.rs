@@ -58,6 +58,12 @@ pub trait OnPaint {
     fn on_paint(&self, _surface: &mut Surface, _theme: &Theme) {}
 }
 pub trait OnKeyPressed {
+    /// Handles a bracketed paste as one text payload. Return `Ignored` to use
+    /// ordinary focused character input; override this for terminal protocols.
+    fn on_paste(&mut self, _text: &str) -> EventProcessStatus {
+        EventProcessStatus::Ignored
+    }
+
     fn on_key_pressed(&mut self, _key: Key, _character: char) -> EventProcessStatus {
         EventProcessStatus::Ignored
     }

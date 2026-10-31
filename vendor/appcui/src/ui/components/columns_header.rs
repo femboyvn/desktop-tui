@@ -393,6 +393,7 @@ impl ColumnsHeader {
                     ColumnsHeaderAction::None
                 }
             }
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => ColumnsHeaderAction::None,
             MouseEvent::Wheel(_) => ColumnsHeaderAction::None,
         }
     }

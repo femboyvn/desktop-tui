@@ -715,6 +715,7 @@ impl RuntimeManager {
         match sys_event {
             SystemEvent::AppClose => self.loop_status = LoopStatus::StopApp,
             SystemEvent::KeyPressed(event) => self.process_keypressed_event(event),
+            SystemEvent::Paste(text) => self.process_paste_event(&text),
             SystemEvent::KeyModifierChanged(event) => self.process_key_modifier_changed_event(event.new_state),
             SystemEvent::Resize(new_size) => {
                 self.backend.on_resize(new_size);
@@ -1372,6 +1373,58 @@ impl PaintMethods for RuntimeManager {
         self.repaint = true;
     }
 }
+impl RuntimeManager {
+    fn focused_input_control(&self) -> Handle<()> {
+        self.get_focused_control_for_parent(self.get_root_control_handle()).unwrap_or(Handle::None)
+    }
+
+    fn process_paste_event(&mut self, text: &str) {
+        if !self.opened_menu_handle.is_none() || self.appbar.as_ref().is_some_and(|bar| bar.is_opened()) { return; }
+        let root = self.get_root_control_handle();
+        let focused = self.focused_input_control();
+        if self.process_control_paste_event(root, text) == EventProcessStatus::Processed {
+            self.repaint = true;
+            return;
+        }
+        for character in text.chars() {
+            // Re-resolve input boundaries between characters. A callback may hide
+            // a window, change focus, open a modal, or enter a lock screen.
+            if self.get_root_control_handle() != root || self.focused_input_control() != focused
+                || !self.opened_menu_handle.is_none() { break; }
+            self.process_keypressed_event(KeyPressedEvent { key: Key::None, character });
+        }
+    }
+
+    fn process_control_paste_event(&mut self, handle: Handle<()>, text: &str) -> EventProcessStatus {
+        let controls = unsafe { &mut *self.controls };
+        if let Some(control) = controls.get_mut(handle) {
+            let base = control.base();
+            if !base.is_active() { return EventProcessStatus::Ignored; }
+            let before = base.should_receive_keyinput_before_children();
+            if before && base.can_receive_input() && control.control_mut().on_paste(text) == EventProcessStatus::Processed {
+                return EventProcessStatus::Processed;
+            }
+            let base = control.base();
+            if base.focused_child_index.in_range(base.children.len()) {
+                let child = base.children[base.focused_child_index.index()];
+                if self.process_control_paste_event(child, text) == EventProcessStatus::Processed {
+                    return EventProcessStatus::Processed;
+                }
+            }
+            if !before && control.base().can_receive_input() {
+                return control.control_mut().on_paste(text);
+            }
+        }
+        EventProcessStatus::Ignored
+    }
+
+    fn dispatch_mouse_over(control: &mut ControlManager, event: MouseMoveEvent, scr_x: i32, scr_y: i32, fallback_modifier: KeyModifier) -> EventProcessStatus {
+        let data = MouseEventData { x: event.x - scr_x, y: event.y - scr_y, button: event.button, modifier: event.modifier.unwrap_or(fallback_modifier) };
+        let response = control.control_mut().on_mouse_event(&MouseEvent::OverAt(data));
+        if response == EventProcessStatus::Processed { response }
+        else { control.control_mut().on_mouse_event(&MouseEvent::Over(Point::new(data.x, data.y))) }
+    }
+}
 impl KeyboardMethods for RuntimeManager {
     fn process_key_modifier_changed_event(&mut self, new_state: KeyModifier) {
         self.key_modifier = new_state;
@@ -1569,7 +1622,7 @@ impl MouseMethods for RuntimeManager {
         }
         if !processed {
             if let Some(cmdbar) = self.commandbar.as_mut() {
-                processed = cmdbar.on_mouse_move(&MouseMoveEvent {
+                processed = cmdbar.on_mouse_move(&MouseMoveEvent { modifier: None,
                     x,
                     y,
                     button: MouseButton::Left,
@@ -1653,7 +1706,16 @@ impl MouseMethods for RuntimeManager {
         if !handle.is_none() {
             let controls = unsafe { &mut *self.controls };
             if let Some(control) = controls.get_mut(handle) {
-                self.repaint |= control.control_mut().on_mouse_event(&MouseEvent::Wheel(event.direction)) == EventProcessStatus::Processed;
+                let base = control.base();
+                let wheel = MouseWheelEventData {
+                    x: event.x - base.screen_origin.x,
+                    y: event.y - base.screen_origin.y,
+                    direction: event.direction,
+                    modifier: event.modifier.unwrap_or(self.key_modifier),
+                };
+                let response = control.control_mut().on_mouse_event(&MouseEvent::WheelAt(wheel));
+                self.repaint |= response == EventProcessStatus::Processed
+                    || control.control_mut().on_mouse_event(&MouseEvent::Wheel(event.direction)) == EventProcessStatus::Processed;
             }
         }
     }
@@ -1662,13 +1724,13 @@ impl MouseMethods for RuntimeManager {
         let controls = unsafe { &mut *self.controls };
         if let Some(control) = controls.get_mut(handle) {
             let base = control.base_mut();
-            let scr_x = base.screen_clip.left;
-            let scr_y = base.screen_clip.top;
+            let scr_x = base.screen_origin.x;
+            let scr_y = base.screen_origin.y;
             let response = control.control_mut().on_mouse_event(&MouseEvent::Drag(MouseEventData {
                 x: event.x - scr_x,
                 y: event.y - scr_y,
                 button: event.button,
-                modifier: self.key_modifier,
+                modifier: event.modifier.unwrap_or(self.key_modifier),
             }));
             let do_update = response == EventProcessStatus::Processed;
             self.repaint |= do_update;
@@ -1695,24 +1757,20 @@ impl MouseMethods for RuntimeManager {
                 if let Some(control) = controls.get_mut(self.mouse_over_control) {
                     let base = control.base_mut();
                     base.update_mouse_over_flag(true);
-                    let scr_x = base.screen_clip.left;
-                    let scr_y = base.screen_clip.top;
+                    let scr_x = base.screen_origin.x;
+                    let scr_y = base.screen_origin.y;
                     let response = control.control_mut().on_mouse_event(&MouseEvent::Enter);
                     self.repaint |= response == EventProcessStatus::Processed;
-                    let response = control
-                        .control_mut()
-                        .on_mouse_event(&MouseEvent::Over(Point::new(event.x - scr_x, event.y - scr_y)));
+                    let response = Self::dispatch_mouse_over(control, event, scr_x, scr_y, self.key_modifier);
                     self.repaint |= response == EventProcessStatus::Processed;
                 }
             }
         } else if !self.mouse_over_control.is_none() {
             if let Some(control) = controls.get_mut(handle) {
                 let base = control.base();
-                let scr_x = base.screen_clip.left;
-                let scr_y = base.screen_clip.top;
-                let response = control
-                    .control_mut()
-                    .on_mouse_event(&MouseEvent::Over(Point::new(event.x - scr_x, event.y - scr_y)));
+                let scr_x = base.screen_origin.x;
+                let scr_y = base.screen_origin.y;
+                let response = Self::dispatch_mouse_over(control, event, scr_x, scr_y, self.key_modifier);
                 self.repaint |= response == EventProcessStatus::Processed;
             }
         }
@@ -1770,15 +1828,15 @@ impl MouseMethods for RuntimeManager {
                     self.update_focus(handle);
                 }
                 let base = control.base();
-                let scr_x = base.screen_clip.left;
-                let scr_y = base.screen_clip.top;
+                let scr_x = base.screen_origin.x;
+                let scr_y = base.screen_origin.y;
                 //let has_margins = base.should_increase_margins_on_focus().is_some();
 
                 let _ = control.control_mut().on_mouse_event(&MouseEvent::Pressed(MouseEventData {
                     x: event.x - scr_x,
                     y: event.y - scr_y,
                     button: event.button,
-                    modifier: self.key_modifier,
+                    modifier: event.modifier.unwrap_or(self.key_modifier),
                 }));
                 //if response == EventProcessStatus::Processed {
                 self.mouse_locked_object = MouseLockedObject::Control(handle);
@@ -1805,13 +1863,13 @@ impl MouseMethods for RuntimeManager {
                 let controls = unsafe { &mut *self.controls };
                 if let Some(control) = controls.get_mut(handle) {
                     let base = control.base();
-                    let scr_x = base.screen_clip.left;
-                    let scr_y = base.screen_clip.top;
+                    let scr_x = base.screen_origin.x;
+                    let scr_y = base.screen_origin.y;
                     control.control_mut().on_mouse_event(&MouseEvent::Released(MouseEventData {
                         x: event.x - scr_x,
                         y: event.y - scr_y,
                         button: event.button,
-                        modifier: self.key_modifier,
+                        modifier: event.modifier.unwrap_or(self.key_modifier),
                     }));
                     self.repaint = true;
                 }
@@ -1832,9 +1890,11 @@ impl MouseMethods for RuntimeManager {
         self.mouse_locked_object = MouseLockedObject::None;
     }
     fn process_mouse_dblclick_event(&mut self, event: MouseDoubleClickEvent) {
-        // Menus must consume a double click rather than activating a control underneath.
+        // A double-click is the second physical press. Native controls retain
+        // their existing DoubleClick callback; terminal controls encode that
+        // callback as a press and need capture to receive its matching release.
         if !self.opened_menu_handle.is_none() {
-            self.process_mousebuttondown_event(MouseButtonDownEvent { x: event.x, y: event.y, button: event.button });
+            self.process_mousebuttondown_event(MouseButtonDownEvent { modifier: event.modifier, x: event.x, y: event.y, button: event.button });
             return;
         }
         // update mouse position
@@ -1848,20 +1908,21 @@ impl MouseMethods for RuntimeManager {
         if !handle.is_none() {
             let controls = unsafe { &mut *self.controls };
             if let Some(control) = controls.get_mut(handle) {
+                if !control.base().is_active() { return; }
                 self.update_focus(handle);
                 let base = control.base();
-                let scr_x = base.screen_clip.left;
-                let scr_y = base.screen_clip.top;
+                let scr_x = base.screen_origin.x;
+                let scr_y = base.screen_origin.y;
                 //let has_margins = base.should_increase_margins_on_focus().is_some();
 
+                self.mouse_locked_object = MouseLockedObject::Control(handle);
                 let response = control.control_mut().on_mouse_event(&MouseEvent::DoubleClick(MouseEventData {
                     x: event.x - scr_x,
                     y: event.y - scr_y,
                     button: event.button,
-                    modifier: self.key_modifier,
+                    modifier: event.modifier.unwrap_or(self.key_modifier),
                 }));
                 if response == EventProcessStatus::Processed {
-                    self.mouse_locked_object = MouseLockedObject::None;
                     self.repaint = true;
                     self.update_command_and_app_bars = true;
                 }

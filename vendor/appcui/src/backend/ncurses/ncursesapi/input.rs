@@ -120,21 +120,21 @@ impl Input {
                             _ => None,
                         };
                         if let Some(button) = button {
-                            return Some(SystemEvent::MouseWheel(MouseWheelEvent { x, y, direction: button }));
+                            return Some(SystemEvent::MouseWheel(MouseWheelEvent { modifier: None, x, y, direction: button }));
                         }
                     }
                     let mut returned = None;
                     if mevent.bstate as i32 & BUTTON1_PRESSED != 0 {
-                        returned = Some(SystemEvent::MouseButtonDown(MouseButtonDownEvent { x, y, button }));
+                        returned = Some(SystemEvent::MouseButtonDown(MouseButtonDownEvent { modifier: None, x, y, button }));
                     } else if mevent.bstate as i32 & BUTTON1_RELEASED != 0 {
-                        returned = Some(SystemEvent::MouseButtonUp(MouseButtonUpEvent { x, y, button }));
+                        returned = Some(SystemEvent::MouseButtonUp(MouseButtonUpEvent { modifier: None, x, y, button }));
                         if (self.last_event == returned) && (self.diff.elapsed().as_millis() < 300) {
-                            self.next_event = Some(SystemEvent::MouseDoubleClick(MouseDoubleClickEvent { x, y, button }));
+                            self.next_event = Some(SystemEvent::MouseDoubleClick(MouseDoubleClickEvent { modifier: None, x, y, button }));
                         }
                         self.diff = Instant::now();
-                        self.last_event = returned;
+                        self.last_event = returned.clone();
                     } else if mevent.bstate as i32 & REPORT_MOUSE_POSITION != 0 {
-                        returned = Some(SystemEvent::MouseMove(MouseMoveEvent { x, y, button }));
+                        returned = Some(SystemEvent::MouseMove(MouseMoveEvent { modifier: None, x, y, button }));
                     }
                     return returned;
                 }

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Desktop-TUI browser smoke test</title>
+<style>
+body { max-width: 52em; margin: 2em auto; padding: 1em; font: 20px sans-serif; background: #f9edf5; color: #222; }
+label, input, button { display: block; margin: .5em 0; }
+.tiles { width: 240px; height: 120px; background: linear-gradient(45deg, #a8d8f0, #f0aed0, #fff); }
+section { margin: 2em 0; min-height: 12em; }
+</style>
+<h1>Browser integration</h1>
+<p>Serve this directory on 127.0.0.1 and open this page in Carboxyl 0.2.0.</p>
+<nav><a href="#form">Form</a> · <a href="#unicode">Unicode</a> · <a href="browser.html?history=second">History target</a></nav>
+<section id="form">
+<h2>Form and JavaScript</h2>
+<form onsubmit="event.preventDefault(); document.getElementById('result').textContent = 'Submitted: ' + document.getElementById('text').value">
+<label for="text">Type or paste multilingual text and emoji</label>
+<input id="text" name="text" value="Tiếng Việt 界 🦊" size="32">
+<button type="submit">Submit locally</button>
+</form>
+<p id="result" aria-live="polite">Waiting for local submission</p>
+<button onclick="document.getElementById('result').textContent = 'JavaScript works'">Test JavaScript</button>
+</section>
+<section id="unicode">
+<h2>Native Unicode text</h2>
+<p>Vietnamese composed: Tiếng Việt — decomposed: Tiếng Việt</p>
+<p>Combining sequence: ạ́̂̃̆̄̈̊̋̌̇</p>
+<p>CJK: 中文 日本語 한국어 — Thai: ภาษาไทย</p>
+<p>Variation selectors: ♥︎ ♥️ — skin tones: 👍🏽 — flags: 🇻🇳 🇯🇵</p>
+<p>Joined and adjacent emoji: 👩🏽‍💻 👨‍👩‍👧‍👦 🦊🐱🐶</p>
+<p>Resize and overlap another window across the wide glyphs.</p>
+</section>
+<section>
+<h2>Quadrant graphics</h2>
+<img alt="Local color grid" width="240" height="120" src="browser-grid.svg">
+<div class="tiles" role="img" aria-label="Colored gradient"></div>
+<p>Check colors, scrolling, mouse links and history; no external page is required.</p>
+</section>
+<p><a href="#">Return to top</a></p>
+</html>

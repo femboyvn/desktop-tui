@@ -235,6 +235,9 @@ impl OnKeyPressed for ImageViewer {
 }
 impl OnMouseEvent for ImageViewer {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         if self.scrollbars.process_mouse_event(event) {
             self.update_scroll_pos_from_scrollbars();
             return EventProcessStatus::Processed;
@@ -268,6 +271,7 @@ impl OnMouseEvent for ImageViewer {
                 self.drag_point = Some(Point::new(data.x, data.y));
                 EventProcessStatus::Processed
             }
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(dir) => {
                 match dir {
                     MouseWheelDirection::Left => self.move_scroll_to(self.x + 1, self.y),

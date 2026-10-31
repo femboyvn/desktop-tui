@@ -1,0 +1,27 @@
+{
+  "project": "Carboxyl",
+  "version": "0.2.0",
+  "license": "BSD-3-Clause",
+  "source_url": "https://github.com/carboxyl-rs/carboxyl/tree/v0.2.0",
+  "source_archive_url": "https://github.com/carboxyl-rs/carboxyl/archive/refs/tags/v0.2.0.tar.gz",
+  "release_url": "https://github.com/carboxyl-rs/carboxyl/releases/tag/v0.2.0",
+  "archive_url": "https://github.com/carboxyl-rs/carboxyl/releases/download/v0.2.0/carboxyl-v0.2.0-x86_64-linux.tar.gz",
+  "archive_sha256": "2b86f03cb14017f4f0155d5272fae3cc7f9ec2e6bf5a81fcfbaa0a55ac9f5e4f",
+  "archive_member": "carboxyl-x86_64-unknown-linux-gnu",
+  "binary_modified": false,
+  "runtime_requirements": {
+    "os": "Linux x86_64 with GNU libc",
+    "minimum_glibc": "2.43",
+    "minimum_glibcxx_symbol": "GLIBCXX_3.4.30",
+    "dynamic_libraries": [
+      "libstdc++.so.6",
+      "libz.so.1",
+      "libfontconfig.so.1",
+      "libgcc_s.so.1",
+      "libm.so.6",
+      "libc.so.6",
+      "ld-linux-x86-64.so.2"
+    ],
+    "notes": "Requirements inspected from the pinned upstream binary; transitive libraries and fonts must also be available on the host."
+  }
+}

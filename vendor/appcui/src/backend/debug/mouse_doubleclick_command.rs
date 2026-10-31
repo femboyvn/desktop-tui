@@ -3,7 +3,7 @@ use std::collections::VecDeque;
 use crate::{
     graphics::Point,
     input::MouseButton,
-    system::{MouseDoubleClickEvent, MouseMoveEvent, SystemEvent},
+    system::{MouseDoubleClickEvent, MouseButtonUpEvent, MouseMoveEvent, SystemEvent},
 };
 
 use super::command_parser::{CommandParser, ParserError};
@@ -45,16 +45,34 @@ impl MouseDoubleClickCommand {
     }
     pub(super) fn generate_event(&self, mouse_pos: Point, sys_events: &mut VecDeque<SystemEvent>) {
         if (mouse_pos.x != self.x) || (mouse_pos.y != self.y) {
-            sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent {
+            sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent { modifier: None,
                 x: self.x,
                 y: self.y,
                 button: MouseButton::None,
             }));
         }
-        sys_events.push_back(SystemEvent::MouseDoubleClick(MouseDoubleClickEvent {
+        sys_events.push_back(SystemEvent::MouseDoubleClick(MouseDoubleClickEvent { modifier: None,
             x: self.x,
             y: self.y,
             button: self.button,
         }));
+        sys_events.push_back(SystemEvent::MouseButtonUp(MouseButtonUpEvent {
+            modifier: None,
+            x: self.x,
+            y: self.y,
+            button: self.button,
+        }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn double_click_command_finishes_with_button_release() {
+        let command = MouseDoubleClickCommand { x:4, y:5, button:MouseButton::Left };
+        let mut events = VecDeque::new();
+        command.generate_event(Point::new(4,5), &mut events);
+        assert!(matches!(events.back(), Some(SystemEvent::MouseButtonUp(_))));
     }
 }

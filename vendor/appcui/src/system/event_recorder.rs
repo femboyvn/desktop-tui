@@ -187,7 +187,7 @@ impl EventRecorder {
                 hash = hash.wrapping_mul(0x00000100000001B3u64);
             }
         }
-        return hash;
+        return surface.hash_graphemes(hash);
     }
     fn add_keypressed(&mut self, key: Key) -> bool {
         if key.value() == key!("Ctrl+Alt+Space") {

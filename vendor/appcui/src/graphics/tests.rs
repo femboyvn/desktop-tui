@@ -1642,3 +1642,179 @@ fn check_bevel_rect() {
     //s.print(false);
     assert_eq!(s.compute_hash(), 0xEA0A386392D6725A);
 }
+
+#[test]
+fn grapheme_surface_preserves_long_clusters_and_cell_widths() {
+    let mut s = Surface::new(8, 1);
+    let text = format!("a{}", "\u{301}".repeat(40));
+    let attr = CharAttribute::with_color(Color::White, Color::Black);
+    s.write_grapheme(0, 0, &text, 1, attr);
+    s.write_grapheme(1, 0, "界", 2, attr);
+    s.write_grapheme(3, 0, "👩🏽‍💻", 2, attr);
+    assert_eq!(s.cell_text(0, 0).as_deref(), Some(text.as_str()));
+    assert_eq!(s.cell_width(0, 0), Some(1));
+    assert_eq!(s.cell_text(1, 0).as_deref(), Some("界"));
+    assert_eq!(s.cell_width(1, 0), Some(2));
+    assert_eq!(s.cell_text(2, 0).as_deref(), Some(""));
+    assert_eq!(s.cell_width(2, 0), Some(0));
+    assert_eq!(s.cell_text(3, 0).as_deref(), Some("👩🏽‍💻"));
+    assert_eq!(s.cell_width(7, 0), Some(1));
+    assert_eq!(s.cell_text(8, 0), None);
+}
+
+#[test]
+fn grapheme_surface_replacement_clears_both_halves() {
+    let mut s = Surface::new(5, 1);
+    let attr = CharAttribute::with_color(Color::White, Color::Black);
+    for x in [0, 1] {
+        s.clear(Character::default());
+        s.write_grapheme(0, 0, "界", 2, attr);
+        s.write_char(x, 0, Character::with_char('x'));
+        assert_eq!(s.cell_text(x, 0).as_deref(), Some("x"));
+        assert_eq!(s.cell_text(1 - x, 0).as_deref(), Some(" "));
+        assert_eq!(s.cell_width(0, 0), Some(1));
+        assert_eq!(s.cell_width(1, 0), Some(1));
+    }
+    s.write_grapheme(0, 0, "界", 2, attr);
+    s.write_grapheme(1, 0, "🙂", 2, attr);
+    assert_eq!(s.cell_text(0, 0).as_deref(), Some(" "));
+    assert_eq!(s.cell_text(1, 0).as_deref(), Some("🙂"));
+    assert_eq!(s.cell_width(2, 0), Some(0));
+}
+
+#[test]
+fn grapheme_surface_composition_clips_without_crossing_window_edges() {
+    let attr = CharAttribute::with_color(Color::White, Color::Black);
+    let mut src = Surface::new(2, 1);
+    src.write_grapheme(0, 0, "界", 2, attr);
+    let mut dest = Surface::new(4, 1);
+    dest.clear(Character::with_char('#'));
+    dest.set_clip(1, 0, 2, 0);
+    dest.draw_surface(0, 0, &src);
+    dest.reset_clip();
+    assert_eq!(dest.cell_text(0, 0).as_deref(), Some("#"));
+    assert_eq!(dest.cell_text(1, 0).as_deref(), Some(" "));
+    dest.set_clip(1, 0, 2, 0);
+    dest.draw_surface(2, 0, &src);
+    dest.reset_clip();
+    assert_eq!(dest.cell_text(2, 0).as_deref(), Some(" "));
+    assert_eq!(dest.cell_text(3, 0).as_deref(), Some("#"));
+    dest.draw_surface(1, 0, &src);
+    assert_eq!(dest.cell_text(1, 0).as_deref(), Some("界"));
+    assert_eq!(dest.cell_width(2, 0), Some(0));
+    dest.set_clip(2, 0, 3, 0);
+    dest.write_char(2, 0, Character::with_char('x'));
+    dest.reset_clip();
+    assert_eq!(dest.cell_text(1, 0).as_deref(), Some(" "));
+    assert_eq!(dest.cell_text(2, 0).as_deref(), Some("x"));
+}
+
+#[test]
+fn grapheme_surface_recolor_and_all_writers_maintain_metadata() {
+    let attr = CharAttribute::with_color(Color::White, Color::Black);
+    let mut s = Surface::new(4, 2);
+    s.write_grapheme(0, 0, "👩‍💻", 2, attr);
+    s.fill_rect(Rect::new(0, 0, 1, 0), Character::with_color(Color::Red, Color::Blue));
+    assert_eq!(s.cell_text(0, 0).as_deref(), Some("👩‍💻"));
+    assert_eq!(s.char(0, 0).unwrap().foreground, Color::Red);
+    assert_eq!(s.char(1, 0).unwrap().foreground, Color::Red);
+    s.write_ascii(1, 0, b"!", attr, false);
+    assert_eq!(s.cell_text(0, 0).as_deref(), Some(" "));
+    s.write_grapheme(0, 1, "界", 2, attr);
+    s.write_string(1, 1, "x", attr, false);
+    assert_eq!(s.cell_width(0, 1), Some(1));
+    s.write_grapheme(0, 0, "界", 2, attr);
+    s.set_clip(1, 0, 1, 0);
+    s.clear(Character::with_char('z'));
+    s.reset_clip();
+    assert_eq!(s.cell_width(0, 0), Some(1));
+    s.resize(Size::new(2, 1));
+    assert_eq!(s.cell_width(0, 0), Some(1));
+}
+
+#[test]
+fn grapheme_surface_serialization_keeps_legacy_and_round_trips_metadata() {
+    let mut s = Surface::new(5, 1);
+    let mut buffer = Vec::new();
+    s.serialize_to_buffer(&mut buffer);
+    assert_eq!(buffer[3], 1);
+    let legacy = buffer.clone();
+    let attr = CharAttribute::with_color(Color::White, Color::Black);
+    let text = format!("a{}", "\u{301}".repeat(40));
+    s.write_grapheme(0, 0, &text, 1, attr);
+    s.write_grapheme(1, 0, "👩🏽‍💻", 2, attr);
+    s.serialize_to_buffer(&mut buffer);
+    assert_eq!(buffer[3], 2);
+    let copy = Surface::from_buffer(&buffer).unwrap();
+    assert_eq!(copy.cell_text(0, 0).as_deref(), Some(text.as_str()));
+    assert_eq!(copy.cell_text(1, 0).as_deref(), Some("👩🏽‍💻"));
+    assert_eq!(copy.cell_width(2, 0), Some(0));
+    assert!(Surface::from_buffer(&legacy).is_ok());
+    assert!(Surface::from_buffer(&buffer[..buffer.len() - 1]).is_err());
+}
+
+#[test]
+fn grapheme_surface_hash_includes_cluster_metadata() {
+    let mut s = SurfaceTester::new(2, 1);
+    let attr = CharAttribute::with_color(Color::White, Color::Black);
+    s.write_grapheme(0, 0, "a\u{301}", 1, attr);
+    let before = s.compute_hash();
+    s.write_grapheme(0, 0, "a\u{302}", 1, attr);
+    assert_ne!(before, s.compute_hash());
+}
+
+#[test]
+fn grapheme_surface_clip_origin_and_partial_recolor_are_atomic() {
+    let attr = CharAttribute::with_color(Color::White, Color::Black);
+    let mut s = Surface::new(5, 2);
+    s.set_origin(1, 1);
+    s.write_grapheme(0, 0, "界", 2, attr);
+    assert_eq!(s.cell_text(0, 0).as_deref(), Some("界"));
+    assert_eq!(s.cell_width(1, 0), Some(0));
+    s.reset_origin();
+    s.set_clip(2, 1, 2, 1);
+    s.write_char(2, 1, Character::with_color(Color::Red, Color::Blue));
+    s.reset_clip();
+    assert_eq!(s.cell_text(1, 1).as_deref(), Some(" "));
+    assert_eq!(s.cell_text(2, 1).as_deref(), Some(" "));
+    assert_eq!(s.char(1, 1).unwrap().foreground, Color::White);
+    assert_eq!(s.char(2, 1).unwrap().foreground, Color::Red);
+    s.write_grapheme(-1, 0, "界", 2, attr);
+    assert_eq!(s.cell_text(0, 0).as_deref(), Some(" "));
+    s.write_grapheme(4, 0, "界", 2, attr);
+    assert_eq!(s.cell_text(4, 0).as_deref(), Some(" "));
+}
+
+#[test]
+fn grapheme_surface_all_scalar_paint_paths_remove_stale_metadata() {
+    let attr = CharAttribute::with_color(Color::White, Color::Black);
+    let mut s = Surface::new(3, 1);
+    for operation in 0..5 {
+        s.clear(Character::default());
+        s.write_grapheme(0, 0, "界", 2, attr);
+        match operation {
+            0 => s.fill_horizontal_line(1, 0, 1, Character::with_char('x')),
+            1 => s.fill_vertical_line(1, 0, 0, Character::with_char('x')),
+            2 => s.fill_rect(Rect::new(1, 0, 1, 0), Character::with_char('x')),
+            3 => s.write_text("x", &TextFormatBuilder::new().position(1, 0).attribute(attr).build()),
+            _ => s.clear(Character::with_char('x')),
+        }
+        assert_eq!(s.cell_text(1, 0).as_deref(), Some("x"), "operation {operation}");
+        assert_eq!(s.cell_width(0, 0), Some(1));
+        assert_eq!(s.cell_width(1, 0), Some(1));
+    }
+}
+
+#[test]
+fn grapheme_surface_rejects_control_text_and_unrepresentable_widths() {
+    let attr = CharAttribute::with_color(Color::White, Color::Black);
+    let mut s = Surface::new(2, 1);
+    for text in ["", "\0", "\x1b[31m", "a\n"] {
+        s.write_grapheme(0, 0, text, 1, attr);
+        assert_eq!(s.cell_text(0, 0).as_deref(), Some(" "));
+    }
+    s.write_grapheme(0, 0, "a", 0, attr);
+    s.write_grapheme(0, 0, "a", usize::MAX, attr);
+    s.write_grapheme(i32::MAX, 0, "a", 2, attr);
+    assert_eq!(s.cell_text(0, 0).as_deref(), Some(" "));
+}

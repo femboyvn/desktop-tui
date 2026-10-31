@@ -63,3 +63,148 @@ fn removing_window_menu_releases_handles_and_closes_its_popup() {
     assert!(!owner.unregister_menu(menu));
     app.run();
 }
+
+#[CustomControl(overwrite=OnKeyPressed+OnMouseEvent, internal=true)]
+struct InputProbe {
+    keys: Vec<(Key, char)>,
+    mouse: Vec<MouseEvent>,
+    pastes: Vec<String>,
+    accept_paste: bool,
+    hide_on_character: Option<char>,
+}
+impl InputProbe {
+    fn new() -> Self {
+        Self { base: ControlBase::new(layout!("d:f"), true), keys: Vec::new(), mouse: Vec::new(), pastes: Vec::new(), accept_paste: false, hide_on_character: None }
+    }
+}
+impl OnKeyPressed for InputProbe {
+    fn on_paste(&mut self, text: &str) -> EventProcessStatus {
+        if self.accept_paste {
+            self.pastes.push(text.to_string());
+            EventProcessStatus::Processed
+        } else { EventProcessStatus::Ignored }
+    }
+    fn on_key_pressed(&mut self, key: Key, character: char) -> EventProcessStatus {
+        self.keys.push((key, character));
+        if self.hide_on_character == Some(character) { self.set_visible(false); }
+        EventProcessStatus::Processed
+    }
+}
+impl OnMouseEvent for InputProbe {
+    fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        self.mouse.push(*event);
+        EventProcessStatus::Processed
+    }
+}
+
+#[test]
+fn double_click_preserves_release_of_second_press() {
+    let mut app = App::debug(40,12,"Paint.Enable(false)").build().unwrap();
+    let mut window = window!("Test,x:1,y:1,w:20,h:8");
+    let probe = window.add(InputProbe::new());
+    app.add_window(window);
+    let runtime = RuntimeManager::get();
+    runtime.recompute_layouts();
+    runtime.process_mouse_dblclick_event(MouseDoubleClickEvent { modifier: None, x:3,y:3,button:MouseButton::Left });
+    runtime.process_mousebuttonup_event(MouseButtonUpEvent { modifier: None, x:3,y:3,button:MouseButton::Left });
+    let events = runtime.get_control(probe).unwrap().mouse.clone();
+    app.run();
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::DoubleClick(_))));
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::Released(_))));
+}
+
+#[test]
+fn paste_prefers_whole_payload_handler_and_falls_back_to_focused_characters() {
+    let mut app = App::debug(40,12,"Paint.Enable(false)").build().unwrap();
+    let mut window = window!("Test,x:1,y:1,w:30,h:8");
+    let probe = window.add(InputProbe::new());
+    app.add_window(window);
+    let runtime = RuntimeManager::get();
+    runtime.recompute_layouts();
+    runtime.process_system_event(SystemEvent::Paste("ก界e\u{301}".to_string()));
+    let characters = runtime.get_control(probe).unwrap().keys.clone();
+    runtime.get_control_mut(probe).unwrap().accept_paste = true;
+    runtime.process_system_event(SystemEvent::Paste("whole\nbody".to_string()));
+    let pastes = runtime.get_control(probe).unwrap().pastes.clone();
+    let count = runtime.get_control(probe).unwrap().keys.len();
+    app.run();
+    assert_eq!(characters, vec![(Key::None,'ก'),(Key::None,'界'),(Key::None,'e'),(Key::None,'\u{301}')]);
+    assert_eq!(pastes, vec!["whole\nbody"]);
+    assert_eq!(count,4);
+}
+
+#[test]
+fn paste_does_not_escape_modal_menu_or_hidden_control_boundaries() {
+    let mut app = App::debug(40,12,"Paint.Enable(false)").build().unwrap();
+    let mut window = window!("Test,x:1,y:1,w:30,h:8");
+    let background = window.add(InputProbe::new());
+    app.add_window(window);
+    let mut modal = ModalWindow::<()>::new("Lock",layout!("a:c,w:20,h:8"),window::Flags::None);
+    let mut probe = InputProbe::new();
+    probe.hide_on_character = Some('!');
+    let focused = modal.add(probe);
+    let runtime = RuntimeManager::get();
+    let modal = runtime.add_window(modal);
+    runtime.modal_windows.push(modal.cast());
+    runtime.recompute_layouts();
+    runtime.process_system_event(SystemEvent::Paste("!secret".to_string()));
+    let focused_keys = runtime.get_control(focused).unwrap().keys.clone();
+    let background_keys = runtime.get_control(background).unwrap().keys.clone();
+    runtime.modal_windows.clear();
+    let menu = runtime.get_menus().add(Menu::new());
+    runtime.show_menu(menu, Handle::None, 2, 2, 0, None);
+    runtime.process_system_event(SystemEvent::Paste("menu".to_string()));
+    let background_count = runtime.get_control(background).unwrap().keys.len();
+    app.run();
+    assert_eq!(focused_keys, vec![(Key::None,'!')]);
+    assert!(background_keys.is_empty());
+    assert_eq!(background_count,0);
+}
+
+#[test]
+fn mouse_metadata_is_local_to_each_event_including_wheel_and_motion() {
+    let mut app = App::debug(40,12,"Paint.Enable(false)").build().unwrap();
+    let mut window = window!("Test,x:1,y:1,w:30,h:8");
+    let probe = window.add(InputProbe::new());
+    app.add_window(window);
+    let runtime = RuntimeManager::get();
+    runtime.recompute_layouts();
+    runtime.key_modifier = KeyModifier::Alt;
+    runtime.process_mousebuttondown_event(MouseButtonDownEvent { modifier: Some(KeyModifier::Ctrl),x:3,y:3,button:MouseButton::Left });
+    runtime.process_mousebuttonup_event(MouseButtonUpEvent { modifier: Some(KeyModifier::Shift),x:3,y:3,button:MouseButton::Left });
+    runtime.process_mousewheel_event(MouseWheelEvent { modifier: Some(KeyModifier::None),x:4,y:3,direction:MouseWheelDirection::Down });
+    runtime.process_mousemove_event(MouseMoveEvent { modifier: Some(KeyModifier::Ctrl),x:5,y:3,button:MouseButton::None });
+    let events = runtime.get_control(probe).unwrap().mouse.clone();
+    app.run();
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::Pressed(data) if data.modifier == KeyModifier::Ctrl)));
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::Released(data) if data.modifier == KeyModifier::Shift)));
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::WheelAt(data) if data.x == 2 && data.y == 1 && data.modifier == KeyModifier::None)));
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::OverAt(data) if data.x == 3 && data.y == 1 && data.modifier == KeyModifier::Ctrl)));
+}
+
+#[test]
+fn clipped_control_mouse_coordinates_follow_its_origin() {
+    let mut app = App::debug(40,12,"Paint.Enable(false)").build().unwrap();
+    let mut window = window!("Test,x:1,y:1,w:30,h:8");
+    let mut probe = InputProbe::new();
+    probe.base = ControlBase::new(layout!("x:-3,y:0,w:20,h:4"), true);
+    let probe = window.add(probe);
+    app.add_window(window);
+    let runtime = RuntimeManager::get();
+    runtime.recompute_layouts();
+    runtime.process_mousebuttondown_event(MouseButtonDownEvent { modifier: None,x:3,y:3,button:MouseButton::Left });
+    runtime.process_mousemove_event(MouseMoveEvent { modifier: None,x:4,y:3,button:MouseButton::Left });
+    runtime.process_mousebuttonup_event(MouseButtonUpEvent { modifier: None,x:4,y:3,button:MouseButton::Left });
+    runtime.process_mousewheel_event(MouseWheelEvent { modifier: None,x:4,y:3,direction:MouseWheelDirection::Down });
+    runtime.process_mousemove_event(MouseMoveEvent { modifier: None,x:5,y:3,button:MouseButton::None });
+    runtime.process_mouse_dblclick_event(MouseDoubleClickEvent { modifier: None,x:3,y:3,button:MouseButton::Left });
+    runtime.process_mousebuttonup_event(MouseButtonUpEvent { modifier: None,x:3,y:3,button:MouseButton::Left });
+    let events = runtime.get_control(probe).unwrap().mouse.clone();
+    app.run();
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::Pressed(data) if data.x == 4 && data.y == 1)), "{events:?}");
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::Released(data) if data.x == 5 && data.y == 1)));
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::Drag(data) if data.x == 5 && data.y == 1)));
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::WheelAt(data) if data.x == 5 && data.y == 1)));
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::OverAt(data) if data.x == 6 && data.y == 1)));
+    assert!(events.iter().any(|event| matches!(event, MouseEvent::DoubleClick(data) if data.x == 4 && data.y == 1)));
+}

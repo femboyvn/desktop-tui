@@ -14,6 +14,8 @@ keywords = ["Desktop", "Environment", "TUI", "AppCUI-rs"]
 appcui = { path = "vendor/appcui", version = "0.4.6", features = ["CROSSTERM", "TRUE_COLORS"] }
 
 virtual-terminal = "0.1.5"
+# Pinned emulator core with a small, documented streaming-grapheme patch.
+tattoy-wezterm-term = { path = "vendor/wezterm-term", version = "=0.1.0-fork.5" }
 # Reuse the PTY dependency's process-tree cleanup and await child reaping.
 bmart = "0.2.12"
 

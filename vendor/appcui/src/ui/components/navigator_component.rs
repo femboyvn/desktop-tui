@@ -850,6 +850,7 @@ where
                 }
                 EventProcessStatus::Processed
             }
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(_) => EventProcessStatus::Ignored,
         }
     }

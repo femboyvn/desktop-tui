@@ -33,11 +33,16 @@ pub(crate) fn with_starters(mut shortcuts: Vec<Shortcut>) -> Vec<Shortcut> {
         ("Terminal", "sh", "System"),
         ("System Performance", "btm", "Utility"),
         ("Text editor", "nano", "Utility"),
+        ("Web Browser", "carboxyl", "Utility"),
     ] {
         if !shortcuts.iter().any(|shortcut| shortcut.name == name) {
             shortcuts.push(Shortcut {
                 name: name.into(), category: Some(category.into()), command: command.into(),
-                args: if name == "System Performance" { vec!["--theme".into(), "default-light".into()] } else { vec![] },
+                args: match name {
+                    "System Performance" => vec!["--theme".into(), "default-light".into()],
+                    "Web Browser" => vec!["--graphics".into(), "quadrant".into(), "--fps".into(), "20".into()],
+                    _ => vec![],
+                },
                 taskbar: TaskbarOptions { position: None, additional_commands: vec![] },
                 window: WindowOptions { resizable: true, close_button: true, fixed_position: false, size: None },
                 terminal: TerminalOptions { padding: None, background_color: None },
@@ -75,6 +80,28 @@ pub(crate) fn categories(apps: &[Application]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn browser_starter_uses_quadrants_and_preserves_same_name_overrides() {
+        let starters = with_starters(vec![]);
+        let browser = starters.iter().find(|shortcut| shortcut.name == "Web Browser")
+            .expect("Web Browser must be available without shortcut files");
+        assert_eq!(browser.command, "carboxyl");
+        assert_eq!(browser.args, ["--graphics", "quadrant", "--fps", "20"]);
+        assert_eq!(browser.category.as_deref(), Some("Utility"));
+        let mut custom = browser.clone();
+        custom.command = "/opt/carboxyl".into();
+        custom.args = vec!["https://example.com".into()];
+        custom.category = Some("Personal".into());
+        let merged = with_starters(vec![custom]);
+        assert_eq!(merged.iter().filter(|s| s.name == "Web Browser").count(), 1);
+        assert_eq!(merged[0].command, "/opt/carboxyl");
+        assert_eq!(merged[0].args, ["https://example.com"]);
+        assert_eq!(merged[0].category.as_deref(), Some("Personal"));
+        let example: Shortcut = toml::from_str(include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shortcuts/carboxyl.toml"))).unwrap();
+        let configured = with_starters(vec![example]);
+        assert_eq!(configured.iter().filter(|s| s.name == "Web Browser").count(), 1);
+        assert_eq!(configured[0].args, ["--graphics", "quadrant", "--fps", "20"]);
+    }
     #[test]
     fn bundled_games_have_native_ids_and_keep_same_named_shortcuts_independent() {
         let mut custom = with_starters(vec![]).remove(0);
@@ -123,11 +150,11 @@ mod tests {
     fn starters_and_categories_are_available_without_shortcuts() {
         let shortcuts = with_starters(vec![]);
         let apps = applications(&shortcuts);
-        assert_eq!(apps.len(), 11);
+        assert_eq!(apps.len(), 12);
         assert!(apps.iter().any(|app| app.id == AppId::AsciiPaint && app.name == "ASCII Paint" && app.category == "Utility"));
         assert!(apps.iter().any(|app| app.id == AppId::PdfReader && app.category == "Utility"));
         assert_eq!(categories(&apps), ["System", "Utility", "User", "Games"]);
-        assert_eq!(shortcuts.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), ["sh", "btm", "nano"]);
+        assert_eq!(shortcuts.iter().map(|s| s.command.as_str()).collect::<Vec<_>>(), ["sh", "btm", "nano", "carboxyl"]);
     }
     #[test]
     fn overrides_keep_native_identity_and_category_order_does_not_change_dispatch() {

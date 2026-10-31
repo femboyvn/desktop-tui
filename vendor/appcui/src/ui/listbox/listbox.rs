@@ -531,6 +531,9 @@ impl OnKeyPressed for ListBox {
 }
 impl OnMouseEvent for ListBox {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         if self.comp.process_mouse_event(event) {
             self.update_scroll_pos_from_scrollbars();
             return EventProcessStatus::Processed;
@@ -553,6 +556,7 @@ impl OnMouseEvent for ListBox {
             }
             MouseEvent::Released(_) => EventProcessStatus::Ignored,
             MouseEvent::Drag(_) => EventProcessStatus::Ignored,
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(evn) => {
                 match evn {
                     MouseWheelDirection::Up => self.move_scroll_to(self.top_view.saturating_sub(1)),

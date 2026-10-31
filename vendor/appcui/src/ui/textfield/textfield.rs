@@ -511,6 +511,9 @@ impl OnFocus for TextField {
 }
 impl OnMouseEvent for TextField {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         match event {
             MouseEvent::Enter | MouseEvent::Leave => {
                 self.drag_started = false;
@@ -542,6 +545,7 @@ impl OnMouseEvent for TextField {
                 }
                 EventProcessStatus::Processed
             }
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(_) => EventProcessStatus::Ignored,
         }
     }

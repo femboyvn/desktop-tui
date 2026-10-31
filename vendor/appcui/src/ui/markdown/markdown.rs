@@ -588,6 +588,9 @@ impl OnKeyPressed for Markdown {
 
 impl OnMouseEvent for Markdown {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         if self.scrollbars.process_mouse_event(event) {
             self.update_scroll_pos_from_scrollbars();
             return EventProcessStatus::Processed;
@@ -643,6 +646,7 @@ impl OnMouseEvent for Markdown {
                 self.drag_point = Some(Point::new(data.x, data.y));
                 EventProcessStatus::Processed
             }
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(dir) => {
                 match dir {
                     MouseWheelDirection::Up => self.move_scroll_to(self.x, self.y + 1),

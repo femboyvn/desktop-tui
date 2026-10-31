@@ -439,7 +439,7 @@ impl WebTerminal {
 
         // MOUSE MOVE
         let mouse_move_closure = self.create_mouse_event_handler(sender.clone(), |x, y, _event| {
-            SystemEvent::MouseMove(MouseMoveEvent {
+            SystemEvent::MouseMove(MouseMoveEvent { modifier: None,
                 x,
                 y,
                 button: MouseButton::None,
@@ -455,7 +455,7 @@ impl WebTerminal {
                 2 => MouseButton::Right,
                 _ => MouseButton::None,
             };
-            SystemEvent::MouseButtonDown(MouseButtonDownEvent { x, y, button })
+            SystemEvent::MouseButtonDown(MouseButtonDownEvent { modifier: None, x, y, button })
         });
         attach::<MouseEvent>(target, "mousedown", mouse_down_closure)?;
 
@@ -467,7 +467,7 @@ impl WebTerminal {
                 2 => crate::input::MouseButton::Right,
                 _ => crate::input::MouseButton::None,
             };
-            SystemEvent::MouseButtonUp(MouseButtonUpEvent { x, y, button })
+            SystemEvent::MouseButtonUp(MouseButtonUpEvent { modifier: None, x, y, button })
         });
         attach::<MouseEvent>(target, "mouseup", mouse_up_closure)?;
 
@@ -478,7 +478,7 @@ impl WebTerminal {
             } else {
                 MouseWheelDirection::Down
             };
-            SystemEvent::MouseWheel(MouseWheelEvent { x, y, direction })
+            SystemEvent::MouseWheel(MouseWheelEvent { modifier: None, x, y, direction })
         });
         attach::<WheelEvent>(target, "wheel", wheel_closure)?;
 

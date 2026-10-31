@@ -576,6 +576,9 @@ where
     T: GraphNode,
 {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         if self.comp.process_mouse_event(event) {
             self.update_scroll_pos_from_scrollbars();
             return EventProcessStatus::Processed;
@@ -683,6 +686,7 @@ where
                     EventProcessStatus::Processed
                 }
             },
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(dir) => {
                 match dir {
                     MouseWheelDirection::Left => self.move_scroll_to(self.origin_point.x + 1, self.origin_point.y),

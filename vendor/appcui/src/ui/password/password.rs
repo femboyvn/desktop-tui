@@ -114,6 +114,9 @@ impl OnKeyPressed for Password {
 }
 impl OnMouseEvent for Password {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         match event {
             MouseEvent::Enter => {
                 self.show_tooltip("Click and hold to see the password");
@@ -134,6 +137,7 @@ impl OnMouseEvent for Password {
             }
             MouseEvent::DoubleClick(_) => EventProcessStatus::Ignored,
             MouseEvent::Drag(_) => EventProcessStatus::Ignored,
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(_) => EventProcessStatus::Ignored,
         }
     }

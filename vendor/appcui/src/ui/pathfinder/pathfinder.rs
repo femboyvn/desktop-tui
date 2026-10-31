@@ -41,6 +41,9 @@ macro_rules! IMPLEMENT_METHODS  {
         }
         impl<$($g)?> OnMouseEvent for $data_type<$($g)?> where $($constraints)* {
             fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
                 self.inner.on_mouse_event(&self.base, event)
             }
         }

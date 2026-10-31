@@ -582,6 +582,7 @@ where
                 }
                 result
             }
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(direction) => {
                 match direction {
                     MouseWheelDirection::Up => {

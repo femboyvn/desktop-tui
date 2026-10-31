@@ -1,4 +1,6 @@
 use std::path::Path;
+use std::borrow::Cow;
+use std::collections::BTreeMap;
 
 use super::image::Glyph;
 use super::BitTile;
@@ -52,6 +54,9 @@ const MAX_SURFACE_HEIGHT: u32 = 10000;
 pub struct Surface {
     pub(crate) size: Size,
     pub(crate) chars: Vec<Character>,
+    // Only multi-scalar or multi-cell glyphs allocate metadata. Continuations
+    // contain empty text and the distance back to their lead cell.
+    pub(crate) graphemes: BTreeMap<usize, (String, usize, usize)>,
     pub(crate) cursor: Cursor,
     origin: Point,
     clip: ClipArea,
@@ -80,6 +85,7 @@ impl Surface {
             origin: Point::default(),
             base_origin: Point::default(),
             chars: Vec::<Character>::with_capacity(count),
+            graphemes: BTreeMap::new(),
             clip: ClipArea::new(0, 0, (w - 1) as i32, (h - 1) as i32),
             base_clip: ClipArea::new(0, 0, (w - 1) as i32, (h - 1) as i32),
             cursor: Cursor::new(),
@@ -120,8 +126,8 @@ impl Surface {
     }
     #[inline]
     fn coords_to_position(&self, x: i32, y: i32) -> Option<usize> {
-        let x = x + self.origin.x;
-        let y = y + self.origin.y;
+        let x = x.checked_add(self.origin.x)?;
+        let y = y.checked_add(self.origin.y)?;
         if !self.clip.contains(x, y) {
             return None;
         }
@@ -269,8 +275,135 @@ impl Surface {
     #[inline(always)]
     pub fn write_char(&mut self, x: i32, y: i32, ch: Character) {
         if let Some(pos) = self.coords_to_position(x, y) {
-            self.chars[pos].set(ch);
+            self.set_cell(pos, ch);
         }
+    }
+
+    /// Writes a complete grapheme with an explicit terminal cell width. Width
+    /// zero, empty text, and control characters are ignored. A glyph intersecting
+    /// a clip edge is replaced by spaces in its visible cells, never half drawn.
+    /// The caller supplies one grapheme and its measured display width; this
+    /// method does not segment text or choose a Unicode width policy.
+    /// Coordinates follow the same origin and clip rules as `write_char`.
+    pub fn write_grapheme(&mut self, x: i32, y: i32, text: &str, width: usize, attr: CharAttribute) {
+        if width == 0 || text.is_empty() || text.chars().any(char::is_control) {
+            return;
+        }
+        let Some(left) = x.checked_add(self.origin.x) else { return; };
+        let Some(row) = y.checked_add(self.origin.y) else { return; };
+        if !self.clip.contains_y(row) || !self.clip.is_visible() {
+            return;
+        }
+        let Ok(width_i64) = i64::try_from(width) else { return; };
+        let Some(right) = (left as i64).checked_add(width_i64 - 1) else { return; };
+        let visible_left = (left as i64).max(self.clip.left as i64);
+        let visible_right = right.min(self.clip.right as i64);
+        if visible_left > visible_right {
+            return;
+        }
+        if (left as i64) != visible_left || right != visible_right {
+            for column in visible_left..=visible_right {
+                let pos = row as usize * self.size.width as usize + column as usize;
+                self.set_cell(pos, Character::with_attributes(' ', attr));
+            }
+            return;
+        }
+        let pos = row as usize * self.size.width as usize + left as usize;
+        for offset in 0..width {
+            self.remove_grapheme(pos + offset);
+        }
+        let first = text.chars().next().unwrap(); // text is nonempty
+        self.chars[pos].set(Character::with_attributes(first, attr));
+        if width != 1 || text.len() != first.len_utf8() {
+            self.graphemes.insert(pos, (text.to_owned(), width, 0));
+            let lead = self.chars[pos];
+            for offset in 1..width {
+                self.chars[pos + offset] = Character::new(' ', lead.foreground, lead.background, lead.flags);
+                self.graphemes.insert(pos + offset, (String::new(), 0, offset));
+            }
+        }
+    }
+
+    /// Returns a cell's complete text, or an empty string for a continuation.
+    /// Ordinary scalar cells are returned as an owned one-character string.
+    pub fn cell_text(&self, x: i32, y: i32) -> Option<Cow<'_, str>> {
+        let pos = self.coords_to_position(x, y)?;
+        Some(self.text_at(pos))
+    }
+
+    /// Returns the occupied cell width: zero for a continuation and one for an
+    /// ordinary scalar. Coordinates outside the current clip return `None`.
+    pub fn cell_width(&self, x: i32, y: i32) -> Option<usize> {
+        let pos = self.coords_to_position(x, y)?;
+        Some(self.width_at(pos))
+    }
+
+    pub(crate) fn text_at(&self, pos: usize) -> Cow<'_, str> {
+        match self.graphemes.get(&pos) {
+            Some((text, _, _)) => Cow::Borrowed(text),
+            None => Cow::Owned(self.chars[pos].code.to_string()),
+        }
+    }
+
+    pub(crate) fn width_at(&self, pos: usize) -> usize {
+        self.graphemes.get(&pos).map_or(1, |(_, width, _)| *width)
+    }
+
+    fn grapheme_span(&self, pos: usize) -> (usize, usize) {
+        if let Some((_, _, back)) = self.graphemes.get(&pos) {
+            let lead = pos - back;
+            (lead, self.graphemes[&lead].1)
+        } else {
+            (pos, 1)
+        }
+    }
+
+    // Replacing either half erases the old glyph, including a lead outside the
+    // active clip: leaving that lead would let the terminal overpaint a window.
+    fn remove_grapheme(&mut self, pos: usize) {
+        if !self.graphemes.contains_key(&pos) {
+            return;
+        }
+        let (lead, width) = self.grapheme_span(pos);
+        for index in lead..lead + width {
+            self.graphemes.remove(&index);
+            self.chars[index].code = ' ';
+        }
+    }
+
+    fn set_cell(&mut self, pos: usize, ch: Character) {
+        if ch.code == '\0' && self.graphemes.contains_key(&pos) {
+            let (lead, width) = self.grapheme_span(pos);
+            let x = (lead % self.size.width as usize) as i32;
+            let y = (lead / self.size.width as usize) as i32;
+            if self.clip.contains(x, y) && self.clip.contains(x + width as i32 - 1, y) {
+                for index in lead..lead + width {
+                    self.chars[index].set(ch);
+                }
+                return;
+            }
+            // A partial recolor cannot be represented by one terminal glyph.
+            self.remove_grapheme(pos);
+        } else if ch.code != '\0' {
+            self.remove_grapheme(pos);
+        }
+        self.chars[pos].set(ch);
+    }
+
+    // Extend the existing snapshot hash only when metadata exists, preserving
+    // all pre-Unicode golden hashes and serialized fixtures.
+    pub(crate) fn hash_graphemes(&self, mut hash: u64) -> u64 {
+        for (pos, (text, width, back)) in &self.graphemes {
+            for byte in (*pos as u64).to_le_bytes().into_iter()
+                .chain((*width as u64).to_le_bytes())
+                .chain((*back as u64).to_le_bytes())
+                .chain((text.len() as u64).to_le_bytes())
+                .chain(text.bytes()) {
+                hash ^= byte as u64;
+                hash = hash.wrapping_mul(0x00000100000001B3u64);
+            }
+        }
+        hash
     }
 
     /// Returns the character at the specified position. If the position is outside the clip area, `None` will be returned.
@@ -285,22 +418,9 @@ impl Surface {
         if !self.clip.is_visible() {
             return;
         }
-        if (self.clip.left == 0) && (self.clip.top == 0) && (self.clip.right == self.right_most) && (self.clip.bottom == self.bottom_most) {
-            // the entire screen has to be cleared
-            for c in &mut self.chars {
-                c.set(ch);
-            }
-        } else {
-            // only the clip must pe cleared
-            let mut pos = self.clip.left as usize;
-            let sz = (self.clip.right + 1 - self.clip.left) as usize;
-            pos += (self.clip.top as usize) * (self.size.width as usize);
-
-            for _ in self.clip.top..=self.clip.bottom {
-                for c in &mut self.chars[pos..(pos + sz)] {
-                    c.set(ch);
-                }
-                pos += self.size.width as usize;
+        for y in self.clip.top..=self.clip.bottom {
+            for x in self.clip.left..=self.clip.right {
+                self.set_cell((y as usize) * self.size.width as usize + x as usize, ch);
             }
         }
     }
@@ -319,7 +439,7 @@ impl Surface {
         let mut x = l;
         while x <= r {
             if let Some(pos) = self.coords_to_position(x, y) {
-                self.chars[pos].set(ch);
+                self.set_cell(pos, ch);
             }
             x += 1;
         }
@@ -347,7 +467,7 @@ impl Surface {
         let mut y = t;
         while y <= b {
             if let Some(pos) = self.coords_to_position(x, y) {
-                self.chars[pos].set(ch);
+                self.set_cell(pos, ch);
             }
             y += 1;
         }
@@ -970,7 +1090,7 @@ impl Surface {
         for x in left..=right {
             for y in top..=bottom {
                 if let Some(pos) = self.coords_to_position(x, y) {
-                    self.chars[pos].set(ch);
+                    self.set_cell(pos, ch);
                 }
             }
         }
@@ -980,11 +1100,24 @@ impl Surface {
         if !self.clip.is_visible() {
             return;
         }
-        let mut index = 0usize;
         for s_y in 0..=surface.bottom_most {
-            for s_x in 0..=surface.right_most {
-                self.write_char(x + s_x, y + s_y, surface.chars[index]);
-                index += 1;
+            let mut s_x = 0;
+            while s_x <= surface.right_most {
+                let index = (s_y as usize) * surface.size.width as usize + s_x as usize;
+                let ch = surface.chars[index];
+                if let Some((text, width, _)) = surface.graphemes.get(&index) {
+                    if *width > 0 {
+                        if let (Some(dx), Some(dy)) = (x.checked_add(s_x), y.checked_add(s_y)) {
+                            self.write_grapheme(dx, dy, text, *width,
+                                CharAttribute::new(ch.foreground, ch.background, ch.flags));
+                        }
+                        s_x += *width as i32;
+                        continue;
+                    }
+                } else if let (Some(dx), Some(dy)) = (x.checked_add(s_x), y.checked_add(s_y)) {
+                    self.write_char(dx, dy, ch);
+                }
+                s_x += 1;
             }
         }
     }
@@ -1047,7 +1180,7 @@ impl Surface {
             for ch in text.chars() {
                 if let Some(pos) = self.coords_to_position(p_x, y) {
                     c.code = ch;
-                    self.chars[pos].set(c);
+                    self.set_cell(pos, c);
                 }
                 p_x += 1;
             }
@@ -1062,7 +1195,7 @@ impl Surface {
                 }
                 if let Some(pos) = self.coords_to_position(p_x, p_y) {
                     c.code = ch;
-                    self.chars[pos].set(c);
+                    self.set_cell(pos, c);
                 }
                 p_x += 1;
             }
@@ -1093,7 +1226,7 @@ impl Surface {
             for ch in ascii_buffer {
                 if let Some(pos) = self.coords_to_position(p_x, y) {
                     c.code = *ch as char;
-                    self.chars[pos].set(c);
+                    self.set_cell(pos, c);
                 }
                 p_x += 1;
             }
@@ -1108,7 +1241,7 @@ impl Surface {
                 }
                 if let Some(pos) = self.coords_to_position(p_x, p_y) {
                     c.code = *ch as char;
-                    self.chars[pos].set(c);
+                    self.set_cell(pos, c);
                 }
                 p_x += 1;
             }
@@ -1140,10 +1273,10 @@ impl Surface {
                 if (x >= left_margin) && (x < right_margin) {
                     if let Some(pos) = self.coords_to_position(x, y) {
                         if cpos == hkpos {
-                            self.chars[pos].set(Character::with_attributes(ch, format.hotkey_attr));
+                            self.set_cell(pos, Character::with_attributes(ch, format.hotkey_attr));
                         } else {
                             c.code = ch;
-                            self.chars[pos].set(c);
+                            self.set_cell(pos, c);
                         }
                     }
                 }
@@ -1155,7 +1288,7 @@ impl Surface {
                 if (x >= left_margin) && (x < right_margin) {
                     if let Some(pos) = self.coords_to_position(x, y) {
                         c.code = ch;
-                        self.chars[pos].set(c);
+                        self.set_cell(pos, c);
                     }
                 }
                 x += 1;
@@ -1399,6 +1532,7 @@ impl Surface {
         let w = size.width.clamp(1, MAX_SURFACE_WIDTH);
         let h = size.height.clamp(1, MAX_SURFACE_HEIGHT);
         let count = (w as usize) * (h as usize);
+        self.graphemes.clear();
         self.chars.clear();
         self.chars.reserve(count);
         self.chars.resize(count, Character::default());
@@ -1479,6 +1613,10 @@ impl Surface {
     ///    - Flags: 2 bytes (u16, little-endian)
     ///    - Foreground color: 1 byte (u8) - in case of RGB colors it will be 17, followed by 3 bytes for the RGB values
     ///    - Background color: 1 byte (u8) - in case of RGB colors it will be 17, followed by 3 bytes for the RGB values
+    /// Surfaces without grapheme metadata retain the original version 1 bytes.
+    /// Version 2 appends a little-endian u32 lead count, followed by each lead's
+    /// cell index (u32), width (u32), UTF-8 byte length (u64), and UTF-8 text.
+    /// Continuation cells are reconstructed from each lead's width.
     pub fn serialize_to_buffer(&self, output: &mut Vec<u8>) {
         output.clear();
         // magic
@@ -1486,7 +1624,7 @@ impl Surface {
         output.push(b'R');
         output.push(b'F');
         // version
-        output.push(1);
+        output.push(if self.graphemes.is_empty() { 1 } else { 2 });
         // size
         output.extend_from_slice(self.size.width.to_le_bytes().as_slice());
         output.extend_from_slice(self.size.height.to_le_bytes().as_slice());
@@ -1496,6 +1634,17 @@ impl Surface {
             output.extend_from_slice(ch.flags.get_value().to_le_bytes().as_slice());
             Self::serialize_color(ch.foreground, output);
             Self::serialize_color(ch.background, output);
+        }
+        if !self.graphemes.is_empty() {
+            let leads = self.graphemes.values().filter(|(_, width, _)| *width > 0).count();
+            output.extend_from_slice(&(leads as u32).to_le_bytes());
+            for (pos, (text, width, _)) in &self.graphemes {
+                if *width == 0 { continue; }
+                output.extend_from_slice(&(*pos as u32).to_le_bytes());
+                output.extend_from_slice(&(*width as u32).to_le_bytes());
+                output.extend_from_slice(&(text.len() as u64).to_le_bytes());
+                output.extend_from_slice(text.as_bytes());
+            }
         }
         /*
         Alternativ:
@@ -1529,11 +1678,14 @@ impl Surface {
         if buffer[0] != b'S' || buffer[1] != b'R' || buffer[2] != b'F' {
             return Err("Invalid magic number".to_string());
         }
-        if buffer[3] != 1 {
+        if buffer[3] != 1 && buffer[3] != 2 {
             return Err("Unsupported version".to_string());
         }
         let width = u32::from_le_bytes([buffer[4], buffer[5], buffer[6], buffer[7]]);
         let height = u32::from_le_bytes([buffer[8], buffer[9], buffer[10], buffer[11]]);
+        if width == 0 || height == 0 || width > MAX_SURFACE_WIDTH || height > MAX_SURFACE_HEIGHT {
+            return Err("Invalid surface size".to_string());
+        }
         let mut surface = Surface::new(width, height);
         let mut pos = 12;
         let len = buffer.len();
@@ -1542,22 +1694,59 @@ impl Surface {
                 return Err("Buffer is too small for character data".to_string());
             }
             let code = u32::from_le_bytes([buffer[pos], buffer[pos + 1], buffer[pos + 2], buffer[pos + 3]]);
-            ch.code = char::from_u32(code).expect("Invalid UTF-8 character");
+            ch.code = char::from_u32(code).ok_or("Invalid Unicode scalar")?;
             let flags = u16::from_le_bytes([buffer[pos + 4], buffer[pos + 5]]);
-            ch.flags = CharFlags::from_value(flags).expect("Invalid combination of flags");
+            ch.flags = CharFlags::from_value(flags).ok_or("Invalid combination of flags")?;
             pos += 6;
             if pos >= len {
                 return Err("Buffer is too small for foreground character colors".to_string());
             }
-            let (fore, sz) = Self::deserialize_color(&buffer[pos..]).expect("Invalid foreground color");
+            let (fore, sz) = Self::deserialize_color(&buffer[pos..]).ok_or("Invalid foreground color")?;
             ch.foreground = fore;
             pos += sz;
             if pos >= len {
                 return Err("Buffer is too small for background character colors".to_string());
             }
-            let (back, sz) = Self::deserialize_color(&buffer[pos..]).expect("Invalid background color");
+            let (back, sz) = Self::deserialize_color(&buffer[pos..]).ok_or("Invalid background color")?;
             ch.background = back;
             pos += sz;
+        }
+        if buffer[3] == 2 {
+            fn read_u32(buffer: &[u8], pos: &mut usize) -> Result<u32, String> {
+                let bytes = buffer.get(*pos..*pos + 4).ok_or("Truncated grapheme metadata")?;
+                *pos += 4;
+                Ok(u32::from_le_bytes(bytes.try_into().unwrap()))
+            }
+            let count = read_u32(buffer, &mut pos)? as usize;
+            if count > surface.chars.len() { return Err("Invalid grapheme count".to_string()); }
+            for _ in 0..count {
+                let lead = read_u32(buffer, &mut pos)? as usize;
+                let width = read_u32(buffer, &mut pos)? as usize;
+                let length_bytes = buffer.get(pos..pos + 8).ok_or("Truncated grapheme length")?;
+                let length = usize::try_from(u64::from_le_bytes(length_bytes.try_into().unwrap()))
+                    .map_err(|_| "Invalid grapheme length")?;
+                pos += 8;
+                let end = pos.checked_add(length).ok_or("Invalid grapheme length")?;
+                let text = std::str::from_utf8(buffer.get(pos..end).ok_or("Truncated grapheme text")?)
+                    .map_err(|_| "Invalid grapheme UTF-8")?;
+                pos = end;
+                if lead >= surface.chars.len() || width == 0 || width > surface.size.width as usize
+                    || lead % surface.size.width as usize + width > surface.size.width as usize
+                    || text.is_empty() || text.chars().any(char::is_control)
+                    || (lead..lead + width).any(|index| surface.graphemes.contains_key(&index)) {
+                    return Err("Invalid grapheme span".to_string());
+                }
+                if surface.chars[lead].code != text.chars().next().unwrap() {
+                    return Err("Grapheme scalar does not match cell".to_string());
+                }
+                surface.graphemes.insert(lead, (text.to_owned(), width, 0));
+                let ch = surface.chars[lead];
+                for back in 1..width {
+                    surface.chars[lead + back] = Character::new(' ', ch.foreground, ch.background, ch.flags);
+                    surface.graphemes.insert(lead + back, (String::new(), 0, back));
+                }
+            }
+            if pos != buffer.len() { return Err("Unexpected grapheme data".to_string()); }
         }
         Ok(surface)
     }

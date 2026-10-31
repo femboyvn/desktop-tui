@@ -112,7 +112,7 @@ impl DebugTerminal {
                 hash = hash.wrapping_mul(0x00000100000001B3u64);
             }
         }
-        hash
+        surface.hash_graphemes(hash)
     }
 }
 impl Backend for DebugTerminal {
@@ -266,7 +266,7 @@ impl Backend for DebugTerminal {
 
         let mut x = 0u32;
         let mut y = 0u32;
-        for ch in &surface.chars {
+        for (index, ch) in surface.chars.iter().enumerate() {
             let mut fore = ch.foreground;
             let mut back = ch.background;
             if (x as i32 == cursor.x) && (y as i32 == cursor.y) {
@@ -275,8 +275,12 @@ impl Backend for DebugTerminal {
             }
             self.ansi_buffer.set_color(fore, back);
             self.ansi_buffer.set_char_flags(ch.flags);
-            if ch.code <= ' ' {
+            if surface.width_at(index) == 0 {
+                // The lead already printed this terminal cell.
+            } else if ch.code <= ' ' {
                 self.ansi_buffer.write_char(' ');
+            } else if surface.graphemes.contains_key(&index) {
+                self.ansi_buffer.write_string(surface.text_at(index).as_ref());
             } else {
                 self.ansi_buffer.write_char(ch.code);
             }

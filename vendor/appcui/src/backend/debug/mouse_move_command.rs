@@ -28,7 +28,7 @@ impl MouseMoveCommand {
         })
     }
     pub(super) fn generate_event(&self, sys_events: &mut VecDeque<SystemEvent>) {
-        sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent {
+        sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent { modifier: None,
             x: self.x,
             y: self.y,
             button: MouseButton::None,

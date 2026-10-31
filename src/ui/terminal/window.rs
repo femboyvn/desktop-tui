@@ -1,22 +1,25 @@
 use super::keyboard::CustomKeyboardControl;
+use super::input_queue::InputError;
 use crate::config::preferences::TerminalPalette;
 use crate::config::{BackgroundColor, TerminalOptions, WindowOptions, WindowSize};
-use crate::runtime::TerminalParser;
+use crate::runtime::{TerminalParser, MAX_TERMINAL_DIMENSION};
 use anyhow::anyhow;
 use crate::runtime::processes::{self, ProcessGuard};
 use appcui::dialogs::{Location, OpenFileDialogFlags, SelectFolderDialogFlags};
-use appcui::graphics::{Color, Size, Surface};
+use appcui::graphics::{Color, Size};
 use appcui::prelude::window::Flags;
 use appcui::prelude::{
-    Alignment, Canvas, EventProcessStatus, Handle, LayoutBuilder, OnResize, TimerEvents, Window,
+    Alignment, Canvas, EventProcessStatus, Handle, LayoutBuilder, TimerEvents, Window,
     canvas, WindowEvents, ActionRequest,
 };
-use async_channel::Sender;
+use async_channel::Receiver;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::Path;
-use std::time::Duration;
-use virtual_terminal::{Command, Input, Output};
+use std::time::{Duration, Instant};
+use virtual_terminal::{Command, Output};
 
 /// File/Folder contexts bind browser paths without dialogs and set only this child's directory.
 /// Document retains the original constructor's picker-then-append behavior.
@@ -31,11 +34,13 @@ impl<'a> LaunchContext<'a> {
 #[Window(events = [TimerEvents, WindowEvents])]
 pub struct TuiWindow {
     pub canvas: Handle<Canvas>,
-    pub terminal_parser: TerminalParser,
+    terminal_parser: Rc<RefCell<TerminalParser>>,
     pub custom_keyboard_control: Handle<CustomKeyboardControl>,
     pub horizontal_adjustment: u32,
     pub vertical_adjustment: u32,
-    pending_terminal_size: Option<Size>,
+    padding: (i32, i32),
+    pending_output: Option<(Vec<u8>, usize)>,
+    input_closed_at: Option<Instant>,
     process: ProcessGuard,
     closing: bool,
     launch_command: String,
@@ -80,29 +85,8 @@ impl TuiWindow {
             height: 25,
         });
 
-        let mut x = 0;
-        let mut y = 0;
-        let mut horizontal_adjustment: i32 = 2;
-        let mut vertical_adjustment: i32 = 2;
-
-        if let Some(padding) = terminal_options.padding {
-            x = padding.0;
-            y = padding.1;
-
-            horizontal_adjustment += padding.0;
-            vertical_adjustment += padding.1;
-        }
-
-        let inner_size = Size {
-            width: window_size
-                .width
-                .saturating_sub(horizontal_adjustment as u32)
-                .max(1),
-            height: window_size
-                .height
-                .saturating_sub(vertical_adjustment as u32)
-                .max(1),
-        };
+        let padding = terminal_options.padding.unwrap_or((0, 0));
+        let (x, y, inner_size) = terminal_geometry(Size::new(window_size.width, window_size.height), padding);
 
         let mut window_flags = Flags::None;
 
@@ -131,9 +115,12 @@ impl TuiWindow {
         let mut configured = vec![program.as_ref().to_owned()];
         configured.extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
         let (modified_program, modified_args) = resolve_templates(configured,context)?;
+        let modified_program = crate::platform::bundled::resolve_program(&modified_program);
         let launch_command = modified_program.to_string_lossy().into_owned();
         let mut cmd = Command::new(modified_program).args(modified_args)
-            .terminal_size((inner_size.width as usize, inner_size.height as usize));
+            .terminal_size((inner_size.width as usize, inner_size.height as usize))
+            .terminal_id("xterm-256color")
+            .env("COLORTERM", "truecolor");
         if let Some(directory) = context.directory() { cmd = cmd.current_dir(directory); }
         let tx = cmd.in_tx();
         let (process, rx) = processes::start(cmd);
@@ -147,15 +134,15 @@ impl TuiWindow {
             base: win,
             canvas: Handle::None,
             custom_keyboard_control: Handle::None,
-            terminal_parser: TerminalParser::with_palette(
+            terminal_parser: Rc::new(RefCell::new(TerminalParser::with_palette(
                 inner_size.width,
                 inner_size.height,
                 palette,
                 default_background_color,
-            ),
-            horizontal_adjustment: horizontal_adjustment as u32,
-            vertical_adjustment: vertical_adjustment as u32,
-            pending_terminal_size: None,
+            ))),
+            horizontal_adjustment: 2 + x as u32,
+            vertical_adjustment: 2 + y as u32,
+            padding, pending_output: None, input_closed_at: None,
             process, closing: false, launch_command, pending_error: None,
         };
 
@@ -170,7 +157,7 @@ impl TuiWindow {
             canvas::Flags::None,
         ));
 
-        let surface = tui_win.terminal_parser.new_surface();
+        let surface = tui_win.terminal_parser.borrow().new_surface();
         let canvas = tui_win.canvas;
         *tui_win.control_mut(canvas).unwrap().drawing_surface_mut() = surface;
 
@@ -180,7 +167,10 @@ impl TuiWindow {
         };
         timer.start(Duration::from_millis(25));
 
-        tui_win.custom_keyboard_control = tui_win.add(CustomKeyboardControl::new(tx, rx));
+        let parser = tui_win.terminal_parser.clone();
+        tui_win.custom_keyboard_control = tui_win.add(CustomKeyboardControl::new(tx, rx,
+            parser, LayoutBuilder::new().x(x).y(y)
+                .width(inner_size.width).height(inner_size.height).build()));
 
         Ok(tui_win)
     }
@@ -188,26 +178,33 @@ impl TuiWindow {
     pub fn apply_palette(&mut self, palette: &TerminalPalette) {
         if let Some(canvas) = self.base.control_mut(self.canvas) {
             self.terminal_parser
+                .borrow_mut()
                 .apply_palette(palette, canvas.drawing_surface_mut());
         }
     }
 
-    fn sync_terminal_size(&mut self) {
-        let size = self.size();
-        let width = size.width.saturating_sub(self.horizontal_adjustment).max(1);
-        let height = size.height.saturating_sub(self.vertical_adjustment).max(1);
+    fn sync_terminal_size(&mut self) -> Result<(), InputError> {
+        let (x, y, size) = terminal_geometry(self.size(), self.padding);
+        let Size { width, height } = size;
+        self.horizontal_adjustment = 2 + x as u32;
+        self.vertical_adjustment = 2 + y as u32;
         let canvas = self.base.control_mut(self.canvas).unwrap();
-        if canvas.drawing_surface_mut().size() != Size::new(width, height) {
+        if canvas.position() != appcui::graphics::Point::new(x, y) { canvas.set_position(x, y); }
+        if canvas.drawing_surface_mut().size() != size {
             self.terminal_parser
+                .borrow_mut()
                 .resize_surface(width, height, canvas.drawing_surface_mut());
             canvas.set_size(width as u16, height as u16);
-            self.pending_terminal_size = Some(Size::new(width, height));
+            let control = self.base.control_mut(self.custom_keyboard_control).unwrap();
+            control.set_size(width as u16, height as u16);
+            control.input.resize(width as usize, height as usize)?;
         }
-        let control = self.base.control(self.custom_keyboard_control).unwrap();
-        send_pending_resize(&mut self.pending_terminal_size, &control.tx);
+        let control = self.base.control_mut(self.custom_keyboard_control).unwrap();
+        if control.position() != appcui::graphics::Point::new(x, y) { control.set_position(x, y); }
+        control.input.flush()
     }
 
-    pub fn is_closing(&self) -> bool { self.pending_error.is_none() && (self.closing || self.process.finished()) }
+    pub fn is_closing(&self) -> bool { self.pending_error.is_none() && self.closing }
 
     fn cleanup(&mut self) {
         if self.closing { return; }
@@ -236,49 +233,104 @@ impl TimerEvents for TuiWindow {
             return EventProcessStatus::Processed;
         }
         if self.closing { return EventProcessStatus::Ignored; }
-        self.sync_terminal_size();
-        let (should_close, rx_clone) = {
-            let ckc = self.control(self.custom_keyboard_control).unwrap();
-
-            (ckc.should_exit, ckc.rx.clone())
+        // The runner drops its input receiver at exit, possibly before the UI
+        // reads its terminal output. Preserve the child's diagnostic/clean exit.
+        let resize_error = self.sync_terminal_size().err();
+        let control_handle = self.custom_keyboard_control;
+        let (should_close, input_error, rx) = {
+            let control = self.control_mut(control_handle).unwrap();
+            (control.should_exit, control.input_error.take(), control.rx.clone())
         };
+        if should_close { self.close_command(); return EventProcessStatus::Processed; }
 
-        if should_close {
-            self.close_command();
-            return EventProcessStatus::Processed;
+        let parser = self.terminal_parser.clone();
+        let mut parser = parser.borrow_mut();
+        let batch = drain_output(&rx, &mut self.pending_output, |bytes| parser.advance_bytes(bytes));
+        if batch.changed {
+            let canvas = self.base.control_mut(self.canvas).unwrap();
+            parser.project(canvas.drawing_surface_mut());
         }
+        let replies = parser.take_replies();
+        let reply_overflow = parser.take_reply_error();
+        drop(parser);
+        let input_result = self.control_mut(control_handle).unwrap().input.data(replies);
+        if let Some(error) = batch.error {
+            self.fail_child(error);
+        } else if batch.terminated {
+            self.close_command();
+        } else if reply_overflow {
+            self.fail_child("The child terminal-query reply buffer exceeded 64 KiB. This application will close.".into());
+        } else {
+            let errors = [input_error, input_result.err(), resize_error];
+            // Queue exhaustion is a failure even if a closed-channel observation
+            // occurred in the same tick. Closure alone can be an exit transition.
+            let error = if errors.contains(&Some(InputError::Full)) { Some(InputError::Full) }
+                else { errors.into_iter().flatten().next() };
+            if let Some(error) = error {
+                if let Some(message) = self.input_failure(error, &rx) { self.fail_child(message); }
+            } else { self.input_closed_at = None; }
+        }
+        if batch.changed || batch.terminated || self.closing { EventProcessStatus::Processed }
+        else { EventProcessStatus::Ignored }
+    }
+}
 
-        match rx_clone.try_recv() {
-            Ok(msg) => match msg {
-                Output::Pid(_) => EventProcessStatus::Ignored,
-                Output::Stdout(command_output) => {
-                    let canvas = self.base.control_mut(self.canvas).unwrap();
-                    let old_surface =
-                        std::mem::replace(canvas.drawing_surface_mut(), Surface::new(1, 1));
-                    *canvas.drawing_surface_mut() = self
-                        .terminal_parser
-                        .parse_to_surface(&command_output, old_surface);
-
-                    EventProcessStatus::Processed
-                }
-                Output::Error(error) => {
-                    if self.is_visible() {
-                        self.show_launch_error(&error);
-                        self.close_command();
-                    } else {
-                        self.pending_error = Some(error);
-                        self.cleanup();
-                    }
-                    EventProcessStatus::Processed
-                }
-                Output::Terminated(_) => {
-                    self.close_command();
-                    EventProcessStatus::Processed
-                }
-            },
-            Err(_) => EventProcessStatus::Ignored,
+impl TuiWindow {
+    fn input_failure(&mut self, error: InputError, rx: &Receiver<Output>) -> Option<String> {
+        if error == InputError::Full { return Some(error.to_string()); }
+        if self.process.finished() || !rx.is_empty() || self.pending_output.is_some() {
+            self.input_closed_at = None;
+            return None;
+        }
+        // Input can close before the runner publishes its exit/error. Give that
+        // asynchronous result time to arrive without blocking a UI callback.
+        // A broken writer with a live child still closes after a bounded grace.
+        let since = self.input_closed_at.get_or_insert_with(Instant::now);
+        (since.elapsed() >= Duration::from_secs(1)).then(|| error.to_string())
+    }
+    fn fail_child(&mut self, error: String) {
+        if self.is_visible() {
+            self.show_launch_error(&error);
+            self.close_command();
+        } else {
+            self.pending_error = Some(error);
+            self.cleanup();
         }
     }
+}
+
+/// Consume a bounded amount of output and leave the rest for the next UI tick.
+#[derive(Default)]
+struct OutputBatch { changed: bool, error: Option<String>, terminated: bool }
+fn drain_output(rx: &Receiver<Output>, pending: &mut Option<(Vec<u8>, usize)>, mut consume: impl FnMut(&[u8])) -> OutputBatch {
+    let mut batch = OutputBatch::default();
+    let mut remaining = 256 * 1024;
+    for _ in 0..64 {
+        if remaining == 0 { break; }
+        let (bytes, offset) = if let Some(data) = pending.take() { data } else {
+            match rx.try_recv() {
+                Ok(Output::Stdout(bytes)) => (bytes, 0),
+                Ok(Output::Pid(_)) => continue,
+                Ok(Output::Error(error)) => { batch.error = Some(error); break; }
+                Ok(Output::Terminated(_)) => { batch.terminated = true; break; }
+                Err(_) => break,
+            }
+        };
+        let end = bytes.len().min(offset + remaining);
+        if end > offset { consume(&bytes[offset..end]); batch.changed = true; }
+        remaining -= end - offset;
+        if end < bytes.len() { *pending = Some((bytes, end)); break; }
+    }
+    batch
+}
+
+/// Padding is an inset from the client origin; retain at least one inner cell.
+fn terminal_geometry(size: Size, padding: (i32, i32)) -> (i32, i32, Size) {
+    let client_width = size.width.saturating_sub(2).clamp(1, MAX_TERMINAL_DIMENSION);
+    let client_height = size.height.saturating_sub(2).clamp(1, MAX_TERMINAL_DIMENSION);
+    let x = padding.0.max(0).min(client_width.saturating_sub(1) as i32);
+    let y = padding.1.max(0).min(client_height.saturating_sub(1) as i32);
+    (x, y, Size::new(client_width - x as u32, client_height - y as u32))
 }
 
 fn resolve_templates(mut configured: Vec<OsString>, context: LaunchContext<'_>) -> anyhow::Result<(OsString, Vec<OsString>)> {
@@ -325,6 +377,102 @@ fn append_document(args: &mut Vec<OsString>, document: Option<&Path>) {
 mod tests {
     use super::*;
     #[test]
+    fn completed_child_drains_queries_and_output_before_clean_close() {
+        let _lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap(); let _entered = runtime.enter();
+        let app = appcui::prelude::App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let options = WindowOptions { resizable: true, close_button: true, fixed_position: false, size: None };
+        let terminal = TerminalOptions { padding: None, background_color: None };
+        let mut window = TuiWindow::new("finite child", "/bin/sh", ["-c", "exit 0"], options, terminal,
+            &crate::config::preferences::Preferences::default().terminal).unwrap();
+        window.set_visible(false);
+        let deadline = std::time::Instant::now() + Duration::from_secs(4);
+        while !window.process.finished() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let closed_before_polling = window.is_closing();
+        let (tx, rx) = async_channel::bounded(100);
+        tx.try_send(Output::Stdout(b"\x1b[6n".to_vec())).unwrap();
+        for _ in 0..70 { tx.try_send(Output::Stdout(b"x".to_vec())).unwrap(); }
+        tx.try_send(Output::Terminated(Some(0))).unwrap();
+        let keyboard = window.custom_keyboard_control;
+        window.control_mut(keyboard).unwrap().rx = rx;
+        TimerEvents::on_update(&mut window, 0);
+        let after_first_tick = (window.closing, window.pending_error.clone());
+        TimerEvents::on_update(&mut window, 0);
+        let after_second_tick = (window.closing, window.pending_error.clone());
+        app.run();
+        runtime.block_on(processes::finish_shutdown());
+        assert!(!closed_before_polling, "the timer must observe final output/error before removing the window");
+        assert_eq!(after_first_tick, (false, None));
+        assert_eq!(after_second_tick, (true, None));
+    }
+    #[test]
+    fn closed_input_waits_for_exit_result_but_a_broken_live_writer_is_closed() {
+        let _lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap(); let _entered = runtime.enter();
+        let app = appcui::prelude::App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let options = WindowOptions { resizable: true, close_button: true, fixed_position: false, size: None };
+        let terminal = TerminalOptions { padding: None, background_color: None };
+        let mut window = TuiWindow::new("broken writer", "/bin/sh", ["-c", "sleep 60"], options, terminal,
+            &crate::config::preferences::Preferences::default().terminal).unwrap();
+        window.set_visible(false);
+        let keyboard = window.custom_keyboard_control;
+        let output = window.control(keyboard).unwrap().rx.clone();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while output.is_empty() {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        window.control(keyboard).unwrap().tx.close();
+        TimerEvents::on_update(&mut window, 0);
+        let first = (window.closing, window.pending_error.clone());
+        window.input_closed_at = Some(Instant::now() - Duration::from_secs(2));
+        TimerEvents::on_update(&mut window, 0);
+        let second = (window.closing, window.pending_error.clone());
+        app.run();
+        runtime.block_on(processes::finish_shutdown());
+        assert_eq!(first, (false, None));
+        assert!(second.0);
+        assert!(second.1.unwrap().contains("input channel has closed"));
+    }
+    #[test]
+    fn output_drain_limits_floods_and_preserves_partial_messages() {
+        let (tx, rx) = async_channel::bounded(100);
+        for _ in 0..70 { tx.try_send(Output::Stdout(vec![b'x'])).unwrap(); }
+        let mut pending = None;
+        let mut text = Vec::new();
+        let batch = drain_output(&rx, &mut pending, |bytes| text.extend_from_slice(bytes));
+        assert!(batch.changed);
+        assert_eq!(text.len(), 64);
+        assert_eq!(rx.len(), 6);
+        while rx.try_recv().is_ok() {}
+        tx.try_send(Output::Stdout(vec![b'y'; 300 * 1024])).unwrap();
+        text.clear();
+        drain_output(&rx, &mut pending, |bytes| text.extend_from_slice(bytes));
+        assert_eq!(text.len(), 256 * 1024);
+        assert!(text.iter().all(|byte| *byte == b'y'));
+        text.clear();
+        drain_output(&rx, &mut pending, |bytes| text.extend_from_slice(bytes));
+        assert_eq!(text.len(), 44 * 1024);
+        assert!(pending.is_none());
+    }
+
+    #[test]
+    fn terminal_geometry_bounds_padding_and_dimension_casts() {
+        for (width, height, padding, expected) in [
+            (80, 24, (0, 0), (0, 0, 78, 22)),
+            (80, 24, (2, 1), (2, 1, 76, 21)),
+            (0, 0, (-10, -20), (0, 0, 1, 1)),
+            (3, 3, (i32::MAX, i32::MAX), (0, 0, 1, 1)),
+            (u32::MAX, u32::MAX, (0, 0), (0, 0, 10000, 10000)),
+        ] {
+            let (x, y, size) = terminal_geometry(Size::new(width, height), padding);
+            assert_eq!((x, y, size.width, size.height), expected);
+        }
+    }
+    #[test]
     fn contextual_launch_failure_is_deferred_when_hidden_and_releases_its_child() {
         let _lock = crate::test_support::UI_LOCK.lock().unwrap();
         let runtime = tokio::runtime::Runtime::new().unwrap(); let _entered = runtime.enter();
@@ -341,6 +489,8 @@ mod tests {
                 assert!(std::time::Instant::now()<deadline,"launch error was not observed");
                 std::thread::sleep(Duration::from_millis(1));
             }
+            assert!(window.pending_error.as_deref().unwrap().contains("No such file"),
+                "the child's launch diagnostic must survive input-channel closure: {:?}", window.pending_error);
             assert!(!window.is_closing(),"hidden error must remain available on restore");
             window.set_visible(true); TimerEvents::on_update(&mut window,0);
             assert!(window.is_closing()); assert!(window.pending_error.is_none());
@@ -379,28 +529,5 @@ mod tests {
         append_document(&mut args, Some(&file));
         assert_eq!(args.len(), 2);
         assert_eq!(args[1], file.as_os_str());
-    }
-    #[test]
-    fn terminal_resize_is_retried_after_input_queue_drains() {
-        let (tx, rx) = async_channel::bounded(1);
-        tx.try_send(Input::Data(vec![b'a'])).unwrap();
-        let mut pending = Some(Size::new(60, 12));
-        send_pending_resize(&mut pending, &tx);
-        assert_eq!(pending, Some(Size::new(60, 12)));
-        assert_eq!(rx.try_recv().unwrap(), Input::Data(vec![b'a']));
-        send_pending_resize(&mut pending, &tx);
-        assert_eq!(pending, None);
-        assert_eq!(rx.try_recv().unwrap(), Input::Resize((60, 12)));
-        send_pending_resize(&mut pending, &tx);
-        assert!(rx.try_recv().is_err());
-    }
-}
-
-fn send_pending_resize(pending: &mut Option<Size>, tx: &Sender<Input>) {
-    if let Some(size) = *pending {
-        match tx.try_send(Input::Resize((size.width as usize, size.height as usize))) {
-            Ok(()) | Err(async_channel::TrySendError::Closed(_)) => *pending = None,
-            Err(async_channel::TrySendError::Full(_)) => {}
-        }
     }
 }

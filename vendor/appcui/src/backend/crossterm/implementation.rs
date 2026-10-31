@@ -4,7 +4,7 @@ use crate::{
     graphics::{CharFlags, Color, Size, Surface},
     system::{Error, SystemEvent},
 };
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture};
 use crossterm::{
     cursor::{Hide, MoveTo, Show},
     execute, queue,
@@ -26,7 +26,8 @@ use copypasta::ClipboardProvider;
 pub(crate) struct CrossTerm {
     size: Size,
     use_color_schema: bool,
-    screen_chars: Vec<Character> // Contains characters painted on screen
+    screen_chars: Vec<Character>, // Contains characters painted on screen
+    screen_graphemes: std::collections::BTreeMap<usize, (String, usize, usize)>
 }
 
 #[cfg(all(test, feature = "TRUE_COLORS"))]
@@ -34,6 +35,12 @@ pub(crate) struct CrossTerm {
 mod regression_tests;
 
 impl CrossTerm {
+    // The outer terminal must delimit paste events independently of the child
+    // emulator's own bracketed-paste mode.
+    fn write_input_modes(writer: &mut impl std::io::Write, enabled: bool) -> std::io::Result<()> {
+        if enabled { execute!(writer, EnableMouseCapture, EnableBracketedPaste) }
+        else { execute!(writer, DisableBracketedPaste, DisableMouseCapture) }
+    }
     pub(crate) fn new(builder: &crate::system::Builder, sender: Sender<SystemEvent>) -> Result<Self, Error> {
         // Enable raw mode
         enable_raw_mode().map_err(|e| {
@@ -43,7 +50,7 @@ impl CrossTerm {
             )
         })?;
 
-        execute!(stdout(), EnableMouseCapture).map_err(|e| {
+        Self::write_input_modes(&mut stdout(), true).map_err(|e| {
             Error::new(
                 crate::system::ErrorKind::InitializationFailure,
                 format!("Failed to enable mouse capture: {}", e),
@@ -60,7 +67,8 @@ impl CrossTerm {
         let mut term = CrossTerm {
             size: Size::new(width as u32, height as u32),
             use_color_schema: builder.use_color_schema,
-            screen_chars: Vec::new()
+            screen_chars: Vec::new(),
+            screen_graphemes: std::collections::BTreeMap::new()
         };
         
         for _n in 0..(width * height) {
@@ -144,13 +152,28 @@ impl CrossTerm {
         // The terminal retains styles between frames; establish them on the first write.
         let mut flags = None;
         
+        if self.screen_chars.len() != surface.chars.len() {
+            self.screen_chars = vec![Character::new(0, Color::Transparent, Color::Transparent, CharFlags::None); surface.chars.len()];
+            self.screen_graphemes.clear();
+        }
         let mut current_screen_char_index = 0;
         let mut position_changed = true; // Controls if cursor position has been changed
 
         for ch in surface.chars.iter() {
             let current_screen_char = &self.screen_chars[current_screen_char_index];
             // If the character is already painted, don't paint the character again
-            if *current_screen_char != *ch {
+            let glyph_changed = self.screen_graphemes.get(&current_screen_char_index)
+                != surface.graphemes.get(&current_screen_char_index);
+            let cell_width = surface.width_at(current_screen_char_index);
+            if cell_width == 0 {
+                self.screen_chars[current_screen_char_index] = *ch;
+                // A continuation consumes a cell in the grid but emits nothing.
+                current_screen_char_index += 1;
+                x += 1;
+                if x >= w { x = 0; y += 1; position_changed = false; }
+                continue;
+            }
+            if *current_screen_char != *ch || glyph_changed {
                 self.screen_chars[current_screen_char_index] = *ch;
                 if Some(ch.flags) != flags {
                     queue!(stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::Reset)).unwrap();
@@ -193,12 +216,16 @@ impl CrossTerm {
                     queue!(stdout, MoveTo(x as u16, y as u16)).unwrap();
                     position_changed = true;
                 }
-                if ! ch.code.is_ascii() {
+                if cell_width != 1 || !ch.code.is_ascii() || surface.graphemes.contains_key(&current_screen_char_index) {
                     // Errors on painting could be due to wide chars. 
                     // Cursor must be reposition after each wide character.
                     position_changed = false;
                 }   
-                queue!(stdout, Print(ch.code)).unwrap();
+                if surface.graphemes.contains_key(&current_screen_char_index) {
+                    queue!(stdout, Print(surface.text_at(current_screen_char_index))).unwrap();
+                } else {
+                    queue!(stdout, Print(ch.code)).unwrap();
+                }
             } else if position_changed {
                 position_changed = false;
             }
@@ -215,6 +242,7 @@ impl CrossTerm {
             }
         }
 
+        self.screen_graphemes.clone_from(&surface.graphemes);
         if surface.cursor.is_visible() {
             queue!(stdout, Show, MoveTo(surface.cursor.x as u16, surface.cursor.y as u16)).unwrap();
         }
@@ -231,6 +259,7 @@ impl Backend for CrossTerm {
     fn on_resize(&mut self, new_size: Size) {
         self.size = new_size;
         self.screen_chars = Vec::new();
+        self.screen_graphemes.clear();
         for _n in 0..(self.size.width * self.size.height) {
           self.screen_chars.push(Character::new(0, Color::Transparent, Color::Transparent, CharFlags::None));
         }
@@ -282,7 +311,7 @@ impl Backend for CrossTerm {
     }
 
     fn on_close(&mut self) {
-        let _ = execute!(stdout(), DisableMouseCapture);
+        let _ = Self::write_input_modes(&mut stdout(), false);
         let _ = execute!(stdout(), LeaveAlternateScreen, Show, ResetColor);
         let _ = disable_raw_mode();
     }

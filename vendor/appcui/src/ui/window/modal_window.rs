@@ -223,6 +223,9 @@ impl<T: 'static> OnKeyPressed for ModalWindow<T> {
 }
 impl<T> OnMouseEvent for ModalWindow<T> {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         OnMouseEvent::on_mouse_event(&mut self.base, event)
     }
 }

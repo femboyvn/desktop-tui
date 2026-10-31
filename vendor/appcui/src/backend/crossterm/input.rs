@@ -12,6 +12,7 @@ const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
 
 pub(crate) struct Input {
     last_modifiers: KeyModifier,
+    pending_event: Option<SystemEvent>,
     pressed_click: Option<Click>,
     completed_click: Option<Click>,
 }
@@ -20,6 +21,7 @@ impl Input {
     pub(super) fn new() -> Self {
         Self {
             last_modifiers: KeyModifier::None,
+            pending_event: None,
             pressed_click: None,
             completed_click: None,
         }
@@ -28,13 +30,14 @@ impl Input {
 
 impl SystemEventReader for Input {
     fn read(&mut self) -> Option<SystemEvent> {
+        if let Some(event) = self.pending_event.take() { return Some(event); }
         match event::read() {
             Ok(Event::Key(key_event)) => self.handle_key_event(key_event),
             Ok(Event::Mouse(mouse_event)) => self.handle_mouse_event(mouse_event),
             Ok(Event::Resize(width, height)) => { self.clear_clicks(); Some(SystemEvent::Resize(crate::graphics::Size::new(width as u32, height as u32))) },
             Ok(Event::FocusGained) => None,
             Ok(Event::FocusLost) => { self.clear_clicks(); None },
-            Ok(Event::Paste(_)) => None,
+            Ok(Event::Paste(text)) => { self.clear_clicks(); Some(SystemEvent::Paste(text)) },
             Err(_) => None,
         }
     }
@@ -42,14 +45,15 @@ impl SystemEventReader for Input {
 
 impl Input {
     fn handle_key_event(&mut self, key_event: KeyEvent) -> Option<SystemEvent> {
-        // Only handle key press events, not releases
-        if key_event.kind != KeyEventKind::Press {
+        // Repeated presses are input; release notifications are not.
+        if key_event.kind == KeyEventKind::Release {
             return None;
         }
 
         self.clear_clicks();
         let key_code = self.convert_key_code(key_event.code);
-        let modifiers = self.convert_modifiers(key_event.modifiers);
+        let mut modifiers = self.convert_modifiers(key_event.modifiers);
+        if key_event.code == CrosstermKeyCode::BackTab { modifiers |= KeyModifier::Shift; }
         
         let key = Key::new(key_code, modifiers);
         let character = match key_event.code {
@@ -57,16 +61,13 @@ impl Input {
             _ => '\0',
         };
 
-        // Check for modifier changes
-        if modifiers != self.last_modifiers && character == '\0' {
-            let old_modifiers = self.last_modifiers;
+        if modifiers != self.last_modifiers {
+            let old_state = self.last_modifiers;
             self.last_modifiers = modifiers;
-            return Some(SystemEvent::KeyModifierChanged(KeyModifierChangedEvent {
-                new_state: modifiers,
-                old_state: old_modifiers,
-            }));
+            // Notify bars without replacing the physical key event. The reader
+            // drains this notification before waiting for another terminal event.
+            self.pending_event = Some(SystemEvent::KeyModifierChanged(KeyModifierChangedEvent { new_state: modifiers, old_state }));
         }
-
         Some(SystemEvent::KeyPressed(KeyPressedEvent { key, character }))
     }
 
@@ -80,6 +81,7 @@ impl Input {
     fn handle_mouse_event_at(&mut self, mouse_event: MouseEvent, now: Instant) -> Option<SystemEvent> {
         let x = mouse_event.column as i32;
         let y = mouse_event.row as i32;
+        let modifier = Some(self.convert_modifiers(mouse_event.modifiers));
 
         if matches!(mouse_event.kind, MouseEventKind::ScrollUp | MouseEventKind::ScrollDown | MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight) { self.clear_clicks(); }
         match mouse_event.kind {
@@ -90,10 +92,10 @@ impl Input {
                     && now.saturating_duration_since(click.time) <= DOUBLE_CLICK_INTERVAL);
                 if double_click {
                     self.pressed_click = None;
-                    Some(SystemEvent::MouseDoubleClick(MouseDoubleClickEvent { x, y, button }))
+                    Some(SystemEvent::MouseDoubleClick(MouseDoubleClickEvent { modifier, x, y, button }))
                 } else {
                     self.pressed_click = Some(Click { x, y, button, time: now });
-                    Some(SystemEvent::MouseButtonDown(MouseButtonDownEvent { x, y, button }))
+                    Some(SystemEvent::MouseButtonDown(MouseButtonDownEvent { modifier, x, y, button }))
                 }
             }
             MouseEventKind::Up(button) => {
@@ -101,33 +103,33 @@ impl Input {
                 self.completed_click = self.pressed_click.take().filter(|click|
                     button == MouseButton::Left && click.button == button && click.x == x && click.y == y
                     && now.saturating_duration_since(click.time) <= DOUBLE_CLICK_INTERVAL);
-                Some(SystemEvent::MouseButtonUp(MouseButtonUpEvent { x, y, button }))
+                Some(SystemEvent::MouseButtonUp(MouseButtonUpEvent { modifier, x, y, button }))
             }
             MouseEventKind::Moved => {
                 if self.pressed_click.or(self.completed_click).is_some_and(|click| click.x != x || click.y != y) { self.clear_clicks(); }
-                Some(SystemEvent::MouseMove(MouseMoveEvent { x, y, button: MouseButton::None }))
+                Some(SystemEvent::MouseMove(MouseMoveEvent { modifier, x, y, button: MouseButton::None }))
             }
             MouseEventKind::Drag(button) => {
                 self.clear_clicks();
                 let button = self.convert_mouse_button(button);
-                Some(SystemEvent::MouseMove(MouseMoveEvent { x, y, button }))
+                Some(SystemEvent::MouseMove(MouseMoveEvent { modifier, x, y, button }))
             }
-            MouseEventKind::ScrollUp => Some(SystemEvent::MouseWheel(MouseWheelEvent {
+            MouseEventKind::ScrollUp => Some(SystemEvent::MouseWheel(MouseWheelEvent { modifier,
                 x,
                 y,
                 direction: MouseWheelDirection::Up,
             })),
-            MouseEventKind::ScrollDown => Some(SystemEvent::MouseWheel(MouseWheelEvent {
+            MouseEventKind::ScrollDown => Some(SystemEvent::MouseWheel(MouseWheelEvent { modifier,
                 x,
                 y,
                 direction: MouseWheelDirection::Down,
             })),
-            MouseEventKind::ScrollLeft => Some(SystemEvent::MouseWheel(MouseWheelEvent {
+            MouseEventKind::ScrollLeft => Some(SystemEvent::MouseWheel(MouseWheelEvent { modifier,
                 x,
                 y,
                 direction: MouseWheelDirection::Left,
             })),
-            MouseEventKind::ScrollRight => Some(SystemEvent::MouseWheel(MouseWheelEvent {
+            MouseEventKind::ScrollRight => Some(SystemEvent::MouseWheel(MouseWheelEvent { modifier,
                 x,
                 y,
                 direction: MouseWheelDirection::Right,
@@ -154,7 +156,7 @@ impl Input {
             CrosstermKeyCode::Insert => KeyCode::Insert,
             CrosstermKeyCode::Delete => KeyCode::Delete,
             CrosstermKeyCode::Backspace => KeyCode::Backspace,
-            CrosstermKeyCode::Tab => KeyCode::Tab,
+            CrosstermKeyCode::Tab | CrosstermKeyCode::BackTab => KeyCode::Tab,
             CrosstermKeyCode::Left => KeyCode::Left,
             CrosstermKeyCode::Up => KeyCode::Up,
             CrosstermKeyCode::Down => KeyCode::Down,
@@ -269,5 +271,41 @@ mod double_click_tests {
         input.handle_mouse_event_at(mouse(MouseEventKind::Drag(CrosstermMouseButton::Left), 9, 9), now + Duration::from_millis(10));
         input.handle_mouse_event_at(mouse(MouseEventKind::Up(CrosstermMouseButton::Left), 8, 9), now + Duration::from_millis(20));
         assert!(matches!(input.handle_mouse_event_at(mouse(MouseEventKind::Down(CrosstermMouseButton::Left), 8, 9), now + Duration::from_millis(100)), Some(SystemEvent::MouseButtonDown(_))));
+    }
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+    use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn first_modified_special_key_is_not_replaced_by_modifier_change() {
+        let mut input = Input::new();
+        let result = input.handle_key_event(KeyEvent::new(CrosstermKeyCode::Left, KeyModifiers::CONTROL));
+        match result {
+            Some(SystemEvent::KeyPressed(event)) => assert_eq!(event.key, Key::new(KeyCode::Left, KeyModifier::Ctrl)),
+            other => panic!("expected modified key press, received {other:?}"),
+        }
+    }
+
+    #[test]
+    fn back_tab_preserves_shift_navigation() {
+        let mut input = Input::new();
+        let result = input.handle_key_event(KeyEvent::new(CrosstermKeyCode::BackTab, KeyModifiers::NONE));
+        match result {
+            Some(SystemEvent::KeyPressed(event)) => assert_eq!(event.key, Key::new(KeyCode::Tab, KeyModifier::Shift)),
+            other => panic!("expected Shift+Tab, received {other:?}"),
+        }
+    }
+
+    #[test]
+    fn repeat_delivers_actual_unicode_and_release_is_ignored() {
+        let mut input = Input::new();
+        let mut key = KeyEvent::new(CrosstermKeyCode::Char('ก'), KeyModifiers::NONE);
+        key.kind = KeyEventKind::Repeat;
+        assert!(matches!(input.handle_key_event(key), Some(SystemEvent::KeyPressed(KeyPressedEvent { character: 'ก', .. }))));
+        key.kind = KeyEventKind::Release;
+        assert_eq!(input.handle_key_event(key), None);
     }
 }

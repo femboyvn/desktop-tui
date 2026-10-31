@@ -54,14 +54,14 @@ impl MouseWheelCommand {
     }
     pub(super) fn generate_event(&self, mouse_pos: Point, sys_events: &mut VecDeque<SystemEvent>) {
         if (mouse_pos.x != self.x) || (mouse_pos.y != self.y) {
-            sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent {
+            sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent { modifier: None,
                 x: self.x,
                 y: self.y,
                 button: MouseButton::None,
             }));
         }
         for _ in 0..self.times {
-            sys_events.push_back(SystemEvent::MouseWheel(MouseWheelEvent {
+            sys_events.push_back(SystemEvent::MouseWheel(MouseWheelEvent { modifier: None,
                 x: self.x,
                 y: self.y,
                 direction: self.direction,

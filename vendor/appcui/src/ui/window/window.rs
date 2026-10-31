@@ -1166,6 +1166,9 @@ impl OnKeyPressed for Window {
 
 impl OnMouseEvent for Window {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         match event {
             MouseEvent::Enter => EventProcessStatus::Ignored,
             MouseEvent::Leave => self.on_mouse_leave(),
@@ -1174,6 +1177,7 @@ impl OnMouseEvent for Window {
             MouseEvent::Released(_) => self.on_mouse_release(),
             MouseEvent::DoubleClick(_) => EventProcessStatus::Ignored,
             MouseEvent::Drag(event) => self.on_mouse_drag(event.x, event.y),
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(_) => EventProcessStatus::Ignored,
         }
     }

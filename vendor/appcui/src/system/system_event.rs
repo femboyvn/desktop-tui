@@ -6,6 +6,7 @@ use crate::{
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub(crate) struct MouseButtonDownEvent {
+    pub(crate) modifier: Option<KeyModifier>,
     pub(crate) x: i32,
     pub(crate) y: i32,
     pub(crate) button: MouseButton,
@@ -13,6 +14,7 @@ pub(crate) struct MouseButtonDownEvent {
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub(crate) struct MouseButtonUpEvent {
+    pub(crate) modifier: Option<KeyModifier>,
     pub(crate) x: i32,
     pub(crate) y: i32,
     pub(crate) button: MouseButton,
@@ -20,6 +22,7 @@ pub(crate) struct MouseButtonUpEvent {
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub(crate) struct MouseDoubleClickEvent {
+    pub(crate) modifier: Option<KeyModifier>,
     pub(crate) x: i32,
     pub(crate) y: i32,
     pub(crate) button: MouseButton,
@@ -27,6 +30,7 @@ pub(crate) struct MouseDoubleClickEvent {
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub(crate) struct MouseMoveEvent {
+    pub(crate) modifier: Option<KeyModifier>,
     pub(crate) x: i32,
     pub(crate) y: i32,
     pub(crate) button: MouseButton,
@@ -34,6 +38,7 @@ pub(crate) struct MouseMoveEvent {
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 pub(crate) struct MouseWheelEvent {
+    pub(crate) modifier: Option<KeyModifier>,
     pub(crate) x: i32,
     pub(crate) y: i32,
     pub(crate) direction: MouseWheelDirection,
@@ -85,10 +90,11 @@ pub(crate) struct TimerPausedEvent {
     pub(crate) tick: TimerTick,
 }
 
-#[derive(Copy, Clone, PartialEq, Debug)]
+#[derive(Clone, PartialEq, Debug)]
 pub(crate) enum SystemEvent {
     AppClose,
     KeyPressed(KeyPressedEvent),
+    Paste(String),
     KeyModifierChanged(KeyModifierChangedEvent),
     Resize(Size),
     MouseButtonDown(MouseButtonDownEvent),

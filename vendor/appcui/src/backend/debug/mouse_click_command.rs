@@ -41,18 +41,18 @@ impl MouseClickCommand {
     }
     pub(super) fn generate_event(&self, mouse_pos: Point, sys_events: &mut VecDeque<SystemEvent>) {
         if (mouse_pos.x != self.x) || (mouse_pos.y != self.y) {
-            sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent {
+            sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent { modifier: None,
                 x: self.x,
                 y: self.y,
                 button: MouseButton::None,
             }));
         }
-        sys_events.push_back(SystemEvent::MouseButtonDown(MouseButtonDownEvent {
+        sys_events.push_back(SystemEvent::MouseButtonDown(MouseButtonDownEvent { modifier: None,
             x: self.x,
             y: self.y,
             button: self.button,
         }));
-        sys_events.push_back(SystemEvent::MouseButtonUp(MouseButtonUpEvent {
+        sys_events.push_back(SystemEvent::MouseButtonUp(MouseButtonUpEvent { modifier: None,
             x: self.x,
             y: self.y,
             button: MouseButton::None,

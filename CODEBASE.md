@@ -41,6 +41,7 @@ There is no `rust-toolchain.toml` or declared `rust-version`; an exact minimum
 supported Rust version has not been established. `Cargo.lock` is tracked and
 should be used for reproducible dependency selection. A first build needs access
 to the package registry unless dependencies are cached.
+The Carboxyl integration and pinned terminal core were checked with Rust 1.97.1.
 
 The selected UI backend is CrossTerm, with true-color support enabled on AppCUI.
 The `virtual-terminal` dependency uses a Unix PTY; use a Unix-like environment for
@@ -89,8 +90,9 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/config/shortcuts.rs](src/config/shortcuts.rs) | Serde types generated through `nestify::nest!`; `parse_shortcut_dir` loads, deduplicates, and sorts shortcuts. |
 | [src/ui/desktop/view.rs](src/ui/desktop/view.rs) | `MyDesktop`, app-bar menus, shortcut-to-window handles, launch/show/hide/close commands, arrangement, preferences/locking integration, and panel updates. |
 | [src/ui/terminal/window.rs](src/ui/terminal/window.rs) | `TuiWindow`, child command/channels, canvas updates, resize synchronization, shutdown, file/folder selection. |
-| [src/ui/terminal/keyboard.rs](src/ui/terminal/keyboard.rs) | `CustomKeyboardControl` and its `OnKeyPressed` implementation; `to_escape_sequence_vec` and helpers translate AppCUI keys into terminal bytes. |
-| [src/runtime/terminal.rs](src/runtime/terminal.rs) | Stateful `TerminalParser`; text/control characters, supported ANSI commands, cursor state, styles, and color conversion into an AppCUI `Surface`. |
+| [src/ui/terminal/keyboard.rs](src/ui/terminal/keyboard.rs) | `CustomKeyboardControl`; UTF-8/application-cursor keys, paste, mouse translation, input queue errors, and focused child cursor painting. |
+| [src/runtime/terminal.rs](src/runtime/terminal.rs) | `TerminalParser` facade over pinned vendored WezTerm core; incremental byte feeds, grapheme projection, modes/cursor, mouse/paste encoding, bounded query replies, and palette resolution. |
+| [src/ui/terminal/input_queue.rs](src/ui/terminal/input_queue.rs) | Ordered nonblocking 256 KiB pending input; adjacent motion/resize coalescing, small PTY writes, and explicit exhaustion errors. |
 | [src/config/preferences.rs](src/config/preferences.rs), [src/config/preferences/](src/config/preferences/) | Settings models/defaults, atomic storage, palette presets, palette drafts, and password-editing drafts. |
 | [src/config/preferences/ascii_background.rs](src/config/preferences/ascii_background.rs), [src/runtime/ascii_background.rs](src/runtime/ascii_background.rs) | Validated ASCII background text and bounded regular-file loading for Preference > Background. |
 | [src/ui/desktop/](src/ui/desktop/) | Desktop status panel, offline Help, and system-action confirmation alongside the main view. |
@@ -99,12 +101,14 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/ui/theme.rs](src/ui/theme.rs) | AppCUI theme construction. |
 | [src/runtime/locking.rs](src/runtime/locking.rs) | Password credential creation, verification, and bounded serialization. |
 | [src/platform/linux/](src/platform/linux/) | Linux status readings, resource sampling, and system actions. |
+| [src/platform/bundled.rs](src/platform/bundled.rs) | Resolve a bare `carboxyl` command to an executable sibling `libexec/carboxyl`, preserving explicit command paths and opaque OS path bytes. |
+| [scripts/package-linux.py](scripts/package-linux.py), [packaging/](packaging/) | Build the Linux x86-64 archive with pinned checksum-verified Carboxyl, notices, provenance and sample shortcuts. |
 | [src/test_support.rs](src/test_support.rs) | Test-only temporary directories and the shared UI lock. |
 | [src/utils.rs](src/utils.rs) | Unregistered helper file, outside the module tree. |
-| [shortcuts/](shortcuts/) | Example TOML launchers; executable names are external tools, not bundled binaries. |
+| [shortcuts/](shortcuts/) | Example TOML launchers; the Linux package includes Carboxyl, while other external commands require installation. |
 | [backgrounds/](backgrounds/) | Plain ASCII artwork examples for desktop backgrounds. |
 | [Cargo.toml](Cargo.toml), [Cargo.lock](Cargo.lock) | Package/dependency declarations and tracked dependency resolution. |
-| [vendor/](vendor/README.md) | Local AppCUI 0.4.6 dependency with a CrossTerm style/color rendering fix and ANSI output regression tests. |
+| [vendor/](vendor/README.md) | Local AppCUI 0.4.6 Unicode/input/rendering changes and pinned `tattoy-wezterm-term` 0.1.0-fork.5 core with licenses/provenance. |
 | [.cargo/config.toml](.cargo/config.toml) | Development/release profiles; release uses `opt-level = "z"`, LTO, one codegen unit, and symbol stripping. |
 | [rustfmt.toml](rustfmt.toml) | `disable_all_formatting = true`; preserve manual source style. |
 | [.agents/skills/](.agents/skills/) | Repository-local brainstorming, testing, and OS integration workflows; see `AGENTS.md` for selection and invocation. |
@@ -135,20 +139,30 @@ modules and expose shared types and entry points through crate-scoped re-exports
 4. `MyDesktop::create_window` passes the selected command, args, and window/terminal
    options to `TuiWindow::new`. Placeholder dialogs resolve `<FILE_PATH>` and
    `<FOLDER_PATH>` in both the executable and individual arguments before launch,
-   preserving OS path bytes. Selected editor document paths are appended as opaque
+   preserving OS path bytes. A bare `carboxyl` then prefers the executable-relative
+   `libexec/carboxyl` companion; explicit executable paths are preserved and a
+   missing companion keeps PATH lookup. Selected editor document paths are appended as opaque
    arguments after that resolution.
 5. `TuiWindow::new` configures a `virtual_terminal::Command`, creates a canvas and
    keyboard control, starts a 25 ms UI timer, and starts a managed runner on Tokio. Its supervisor observes PID messages
    independently of UI polling and forwards output through a bounded channel.
    Program and arguments are passed separately; the repository does not implicitly
    invoke a shell. A shell is used only when the shortcut explicitly names one.
-6. Keyboard events on the focused control become `Input::Data` messages. Ctrl+C
+6. The terminal control and window share `Rc<RefCell<TerminalParser>>` on the UI thread. Focused UTF-8 keys, mode-aware paste, mouse events and query replies enter the ordered nonblocking input queue. Ctrl+C
    is handled specially: it requests child termination and sets `should_exit`.
-7. The window timer uses `try_recv` to consume one output message per update.
-   PTY output arrives as `Output::Stdout`, including merged stdout/stderr. The
-   parser updates the canvas surface. The timer synchronizes size changes to the
-   child, canvas, and parser even while output is quiet, retrying a queued resize
-   when the input channel is full. Errors and child termination close the window.
+7. Each 25 ms window tick drains at most 64 output messages or 256 KiB, preserving
+   a partial oversized message, then projects once to the canvas. PTY stdout and
+   stderr are merged. Resize synchronizes PTY, emulator, canvas, input bounds and
+   cursor even while output is quiet. Adjacent queued motion and resize updates
+   coalesce; text and button transitions retain order. Pending input is capped at
+   256 KiB; small writes avoid filling the PTY dependency's message buffer with
+   large pastes. Exhaustion reports an error and closes the child through normal
+   cleanup. Query replies have a separate 64 KiB buffer with the same error path.
+   The child sees `TERM=xterm-256color` and `COLORTERM=truecolor`; image protocols
+   are disabled and omitted from capability replies.
+   Input closure waits for the runner's final error/exit and remaining output;
+   a broken writer with a live child gets a nonblocking one-second grace before
+   error cleanup. Only the timer's observed result marks a terminal window closed.
 8. Titlebar closure, Ctrl+C, menu Close, and Desktop Exit share idempotent
    cleanup. A supervisor uses bmart (also used by virtual-terminal) to stop the
    child process tree asynchronously and retains the runner until child wait
@@ -169,7 +183,7 @@ The complete user example lives in [README.md](README.md). Source definitions in
 - Optional top-level `category` defaults to User when absent or blank. System,
   Utility, User, and Games precede alphabetically ordered additional categories.
   Native File Browser/Image Viewer/PDF Reader/Music Player/ASCII Paint and game entries remain separate from custom
-  shortcuts; names matching Terminal, System Performance, or Text editor override
+  shortcuts; names matching Terminal, System Performance, Text editor, or Web Browser override
   external starters.
 - The `taskbar`, `window`, and `terminal` tables are required. Taskbar position is
   optional; `additional_commands` defaults to empty. Each additional command has
@@ -201,15 +215,20 @@ These describe the current implementation, not promises to preserve defects:
   handles. Closed windows can
   leave stale handles; callers check whether a handle still resolves. Keep these
   relationships intact when changing launch or close behavior.
-- Window geometry mixes signed padding, unsigned sizes, and narrower canvas size
-  conversions. Saturating subtraction alone does not validate padding or guarantee
-  all padding and cast bounds. Inner dimensions are clamped to at least one cell;
-  resize synchronization runs on the window timer.
-- The terminal emulator is partial: it decodes each chunk with lossy UTF-8 and
-  has no pending buffer for split UTF-8/ANSI sequences. It clamps at the bottom
-  instead of implementing full terminal scrollback. SGR reset also resets cursor
-  state. Keyboard fallback casts a character to one byte. Test desired behavior
-  explicitly when extending ANSI or Unicode handling.
+- Terminal geometry clamps signed padding to the available client area and inner
+  dimensions to 1..=10,000 before canvas/PTY casts. The window timer applies the
+  same size and origin to the emulator, canvas and input control, and queues the
+  ordered PTY resize while output is quiet or backpressured.
+- The pinned terminal core supports incremental UTF-8/escape parsing, alternate
+  screens, scrolling, wrapping, cursor state, erase operations, and modes. The
+  local grapheme correction joins clusters split across feeds without delaying
+  display. AppCUI keeps `Character: Copy` and sparse Surface metadata for full
+  graphemes and continuation cells. Composition clips whole glyphs; CrossTerm
+  prints each grapheme once and includes metadata in its repaint cache.
+  Metadata-free surfaces retain SRF version 1; Unicode metadata uses version 2.
+  Outer terminal fonts/shaping determine appearance. No image protocol passthrough
+  or browser navigation layer is provided. Surface/emulator/PTY dimensions share
+  the existing 10,000-cell-per-axis limit.
 - Several error paths currently use `unwrap`, `expect`, or `.ok()`. Their presence
   is not a rule to copy into new fallible code. See the coding conventions.
 

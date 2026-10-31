@@ -25,6 +25,7 @@ Features:
 - [x] Change tilling options
 - [x] Can let the user select a file or a folder to use its path as a command argument
 - [x] Categorized Application menu with starter launchers
+- [x] Managed Carboxyl browser launcher and grapheme-aware Unicode terminals
 - [x] Native File Browser, Image Viewer, PDF Reader, Music Player, and ASCII Paint
 - [x] Built-in Snake, 2048, and Minesweeper
 - [x] Clock
@@ -72,7 +73,7 @@ The binary uses technical layers, with functional groups inside each layer:
 - `src/config/`: preferences models, storage, palette presets and editing drafts, plus shortcut definitions and discovery.
 - `src/runtime/`: terminal emulation and password credentials.
 - `src/platform/linux/`: status readings, resource usage, and system actions.
-- `vendor/appcui/`: local AppCUI dependency with a terminal rendering fix; see [patch notes](vendor/README.md).
+- `vendor/appcui/`: local AppCUI dependency with Unicode rendering and input support; see [patch notes](vendor/README.md).
 
 Groups use a named entry file alongside their child folder (for example, `ui/desktop.rs` and `ui/desktop/`). Entry files declare private implementation modules and expose shared types and entry points within the crate. `main.rs`, `args.rs`, and test-only `test_support.rs` stay at the source root; `utils.rs` remains outside the module tree.
 
@@ -142,7 +143,7 @@ visible windows when space is limited; selecting one opens its Focus/Hide/Close
 actions. The status panel remains responsive.
 External windows with additional commands expose them through **App commands...**.
 
-Eleven starters are available even with an empty shortcut directory:
+Twelve starters are available even with an empty shortcut directory:
 
 | Category | Application | Executable |
 | --- | --- | --- |
@@ -152,6 +153,7 @@ Eleven starters are available even with an empty shortcut directory:
 | Utility | Image Viewer | Native |
 | Utility | PDF Reader | Native (Poppler rendering) |
 | Utility | Text editor | `nano` |
+| Utility | Web Browser | `carboxyl` 0.2.0 (bundled in the Linux package) |
 | Utility | Music Player | Native (compiled audio engine) |
 | Utility | ASCII Paint | Native |
 | Games | Snake | Native |
@@ -162,11 +164,33 @@ The System Performance starter uses bottom’s `default-light` theme for readabl
 text on the default light terminal background. Override its shortcut to choose
 a different theme or arguments.
 
-External tools must be installed separately and available on PATH. A shortcut
-named Terminal, System Performance, or Text editor replaces that external
+Other external tools must be installed separately and available on PATH. A shortcut
+named Terminal, System Performance, Text editor, or Web Browser replaces that external
 starter, including its command, options, and category. A missing category
 places a shortcut in User. Native apps and games keep their own identities even
 when custom shortcuts use the same names.
+
+**Application > Utility > Web Browser** opens
+[Carboxyl 0.2.0](https://github.com/carboxyl-rs/carboxyl/releases/tag/v0.2.0)
+on its blank page, using native terminal text and quadrant graphics at 20 FPS.
+The portable Linux x86-64 package includes the browser beside Desktop-TUI;
+keep `libexec/carboxyl` in the extracted directory. The upstream binary requires
+glibc 2.43 or newer. Source/Cargo installations can use Carboxyl from PATH.
+See [browser setup and packaging](HOW_TO_RUN.md#use-the-bundled-carboxyl-browser) and the
+[sample shortcut](shortcuts/carboxyl.toml). Selecting the launcher restores its
+existing window. Hide, taskbar actions, tiling, Terminal Lock, close/reopen, and
+child cleanup use the same managed terminal path as other external apps.
+Carboxyl owns navigation and website support; Desktop-TUI adds no browser tabs
+or profiles. Click Carboxyl's address field on its top row, then type or paste a URL.
+
+Terminal windows preserve complete Unicode graphemes, including decomposed
+Vietnamese, CJK, flags, skin tones, and joined emoji, with width-aware placement.
+Fonts and shaping depend on the outer terminal. UTF-8 keyboard input, modified
+navigation, child-requested mouse reporting, and paste are forwarded; bracketed
+paste follows the child's mode. Ctrl+C retains Desktop-TUI's close behavior.
+The focused, visible terminal alone displays its child cursor. Default and ANSI
+colors follow Terminal preferences; explicit RGB colors keep their values.
+Graphics protocols are not passed through: Carboxyl uses quadrant characters.
 
 **Games** are bundled under **Application > Games** and need no extra installation.
 Each game opens its own movable, resizable window. Press **R** for a new round.

@@ -59,7 +59,7 @@ mod tests {
         let mut shortcuts = catalog::with_starters(vec![]);
         shortcuts[0].name = "Image Viewer".into();
         let image = choices(Path::new("/tmp/文.PNG"),&shortcuts);
-        assert_eq!(image.len(),4);
+        assert_eq!(image.len(),shortcuts.len()+1);
         assert_eq!(image[0].id,AppId::ImageViewer);
         assert_eq!(image[1].id,AppId::External(0));
         assert_ne!(image[0].label,image[1].label);
@@ -76,7 +76,7 @@ mod tests {
         let prototype = shortcuts[0].clone();
         shortcuts.extend((0..60).map(|i| { let mut s = prototype.clone(); s.name = format!("App {i}"); s }));
         let app = App::debug(80,24,"Key.Pressed(End)\nKey.Pressed(Enter)").build().unwrap();
-        assert_eq!(OpenWithDialog::new(Path::new("file.txt"),&shortcuts).show(),Some(AppId::External(62)));
+        assert_eq!(OpenWithDialog::new(Path::new("file.txt"),&shortcuts).show(),Some(AppId::External(shortcuts.len()-1)));
         app.run();
         let app = App::debug(80,24,"Key.Pressed(Escape)").build().unwrap();
         assert_eq!(OpenWithDialog::new(Path::new("file.txt"),&shortcuts).show(),None);

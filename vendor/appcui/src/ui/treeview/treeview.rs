@@ -1168,6 +1168,7 @@ where
                 }
                 true
             }
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => false,
             MouseEvent::Wheel(dir) => {
                 match dir {
                     MouseWheelDirection::Up => self.move_scroll_to(self.top_view.saturating_sub(1)),
@@ -1234,6 +1235,9 @@ where
     T: ListItem + 'static,
 {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         if self.comp.process_mouse_event(event) {
             self.update_scroll_pos_from_scrollbars();
             self.hover_status = HoverStatus::None;

@@ -546,6 +546,9 @@ impl OnKeyPressed for CharPicker {
 }
 impl OnMouseEvent for CharPicker {
     fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
+        // Metadata events are opt-in; native controls continue through the
+        // runtime's legacy event fallback before mutating component state.
+        if matches!(event, MouseEvent::OverAt(_) | MouseEvent::WheelAt(_)) { return EventProcessStatus::Ignored; }
         match event {
             MouseEvent::Enter => EventProcessStatus::Processed,
 
@@ -605,6 +608,7 @@ impl OnMouseEvent for CharPicker {
                     EventProcessStatus::Ignored
                 }
             }
+            MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => EventProcessStatus::Ignored,
             MouseEvent::Wheel(dir) => {
                 match dir {
                     MouseWheelDirection::Left => self.goto_set(self.nav.set_index.saturating_sub(1)),

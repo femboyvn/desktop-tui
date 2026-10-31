@@ -147,7 +147,7 @@ fn check_command_bar_hover() {
     let mut c = prepare_command_bar(s.size());
     s.clear(Character::new(SpecialChar::Block50, Color::Black, Color::DarkBlue, CharFlags::None));
     for x in 0..9 {
-        c.on_mouse_move(&MouseMoveEvent {
+        c.on_mouse_move(&MouseMoveEvent { modifier: None,
             x,
             y: 4,
             button: MouseButton::None,
@@ -156,7 +156,7 @@ fn check_command_bar_hover() {
         //s.print();
         assert_eq!(s.compute_hash(), 0x6FFD6A9E00B06190);
     }
-    c.on_mouse_move(&MouseMoveEvent {
+    c.on_mouse_move(&MouseMoveEvent { modifier: None,
         x: 9,
         y: 4,
         button: MouseButton::None,
@@ -164,7 +164,7 @@ fn check_command_bar_hover() {
     c.paint(&mut s, &Theme::new(Themes::Default));
     //s.print();
     assert_eq!(s.compute_hash(), 0x8FE003D26FC257B8);
-    c.on_mouse_move(&MouseMoveEvent {
+    c.on_mouse_move(&MouseMoveEvent { modifier: None,
         x: 10,
         y: 4,
         button: MouseButton::None,
@@ -172,7 +172,7 @@ fn check_command_bar_hover() {
     c.paint(&mut s, &Theme::new(Themes::Default));
     //s.print();
     assert_eq!(s.compute_hash(), 0x24738CE8FFD30F80);
-    c.on_mouse_move(&MouseMoveEvent {
+    c.on_mouse_move(&MouseMoveEvent { modifier: None,
         x: 10,
         y: 3,
         button: MouseButton::None,
@@ -188,7 +188,7 @@ fn check_command_bar_click() {
     let mut c = prepare_command_bar(s.size());
     s.clear(Character::new(SpecialChar::Block50, Color::Black, Color::DarkBlue, CharFlags::None));
     c.set_key_modifier(KeyModifier::Alt);
-    c.on_mouse_move(&MouseMoveEvent {
+    c.on_mouse_move(&MouseMoveEvent { modifier: None,
         x: 9,
         y: 4,
         button: MouseButton::None,
@@ -196,7 +196,7 @@ fn check_command_bar_click() {
     c.paint(&mut s, &Theme::new(Themes::Default));
     //s.print();
     assert_eq!(s.compute_hash(), 0xF768DE602AA7C28A);
-    c.on_mouse_down(&MouseButtonDownEvent {
+    c.on_mouse_down(&MouseButtonDownEvent { modifier: None,
         x: 9,
         y: 4,
         button: MouseButton::Left,
@@ -257,7 +257,7 @@ fn check_mouse_keymodifier_mouse() {
                 crate::prelude::MouseEvent::Drag(data) => {
                     self.txt = format!("Pressed: x:{},y:{}\nbutton:{:?},modif:{:?}", data.x, data.y, data.button, data.modifier);
                 }
-                crate::prelude::MouseEvent::Wheel(_) => {}
+                crate::prelude::MouseEvent::Wheel(_) | crate::prelude::MouseEvent::WheelAt(_) | crate::prelude::MouseEvent::OverAt(_) => return EventProcessStatus::Ignored,
             }
             EventProcessStatus::Processed
         }

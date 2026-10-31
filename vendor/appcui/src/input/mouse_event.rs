@@ -21,6 +21,15 @@ pub struct MouseEventData {
     pub modifier: KeyModifier
 }
 
+/// Wheel input with control-relative coordinates and event-local modifiers.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct MouseWheelEventData {
+    pub x: i32,
+    pub y: i32,
+    pub direction: MouseWheelDirection,
+    pub modifier: KeyModifier,
+}
+
 /// Represents the type of mouse event.
 /// 
 /// This enum defines the possible types of mouse events that can occur.
@@ -39,11 +48,15 @@ pub enum MouseEvent {
     Enter,
     Leave,
     Over(Point),
+    /// Offered before `Over`; returning `Ignored` invokes the legacy event.
+    OverAt(MouseEventData),
     Pressed(MouseEventData),
     Released(MouseEventData),
     DoubleClick(MouseEventData),
     Drag(MouseEventData),
-    Wheel(MouseWheelDirection)
+    Wheel(MouseWheelDirection),
+    /// Offered before `Wheel`; returning `Ignored` invokes the legacy event.
+    WheelAt(MouseWheelEventData)
 }
 
 

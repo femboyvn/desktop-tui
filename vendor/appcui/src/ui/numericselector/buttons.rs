@@ -131,7 +131,7 @@ impl Buttons {
             MouseEvent::Pressed(data) => self.process_mouse_event(data.x, data.y, ButtonState::Pressed, true),
             MouseEvent::Released(data) => self.process_mouse_event(data.x, data.y, ButtonState::Hovered, false),
             MouseEvent::DoubleClick(data) => self.process_mouse_event(data.x, data.y, ButtonState::Hovered, true),
-            MouseEvent::Drag(_) | MouseEvent::Wheel(_) => ButtonResponse {
+            MouseEvent::Drag(_) | MouseEvent::Wheel(_) | MouseEvent::OverAt(_) | MouseEvent::WheelAt(_) => ButtonResponse {
                 repaint: false,
                 forward_to_control: true,
                 click_on_add: false,

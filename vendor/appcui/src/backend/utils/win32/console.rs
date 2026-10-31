@@ -266,23 +266,23 @@ impl Console {
         match evnt.event_flags {
             0 => {
                 if evnt.button_state != 0 {
-                    Some(SystemEvent::MouseButtonDown(MouseButtonDownEvent { x, y, button }))
+                    Some(SystemEvent::MouseButtonDown(MouseButtonDownEvent { modifier: None, x, y, button }))
                 } else {
-                    Some(SystemEvent::MouseButtonUp(MouseButtonUpEvent { x, y, button }))
+                    Some(SystemEvent::MouseButtonUp(MouseButtonUpEvent { modifier: None, x, y, button }))
                 }
             }
-            constants::DOUBLE_CLICK => Some(SystemEvent::MouseDoubleClick(MouseDoubleClickEvent { x, y, button })),
-            constants::MOUSE_MOVED => Some(SystemEvent::MouseMove(MouseMoveEvent { x, y, button })),
+            constants::DOUBLE_CLICK => Some(SystemEvent::MouseDoubleClick(MouseDoubleClickEvent { modifier: None, x, y, button })),
+            constants::MOUSE_MOVED => Some(SystemEvent::MouseMove(MouseMoveEvent { modifier: None, x, y, button })),
             constants::MOUSE_HWHEELED => {
                 //println!("HWHEEL {}", self.button_state);
                 if evnt.button_state >= 0x80000000 {
-                    Some(SystemEvent::MouseWheel(MouseWheelEvent {
+                    Some(SystemEvent::MouseWheel(MouseWheelEvent { modifier: None,
                         x,
                         y,
                         direction: MouseWheelDirection::Left,
                     }))
                 } else {
-                    Some(SystemEvent::MouseWheel(MouseWheelEvent {
+                    Some(SystemEvent::MouseWheel(MouseWheelEvent { modifier: None,
                         x,
                         y,
                         direction: MouseWheelDirection::Right,
@@ -291,13 +291,13 @@ impl Console {
             }
             constants::MOUSE_WHEELED => {
                 if evnt.button_state >= 0x80000000 {
-                    Some(SystemEvent::MouseWheel(MouseWheelEvent {
+                    Some(SystemEvent::MouseWheel(MouseWheelEvent { modifier: None,
                         x,
                         y,
                         direction: MouseWheelDirection::Down,
                     }))
                 } else {
-                    Some(SystemEvent::MouseWheel(MouseWheelEvent {
+                    Some(SystemEvent::MouseWheel(MouseWheelEvent { modifier: None,
                         x,
                         y,
                         direction: MouseWheelDirection::Up,

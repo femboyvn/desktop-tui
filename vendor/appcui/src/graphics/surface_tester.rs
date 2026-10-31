@@ -74,7 +74,7 @@ impl SurfaceTester {
                 hash = hash.wrapping_mul(0x00000100000001B3u64);
             }
         }
-        hash
+        self.hash_graphemes(hash)
     }
 }
 impl Deref for SurfaceTester {

@@ -14,7 +14,7 @@ System, Utility, User, and Games are always present; extra categories
 follow alphabetically. Empty categories show No apps yet.
 
 File Browser, Terminal (sh), System Performance (btm / bottom),
-Image Viewer, PDF Reader, Text editor (nano), native Music Player, ASCII Paint, and the games
+Image Viewer, PDF Reader, Text editor (nano), Web Browser (Carboxyl), native Music Player, ASCII Paint, and the games
 Snake, 2048, and Minesweeper are
 available with an empty shortcut folder. External tools must be installed separately.
 System Performance uses bottom’s default-light theme to match the
@@ -366,6 +366,18 @@ Symlinked settings and unsafe password-storage permissions are
 rejected. Restore file permissions with chmod 600 and folder
 permissions with chmod 700 if necessary. Passwords cannot be
 recovered. This setting does not change your Linux password.
+
+## Web Browser
+
+Application > Utility > Web Browser launches Carboxyl 0.2.0
+on its blank page with native text and quadrant graphics at 20 FPS. Click its top-row address field,
+then type or paste a URL. A same-name shortcut overrides the launcher.
+Hide/restore, tiling, locking, closing and child cleanup follow other terminal
+windows. Ctrl+C closes the child. The Linux package includes libexec/carboxyl;
+keep it beside the desktop executable's directory. That binary needs glibc 2.43
+or newer. Source/Cargo installs can use a separate browser from the pinned Git tag or release;
+the crates.io package with the same name is a different project. See HOW_TO_RUN.md.
+Unicode graphemes are preserved; fonts and shaping depend on the outer terminal.
 
 ## Terminal Lock
 

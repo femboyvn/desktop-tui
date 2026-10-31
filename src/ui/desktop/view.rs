@@ -1112,14 +1112,15 @@ mod tests {
         shortcuts[0].args = vec!["-c".into(),"printf '%s' \"$PWD\" > \"$1\"; printf T; read answer".into(),"terminal".into(),terminal_capture.to_string_lossy().into_owned()];
         let mut chosen = shortcuts[0].clone(); chosen.name = "Image Viewer".into();
         chosen.args = vec!["-c".into(),"printf '%s\\0' \"$PWD\" \"$@\" > \"$1\"; printf A; read answer".into(),"chosen".into(),capture.to_string_lossy().into_owned(),"<FILE_PATH>".into(),"<FOLDER_PATH>".into()];
+        let chosen_index = shortcuts.len();
         shortcuts.push(chosen);
         let mut desktop = MyDesktop::new(shortcuts,Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(NoSystemActions));
         let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
         DesktopEvents::on_start(&mut desktop);
         desktop.launch_application(AppId::External(0)); let original = desktop.app_windows[&0];
         pump_until(desktop.window_mut(original).unwrap(),'T');
-        desktop.open_with_application(path.clone(),AppId::External(3)).unwrap();
-        desktop.open_with_application(path.clone(),AppId::External(3)).unwrap();
+        desktop.open_with_application(path.clone(),AppId::External(chosen_index)).unwrap();
+        desktop.open_with_application(path.clone(),AppId::External(chosen_index)).unwrap();
         let documents = desktop.document_windows.clone();
         assert_eq!(documents.len(),2);
         for handle in &documents { pump_until(desktop.window_mut(*handle).unwrap(),'A'); }
@@ -1474,7 +1475,7 @@ mod tests {
         let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
         let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
         DesktopEvents::on_start(&mut desktop);
-        assert_eq!(desktop.application_commands.len(), 11);
+        assert_eq!(desktop.application_commands.len(), 12);
         let browser_command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::FileBrowser).unwrap().0;
         MenuEvents::on_command(&mut desktop, Handle::None, browser_command, Commands::LaunchApplication);
         let browser = desktop.browser_window;

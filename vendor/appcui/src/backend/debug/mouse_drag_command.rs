@@ -40,17 +40,17 @@ impl MouseDragCommand {
         })
     }
     pub(super) fn generate_event(&self, sys_events: &mut VecDeque<SystemEvent>) {
-        sys_events.push_back(SystemEvent::MouseButtonDown(MouseButtonDownEvent {
+        sys_events.push_back(SystemEvent::MouseButtonDown(MouseButtonDownEvent { modifier: None,
             x: self.x1,
             y: self.y1,
             button: MouseButton::Left,
         }));
-        sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent {
+        sys_events.push_back(SystemEvent::MouseMove(MouseMoveEvent { modifier: None,
             x: self.x2,
             y: self.y2,
             button: MouseButton::Left,
         }));
-        sys_events.push_back(SystemEvent::MouseButtonUp(MouseButtonUpEvent {
+        sys_events.push_back(SystemEvent::MouseButtonUp(MouseButtonUpEvent { modifier: None,
             x: self.x2,
             y: self.y2,
             button: MouseButton::None,

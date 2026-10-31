@@ -27,14 +27,14 @@ impl SystemEventReader for Input {
                 if let AnsiKeyCode::MouseButton(ev) = ansi_key.code() {
                     match ev.button {
                         MouseButton::None => {
-                            return Some(SystemEvent::MouseButtonUp(MouseButtonUpEvent {
+                            return Some(SystemEvent::MouseButtonUp(MouseButtonUpEvent { modifier: None,
                                 x: ev.x.into(),
                                 y: ev.y.into(),
                                 button: MouseButton::None,
                             }))
                         }
                         other => {
-                            return Some(SystemEvent::MouseButtonDown(MouseButtonDownEvent {
+                            return Some(SystemEvent::MouseButtonDown(MouseButtonDownEvent { modifier: None,
                                 button: other,
                                 x: ev.x.into(),
                                 y: ev.y.into(),
@@ -43,7 +43,7 @@ impl SystemEventReader for Input {
                     }
                 }
                 if let AnsiKeyCode::MouseMove(ev) = ansi_key.code() {
-                    return Some(SystemEvent::MouseMove(MouseMoveEvent {
+                    return Some(SystemEvent::MouseMove(MouseMoveEvent { modifier: None,
                         x: ev.x.into(),
                         y: ev.y.into(),
                         button: ev.button,

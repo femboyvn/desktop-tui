@@ -4,7 +4,7 @@ pub(crate) mod ascii_paint;
 mod terminal;
 
 pub(crate) use locking::{LockCredential, MAX_PASSWORD_BYTES};
-pub(crate) use terminal::TerminalParser;
+pub(crate) use terminal::{TerminalParser, TerminalMouseKind, TerminalMouseButton, MAX_TERMINAL_DIMENSION};
 pub(crate) mod latest;
 pub(crate) mod images;
 pub(crate) mod files;

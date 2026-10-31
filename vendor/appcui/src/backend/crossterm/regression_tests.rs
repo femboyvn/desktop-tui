@@ -21,7 +21,22 @@ fn renderer(size: Size) -> CrossTerm {
         size,
         use_color_schema: false,
         screen_chars: vec![Character::new(0, Color::Transparent, Color::Transparent, CharFlags::None); (size.width * size.height) as usize],
+        screen_graphemes: std::collections::BTreeMap::new(),
     }
+}
+
+#[test]
+fn terminal_input_modes_capture_paste_and_restore_outer_terminal() {
+    let mut bytes = Vec::new();
+    CrossTerm::write_input_modes(&mut bytes, true).unwrap();
+    let enabled = std::str::from_utf8(&bytes).unwrap();
+    assert!(enabled.contains("\x1b[?2004h"), "outer terminal must delimit actual pastes");
+    assert!(enabled.contains("\x1b[?1006h"));
+    bytes.clear();
+    CrossTerm::write_input_modes(&mut bytes, false).unwrap();
+    let disabled = std::str::from_utf8(&bytes).unwrap();
+    assert!(disabled.contains("\x1b[?2004l"));
+    assert!(disabled.contains("\x1b[?1006l"));
 }
 
 // Interpret SGR resets and true colors before each printed marker. Cursor and
@@ -99,4 +114,79 @@ fn repaint_after_styled_frame_restores_plain_background() {
     surface.write_char(0, 0, Character::new('D', foreground, background, CharFlags::None));
     backend.write_screen(&mut output, &surface);
     assert_eq!(colors_at(&output, 'D'), (Some(foreground), Some(background), false));
+}
+
+fn visible_text(output: &[u8]) -> String {
+    let text = std::str::from_utf8(output).unwrap();
+    let mut remaining = text;
+    let mut printed = String::new();
+    while !remaining.is_empty() {
+        if let Some(csi) = remaining.strip_prefix("\x1b[") {
+            let end = csi.find(|c: char| ('@'..='~').contains(&c)).unwrap();
+            remaining = &csi[end + 1..];
+        } else {
+            let ch = remaining.chars().next().unwrap();
+            printed.push(ch);
+            remaining = &remaining[ch.len_utf8()..];
+        }
+    }
+    printed
+}
+
+#[test]
+fn grapheme_renderer_prints_clusters_once_and_caches_metadata() {
+    let mut backend = renderer(Size::new(6, 1));
+    let mut surface = Surface::new(6, 1);
+    let attr = crate::graphics::CharAttribute::with_color(Color::White, Color::Black);
+    let combining = format!("a{}", "\u{301}".repeat(40));
+    surface.write_grapheme(0, 0, &combining, 1, attr);
+    surface.write_grapheme(1, 0, "界", 2, attr);
+    surface.write_grapheme(3, 0, "👩🏽‍💻", 2, attr);
+    surface.write_char(5, 0, Character::with_char('!'));
+    let mut output = Vec::new();
+    backend.write_screen(&mut output, &surface);
+    assert_eq!(visible_text(&output), format!("{combining}界👩🏽‍💻!"));
+    output.clear();
+    backend.write_screen(&mut output, &surface);
+    assert_eq!(visible_text(&output), "");
+    surface.write_grapheme(0, 0, "a\u{302}", 1, attr);
+    output.clear();
+    backend.write_screen(&mut output, &surface);
+    assert_eq!(visible_text(&output), "a\u{302}");
+}
+
+#[test]
+fn grapheme_renderer_erases_old_continuation_on_narrow_replacement() {
+    let mut backend = renderer(Size::new(4, 1));
+    let mut surface = Surface::new(4, 1);
+    let attr = crate::graphics::CharAttribute::with_color(Color::White, Color::Black);
+    surface.write_grapheme(0, 0, "界", 2, attr);
+    surface.write_char(2, 0, Character::with_char('#'));
+    let mut output = Vec::new();
+    backend.write_screen(&mut output, &surface);
+    surface.write_char(0, 0, Character::with_char('x'));
+    output.clear();
+    backend.write_screen(&mut output, &surface);
+    assert_eq!(visible_text(&output), "x ");
+    assert!(!visible_text(&output).contains('#'));
+    surface.write_grapheme(0, 0, "🙂", 2, attr);
+    output.clear();
+    backend.write_screen(&mut output, &surface);
+    assert_eq!(visible_text(&output), "🙂");
+}
+
+#[test]
+fn grapheme_renderer_recolors_full_glyph_and_handles_multiple_rows() {
+    let mut backend = renderer(Size::new(2, 2));
+    let mut surface = Surface::new(2, 2);
+    let attr = crate::graphics::CharAttribute::with_color(Color::White, Color::Black);
+    surface.write_grapheme(0, 0, "界", 2, attr);
+    surface.write_grapheme(0, 1, "🙂", 2, attr);
+    let mut output = Vec::new();
+    backend.write_screen(&mut output, &surface);
+    assert_eq!(visible_text(&output), "界🙂");
+    surface.write_char(1, 0, Character::with_color(Color::Red, Color::Blue));
+    output.clear();
+    backend.write_screen(&mut output, &surface);
+    assert_eq!(visible_text(&output), "界");
 }

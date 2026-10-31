@@ -69,10 +69,71 @@ an explicit shortcut directory is used. Typical locations are:
 
 No sample shortcuts are copied into the default directory. Platform-specific
 configuration paths do not establish runtime support beyond the Unix PTY
-requirement. An empty directory still provides the eleven starter apps through Application.
+requirement. An empty directory still provides the twelve starter apps through Application.
 External starters (`sh`, `btm`, and `nano`) require separately installed tools.
+Carboxyl is included in the portable Linux package; source/Cargo installations
+can use a separately installed copy.
 Music Player and ASCII Paint are native and compiled into the desktop binary.
 Snake, 2048, and Minesweeper are built in under Application > Games.
+
+## Use the bundled Carboxyl browser
+
+The portable Linux x86-64 archive contains both `desktop-tui` and
+`libexec/carboxyl` 0.2.0. Extract the complete archive, keep that layout, and run
+`./desktop-tui` from the extracted directory. Web Browser finds its companion
+relative to the desktop executable, including when launched from another working
+directory. No separate Carboxyl installation or PATH change is needed.
+
+The upstream browser binary requires **glibc 2.43 or newer**, libstdc++ providing
+`GLIBCXX_3.4.30`, zlib and Fontconfig with their dependencies. The package was
+checked on Ubuntu 26.04 x86-64. It contains the applications, sample shortcuts,
+license files and browser provenance; it does not replace system libraries.
+Older distributions need Carboxyl built from source for their environment.
+
+To build the archive from this checkout (Python 3.11+, Rust and network access):
+
+```sh
+python3 scripts/package-linux.py
+```
+
+The script builds Desktop-TUI with `cargo build --locked --release`, downloads
+and verifies the pinned browser release, and writes the archive and SHA-256
+checksum under `target/dist/`. To reuse a previously downloaded browser archive:
+
+```sh
+python3 scripts/package-linux.py --carboxyl-archive /path/to/carboxyl-v0.2.0-x86_64-linux.tar.gz
+```
+
+The package includes `shortcuts/`; pass its path explicitly to use all samples.
+Their other external programs still require installation. A bare `carboxyl`
+command prefers an executable `libexec/carboxyl` beside Desktop-TUI. An explicit
+command path such as `/opt/carboxyl` or `./carboxyl` is preserved, as are custom
+arguments and same-name shortcut overrides. If no executable companion exists,
+normal PATH lookup remains available.
+
+## Install the Carboxyl browser separately
+
+For source builds or `cargo install --path . --locked`, install the binary from the pinned
+[0.2.0 release](https://github.com/carboxyl-rs/carboxyl/releases/tag/v0.2.0)
+and put it on PATH, or build from its Git tag:
+
+```sh
+cargo install --git https://github.com/carboxyl-rs/carboxyl --tag v0.2.0 --locked carboxyl
+carboxyl --version
+```
+
+Follow the pinned project's [build guidance](https://github.com/carboxyl-rs/carboxyl/tree/v0.2.0#build)
+for Servo's native build requirements. This is a separate browser installation;
+its toolchain and native dependencies need not match Desktop-TUI's.
+The crates.io package called `carboxyl` is a different project: do not use
+`cargo install carboxyl` for this browser.
+
+Launch **Application > Utility > Web Browser**. The built-in command is
+`carboxyl --graphics quadrant --fps 20` with no URL, retaining native text and
+starting on the blank page. Click the address field on Carboxyl's top row to edit it. To change the path,
+arguments, category, or window options, use a same-name Web Browser shortcut;
+[shortcuts/carboxyl.toml](shortcuts/carboxyl.toml) is a complete example.
+A missing executable produces the normal managed launch-error dialog.
 
 ## Try a controlled command
 
@@ -128,7 +189,7 @@ commands in a shortcut's menu use their own executable and argument array.
 | Custom launcher missing | Check Application > User or the configured category. Confirm the folder and TOML files exist; traversal errors can be skipped. Names are deduplicated. |
 | Startup reports a TOML error | Compare the file with the complete example: `name`, `command`, all three tables, and the three window booleans are required. |
 | A command fails to start | Check that its executable is installed and available on `PATH`, or give its path. `--help` does not validate shortcut executables. |
-| Output or resizing looks wrong | Reproduce with a controlled command and record terminal size. The emulator supports only part of ANSI; resize synchronization runs on the window timer, including while output is quiet. |
+| Output or resizing looks wrong | Reproduce with a controlled command and record terminal size. Record the exact UTF-8/escape stream. The vendored emulator handles incremental UTF-8, graphemes, alternate screens and terminal modes; image protocols are disabled. Resize synchronization also runs while output is quiet. |
 | Build cannot fetch dependencies | Restore registry access, or use `--offline` with a populated cache. Record the actual error. |
 
 Use [HOW_TO_TEST.md](HOW_TO_TEST.md) for checks and reporting. Follow
