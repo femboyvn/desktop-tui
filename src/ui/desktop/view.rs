@@ -10,7 +10,7 @@ use crate::ui::locking::{LockSetupDialog, TerminalLockScreen};
 use crate::ui::preferences::PreferencesDialog;
 use crate::ui::terminal::{TuiWindow, LaunchContext, TerminalAction};
 use super::open_with::OpenWithDialog;
-use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow, PdfWindow, PaintWindow};
+use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow, PdfWindow, PaintWindow, KanbanWindow, KanbanAction};
 use crate::ui::build_theme;
 use appcui::prelude::appbar::MenuButton;
 use appcui::prelude::menu::{Command, SingleChoice};
@@ -81,6 +81,11 @@ pub struct MyDesktop {
     music_window: Handle<MusicWindow>,
     pdf_window: Handle<PdfWindow>,
     paint_window: Handle<PaintWindow>,
+    kanban_windows: Vec<Handle<KanbanWindow>>,
+    kanban_files: crate::runtime::kanban::OpenFiles,
+    last_kanban: Option<Handle<KanbanWindow>>,
+    guard_queue: std::collections::VecDeque<WindowTarget>,
+    guard_current: Option<WindowTarget>,
     pending_desktop: Option<DesktopIntent>,
     game_windows: HashMap<GameKind, Handle<GameWindow>>,
     document_windows: Vec<Handle<TuiWindow>>,
@@ -91,7 +96,7 @@ pub struct MyDesktop {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum WindowTarget {
-    Paint(Handle<PaintWindow>), Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Pdf(Handle<PdfWindow>), Game(Handle<GameWindow>), Help(Handle<HelpWindow>),
+    Kanban(Handle<KanbanWindow>), Paint(Handle<PaintWindow>), Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Pdf(Handle<PdfWindow>), Game(Handle<GameWindow>), Help(Handle<HelpWindow>),
 }
 #[derive(Clone, PartialEq)]
 struct WindowInfo { target: WindowTarget, caption: String, visible: bool, shortcut: Option<usize> }
@@ -109,6 +114,7 @@ fn taskbar_caption(title: &str) -> String {
 enum DesktopIntent { Exit, Power(SystemAction) }
 
 struct LockVisibility {
+    kanban: Vec<(Handle<KanbanWindow>, bool)>,
     paint: Option<(Handle<PaintWindow>, bool)>,
     terminals: Vec<(Handle<TuiWindow>, bool)>,
     help: Vec<(Handle<HelpWindow>, bool)>,
@@ -162,6 +168,8 @@ impl MyDesktop {
             music_window: Handle::None,
             pdf_window: Handle::None,
             paint_window: Handle::None, pending_desktop: None,
+            kanban_windows: Vec::new(), kanban_files: Default::default(), last_kanban: None,
+            guard_queue: Default::default(), guard_current: None,
             game_windows: HashMap::new(),
             document_windows: Vec::new(),
             status: StatusMonitor::default(),
@@ -212,6 +220,11 @@ impl MyDesktop {
                 let caption = if title == "Image Viewer" { title.to_owned() } else { format!("Image Viewer: {title}") };
                 (caption, window.is_visible(), None)
             }
+            WindowTarget::Kanban(handle) => {
+                let window = self.windowt(handle)?;
+                if window.is_closing() { return None; }
+                (window.title().to_owned(),window.is_visible(),None)
+            }
             WindowTarget::Paint(handle) => {
                 let window = self.windowt(handle)?;
                 if window.is_closing() { return None; }
@@ -247,6 +260,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
+            WindowTarget::Kanban(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
@@ -261,6 +275,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
+            WindowTarget::Kanban(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); window.set_visible(false); },
             WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); window.set_visible(false); },
             WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); window.set_visible(false); },
@@ -268,11 +283,16 @@ impl MyDesktop {
         }
     }
     fn close_window(&mut self, target: WindowTarget) {
+        if matches!(target,WindowTarget::Paint(_)|WindowTarget::Kanban(_)) {
+            if self.pending_desktop.is_some() { return; }
+            self.focus_window(target);
+        }
         match target {
             WindowTarget::Terminal(handle) => if let Some(window) = self.window_mut(handle) { window.close_command(); },
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
+            WindowTarget::Kanban(handle) => if let Some(window) = self.window_mut(handle) { window.request_close(); },
             WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.request_close(); },
             WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
@@ -391,12 +411,15 @@ impl MyDesktop {
     }
     fn hide_for_terminal_lock(&mut self) -> LockVisibility {
         self.terminal_locked = true;
-        let mut visibility = LockVisibility { paint: None, terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None, pdf: None, games: Vec::new() };
+        let mut visibility = LockVisibility { kanban: Vec::new(), paint: None, terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None, pdf: None, games: Vec::new() };
         for handle in self.terminal_handles() {
             if let Some(window) = self.window_mut(handle) {
                 visibility.terminals.push((handle, window.is_visible()));
                 window.set_visible(false);
             }
+        }
+        for handle in self.kanban_windows.clone() {
+            if let Some(window) = self.window_mut(handle) { visibility.kanban.push((handle,window.is_visible())); window.suspend(); window.set_visible(false); }
         }
         let paint = self.paint_window;
         if let Some(window) = self.window_mut(paint) {
@@ -436,6 +459,7 @@ impl MyDesktop {
         visibility
     }
     fn restore_after_terminal_unlock(&mut self, visibility: LockVisibility) {
+        for (handle,visible) in visibility.kanban { if let Some(window) = self.window_mut(handle) { window.set_visible(visible); } }
         if let Some((handle, visible)) = visibility.paint
             && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         for (handle, visible) in visibility.terminals {
@@ -499,13 +523,27 @@ impl MyDesktop {
         }
     }
 
+    fn set_document_holds(&mut self,held: bool) {
+        let paint = self.paint_window; if let Some(window) = self.window_mut(paint) { window.set_guard_hold(held); }
+        for handle in self.kanban_windows.clone() { if let Some(window) = self.window_mut(handle) { window.set_guard_hold(held); } }
+    }
     fn guard_desktop(&mut self, intent: DesktopIntent) {
         if self.pending_desktop.is_some() { return; }
-        let handle = self.paint_window;
-        if let Some(window) = self.window_mut(handle) && !window.is_closing() {
-            window.request_guard();
-            self.pending_desktop = Some(intent);
-        } else { self.complete_desktop(intent); }
+        self.guard_queue = self.window_order.iter().copied().filter(|target| matches!(target,WindowTarget::Paint(_)|WindowTarget::Kanban(_)) && self.window_info(*target).is_some()).collect();
+        self.pending_desktop = Some(intent); self.set_document_holds(true); self.next_document_guard();
+    }
+    fn next_document_guard(&mut self) {
+        if let Some(target) = self.guard_queue.pop_front() {
+            self.guard_current = Some(target); self.focus_window(target);
+            match target {
+                WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.request_guard(); },
+                WindowTarget::Kanban(handle) => if let Some(window) = self.window_mut(handle) { window.request_guard(); }, _ => {}
+            }
+        } else if let Some(intent) = self.pending_desktop.take() {
+            self.guard_current = None;
+            self.complete_desktop(intent);
+            if matches!(intent,DesktopIntent::Power(_)) { self.set_document_holds(false); }
+        }
     }
     fn complete_desktop(&mut self, intent: DesktopIntent) {
         if matches!(intent,DesktopIntent::Exit) && self.save_before_exit() { return; }
@@ -515,6 +553,7 @@ impl MyDesktop {
             },
             DesktopIntent::Exit => {
                 self.exit_saved = true;
+                for handle in self.kanban_windows.clone() { if let Some(window) = self.window_mut(handle) { window.shutdown(); } }
                 let paint = self.paint_window;
                 if let Some(window) = self.window_mut(paint) { window.shutdown(); }
                 for handle in self.terminal_handles() {
@@ -540,12 +579,29 @@ impl MyDesktop {
     }
     fn poll_desktop_guard(&mut self) {
         if self.pending_desktop.is_none() { return; }
-        let handle = self.paint_window;
-        let result = match self.window_mut(handle) {
-            Some(window) if !window.is_closing() => window.take_guard_result(),
+        let result = match self.guard_current {
+            Some(WindowTarget::Paint(handle)) => match self.window_mut(handle) { Some(window) if !window.is_closing() => window.take_guard_result(),_ => Some(true) },
+            Some(WindowTarget::Kanban(handle)) => match self.window_mut(handle) { Some(window) if !window.is_closing() => window.take_guard_result(),_ => Some(true) },
             _ => Some(true),
         };
-        if let Some(approved) = result && let Some(intent) = self.pending_desktop.take() && approved { self.complete_desktop(intent); }
+        match result {
+            Some(true) => self.next_document_guard(),
+            Some(false) => { self.pending_desktop = None; self.guard_current = None; self.guard_queue.clear(); self.set_document_holds(false); },
+            None => {},
+        }
+    }
+    fn open_kanban(&mut self,path: Option<PathBuf>) {
+        if self.pending_desktop.is_some() { return; }
+        self.last_kanban = None;
+        // Canonical aliases identify existing windows; file contents and all writes stay in the worker.
+        let path = path.map(|path| crate::runtime::kanban::canonical_path(&path).unwrap_or(path));
+        if let Some(path) = &path && let Some(handle) = self.kanban_windows.iter().copied().find(|handle| self.windowt(*handle).is_some_and(|window| !window.is_closing() && window.matches_path(path))) {
+            self.last_kanban = Some(handle); self.focus_window(WindowTarget::Kanban(handle)); return;
+        }
+        match KanbanWindow::new(path,self.kanban_files.clone()) {
+            Ok(mut window) => { window.constrain_to(self.desktop_rect().size()); let handle = self.add_window(window); self.kanban_windows.push(handle); self.last_kanban = Some(handle); self.track_window(WindowTarget::Kanban(handle)); },
+            Err(error) => dialogs::error("Cannot open Kanban",&format!("{error:#}")),
+        }
     }
     fn open_paint(&mut self, path: Option<PathBuf>) {
         self.reveal_workspace(WindowTarget::Paint(self.paint_window));
@@ -603,7 +659,8 @@ impl MyDesktop {
             dialogs::error("Default application unavailable","The saved application is no longer available. Use Open with to choose another application.");
             return;
         }
-        if path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("asciipaint")) { self.open_paint(Some(path)); }
+        if crate::runtime::kanban::is_project(&path) { self.open_kanban(Some(path)); }
+        else if path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("asciipaint")) { self.open_paint(Some(path)); }
         else if crate::runtime::files::is_image(&path) { self.open_image(Some(path)); }
         else if crate::runtime::files::is_pdf(&path) { self.open_pdf(Some(path)); }
         else if crate::runtime::files::is_audio(&path) { self.open_music(Some(path)); }
@@ -681,6 +738,7 @@ impl MyDesktop {
                 self.launch_independent(index,LaunchContext::File(&path),&title)?;
             }
             AppId::ImageViewer => self.open_image(Some(path)), AppId::PdfReader => self.open_pdf(Some(path)),
+            AppId::Kanban => self.open_kanban(Some(path)),
             AppId::MusicPlayer => self.open_music(Some(path)), AppId::AsciiPaint => self.open_paint(Some(path)),
             _ => return Err(anyhow::anyhow!("This application cannot open files.")),
         }
@@ -730,6 +788,7 @@ impl MyDesktop {
     }
 
     fn launch_application(&mut self, id: AppId) {
+        if self.pending_desktop.is_some() { return; }
         match id {
             AppId::External(index) => {
                 let shortcut = self.shortcuts[index].clone();
@@ -738,6 +797,7 @@ impl MyDesktop {
             AppId::ImageViewer => self.open_image(None),
             AppId::FileBrowser => self.open_browser(),
             AppId::MusicPlayer => self.open_music(None),
+            AppId::Kanban => self.open_kanban(None),
             AppId::AsciiPaint => self.open_paint(None),
             AppId::PdfReader => self.open_pdf(None),
             AppId::Game(kind) => self.open_game(kind),
@@ -813,6 +873,7 @@ impl OnPaint for MyDesktop {
 impl OnResize for MyDesktop {
     fn on_resize(&mut self, _old_size: Size, _new_size: Size) {
         let available = self.desktop_rect().size();
+        for handle in self.kanban_windows.clone() { if let Some(window) = self.window_mut(handle) { window.constrain_to(available); } }
         let paint = self.paint_window;
         if let Some(window) = self.window_mut(paint) { window.constrain_to(available); }
         for handle in self.game_windows.values().copied().collect::<Vec<_>>() {
@@ -837,6 +898,7 @@ impl OnResize for MyDesktop {
 impl DesktopEvents for MyDesktop {
     fn on_preview_key_pressed(&mut self, key: Key, _: char) -> EventProcessStatus {
         if self.saving_exit || self.exit_waiting || self.exit_saved { return EventProcessStatus::Processed; }
+        if self.pending_desktop.is_some() { return EventProcessStatus::Ignored; }
         if self.terminal_locked || key != self.preferences.workflow.palette_shortcut.key() { return EventProcessStatus::Ignored; }
         self.show_palette();
         EventProcessStatus::Processed
@@ -1031,6 +1093,7 @@ impl MenuEvents for MyDesktop {
                 WindowTarget::Browser(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Image(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Music(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
+                WindowTarget::Kanban(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Paint(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Pdf(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Game(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
@@ -1040,6 +1103,7 @@ impl MenuEvents for MyDesktop {
     }
 
     fn on_command(&mut self, menu: Handle<Menu>, item: Handle<Command>, command: Commands) {
+        if self.pending_desktop.is_some() { return; }
         if self.terminal_locked || self.saving_exit || self.exit_waiting || self.exit_saved {
             return;
         }
@@ -1138,7 +1202,7 @@ impl MenuEvents for MyDesktop {
     }
 
     fn on_select(&mut self, _menu: Handle<Menu>, _item: Handle<SingleChoice>, command: Commands) {
-        if self.terminal_locked {
+        if self.terminal_locked || self.pending_desktop.is_some() {
             return;
         }
         match command {
@@ -1169,9 +1233,19 @@ impl TimerEvents for MyDesktop {
         self.poll_desktop_guard();
         self.poll_session_io();
         if self.saving_exit || self.exit_waiting || self.exit_saved { return EventProcessStatus::Processed; }
-        let handle = self.browser_window;
-        let action = self.window_mut(handle).and_then(BrowserWindow::take_action);
-        if let Some(action) = action { self.dispatch_browser_action(action); }
+        if self.pending_desktop.is_none() {
+            for handle in self.kanban_windows.clone() {
+                let action = self.window_mut(handle).and_then(KanbanWindow::take_action);
+                match action { Some(KanbanAction::New) => self.open_kanban(None),Some(KanbanAction::Open(path)) => self.open_kanban(Some(path)),None => {} }
+            }
+        }
+        let boards = std::mem::take(&mut self.kanban_windows);
+        self.kanban_windows = boards.into_iter().filter(|handle| self.windowt(*handle).is_some()).collect();
+        if self.pending_desktop.is_none() {
+            let handle = self.browser_window;
+            let action = self.window_mut(handle).and_then(BrowserWindow::take_action);
+            if let Some(action) = action { self.dispatch_browser_action(action); }
+        }
         let documents = std::mem::take(&mut self.document_windows);
         self.document_windows = documents.into_iter().filter(|handle| self.windowt(*handle).is_some()).collect();
         let settings = &self.preferences.panel;
@@ -1729,7 +1803,7 @@ mod tests {
         let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
         let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
         DesktopEvents::on_start(&mut desktop);
-        assert_eq!(desktop.application_commands.len(), 12);
+        assert_eq!(desktop.application_commands.len(), 13);
         let browser_command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::FileBrowser).unwrap().0;
         MenuEvents::on_command(&mut desktop, Handle::None, browser_command, Commands::LaunchApplication);
         let browser = desktop.browser_window;
@@ -2162,6 +2236,80 @@ mod tests {
                 .unwrap();
 
             app.run();
+        }
+    }
+}
+
+#[cfg(test)]
+mod kanban_tests {
+    use super::*;
+    use crate::test_support::{TestDir,UI_LOCK};
+    struct NoPower;
+    impl SystemActionRunner for NoPower { fn run(&self,_: SystemAction) -> Result<(),String> { panic!("Canceled guard must not request power") } }
+    fn desktop(dir: &TestDir) -> MyDesktop { MyDesktop::new(vec![],Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(NoPower)) }
+    #[test]
+    fn kanban_launcher_multiple_windows_taskbar_workspace_lock_and_cleanup() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new();
+        let mut desktop = desktop(&dir); let _app = App::debug(100,30,"").app_bar().timers_count(32).build().unwrap(); DesktopEvents::on_start(&mut desktop);
+        desktop.launch_application(AppId::Kanban); desktop.launch_application(AppId::Kanban);
+        assert_eq!(desktop.kanban_windows.len(),2); let a = desktop.kanban_windows[0]; let b = desktop.kanban_windows[1];
+        desktop.hide_window(WindowTarget::Kanban(a)); desktop.sync_taskbar();
+        assert!(desktop.window_tasks.iter().any(|task| task.info.target == WindowTarget::Kanban(b)));
+        desktop.move_to_workspace(WindowTarget::Kanban(b),1); desktop.focus_window(WindowTarget::Kanban(b)); assert_eq!(desktop.active_workspace,1);
+        let lock = desktop.hide_for_terminal_lock(); assert!(!desktop.windowt(b).unwrap().is_visible()); desktop.restore_after_terminal_unlock(lock);
+        assert!(desktop.windowt(b).unwrap().is_visible()); assert!(!desktop.windowt(a).unwrap().is_visible());
+        assert!(desktop.session_snapshot().windows.is_empty(),"Untitled boards must stay outside session storage");
+        desktop.close_window(WindowTarget::Kanban(b)); TimerEvents::on_update(desktop.window_mut(b).unwrap(),0); assert!(desktop.window_info(WindowTarget::Kanban(b)).is_none());
+    }
+    #[test]
+    fn kanban_duplicate_paths_focus_existing_window_and_sessions_keep_saved_paths() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new(); let path = dir.path().join("board.kanban");
+        crate::ui::native::kanban::tests::save_fixture(&path);
+        let mut desktop = desktop(&dir); let _app = App::debug(100,30,"").app_bar().timers_count(32).build().unwrap(); DesktopEvents::on_start(&mut desktop);
+        desktop.open_file(path.clone()); let handle = desktop.kanban_windows[0];
+        let deadline = Instant::now()+Duration::from_secs(5);
+        while desktop.windowt(handle).unwrap().document_path().is_none() { assert!(Instant::now()<deadline); TimerEvents::on_update(desktop.window_mut(handle).unwrap(),0); std::thread::yield_now(); }
+        let alias = dir.path().join("alias.kanban"); std::os::unix::fs::symlink(&path,&alias).unwrap();
+        desktop.hide_window(WindowTarget::Kanban(handle)); desktop.open_file(alias); assert_eq!(desktop.kanban_windows.len(),1); assert!(desktop.windowt(handle).unwrap().is_visible());
+        let snapshot = desktop.session_snapshot(); assert_eq!(snapshot.windows.len(),1);
+        assert!(matches!(&snapshot.windows[0].launch,SavedLaunch::Native { app,path: Some(_) } if app == "kanban"));
+        let restored = desktop.restore_window(snapshot.windows[0].clone()).unwrap(); assert_eq!(restored,WindowTarget::Kanban(handle));
+    }
+    #[test]
+    fn kanban_close_reveals_hidden_board_on_another_workspace_before_guarding() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new(); let mut desktop = desktop(&dir);
+        let _app = App::debug(100,30,"").app_bar().timers_count(32).build().unwrap(); DesktopEvents::on_start(&mut desktop);
+        desktop.open_kanban(None); let handle = desktop.kanban_windows[0]; let target = WindowTarget::Kanban(handle);
+        desktop.move_to_workspace(target,1); assert!(!desktop.windowt(handle).unwrap().is_visible());
+        desktop.close_window(target); assert_eq!(desktop.active_workspace,1); assert!(desktop.windowt(handle).unwrap().is_visible());
+        TimerEvents::on_update(desktop.window_mut(handle).unwrap(),0); assert!(desktop.windowt(handle).unwrap().is_closing());
+    }
+    #[test]
+    fn kanban_guard_defers_session_restoration_until_decisions_finish() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new(); let mut desktop = desktop(&dir);
+        let _app = App::debug(100,30,"").app_bar().timers_count(32).build().unwrap(); DesktopEvents::on_start(&mut desktop);
+        desktop.open_kanban(None); desktop.guard_desktop(DesktopIntent::Power(SystemAction::Shutdown));
+        desktop.restore_queue.push_back(crate::config::session::SavedWindow { launch: SavedLaunch::Native { app: "Snake".into(),path: None },workspace: 0,hidden: false,x: 0,y: 0,width: 30,height: 15 });
+        desktop.poll_session_io(); assert!(desktop.game_windows.is_empty()); assert_eq!(desktop.restore_queue.len(),1);
+    }
+    #[test]
+    fn kanban_mixed_guard_cancellation_keeps_approved_documents_frozen_and_all_apps_open() {
+        let _lock = UI_LOCK.lock().unwrap();
+        for intent in [DesktopIntent::Exit,DesktopIntent::Power(SystemAction::Shutdown),DesktopIntent::Power(SystemAction::Restart)] {
+            let dir = TestDir::new();
+            let mut desktop = desktop(&dir); let _app = App::debug(100,30,"Key.Pressed(Alt+D)\nKey.Pressed(Escape)").app_bar().timers_count(32).build().unwrap(); DesktopEvents::on_start(&mut desktop);
+            desktop.open_paint(None); desktop.open_kanban(None); desktop.open_kanban(None); desktop.open_game(GameKind::Puzzle2048);
+            let paint = desktop.paint_window; let a = desktop.kanban_windows[0]; let b = desktop.kanban_windows[1]; let game = desktop.game_windows[&GameKind::Puzzle2048];
+            crate::ui::native::kanban::tests::dirty(desktop.window_mut(a).unwrap()); crate::ui::native::kanban::tests::dirty(desktop.window_mut(b).unwrap());
+            desktop.hide_window(WindowTarget::Kanban(b)); desktop.guard_desktop(intent);
+            TimerEvents::on_update(desktop.window_mut(paint).unwrap(),0); desktop.poll_desktop_guard();
+            TimerEvents::on_update(desktop.window_mut(a).unwrap(),0); desktop.poll_desktop_guard();
+            assert!(crate::ui::native::kanban::tests::frozen(desktop.windowt(a).unwrap()));
+            assert!(desktop.windowt(b).unwrap().is_visible(),"Current guard must reveal a hidden board");
+            TimerEvents::on_update(desktop.window_mut(b).unwrap(),0); desktop.poll_desktop_guard();
+            assert!(desktop.pending_desktop.is_none()); assert!(!desktop.system_actions.is_pending()); assert!(!desktop.windowt(game).unwrap().is_closing());
+            assert!(!desktop.windowt(paint).unwrap().is_closing());
+            for handle in [a,b] { let window = desktop.windowt(handle).unwrap(); assert!(!window.is_closing()); assert!(crate::ui::native::kanban::tests::is_dirty(window)); assert!(!crate::ui::native::kanban::tests::frozen(window)); }
         }
     }
 }

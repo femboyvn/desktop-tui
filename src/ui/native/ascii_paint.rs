@@ -216,20 +216,27 @@ struct Pending { intent: Intent, approved: bool }
 #[Window(events = TimerEvents+WindowEvents)]
 pub(crate) struct PaintWindow {
     canvas: Handle<PaintCanvas>, worker: PaintWorker, path: Option<PathBuf>, saving_path: Option<PathBuf>,
-    pending: Option<Pending>, guard_result: Option<bool>, closing: bool, updating: bool,
+    pending: Option<Pending>, guard_result: Option<bool>, closing: bool, updating: bool, guard_hold: bool,
 }
 impl PaintWindow {
     pub fn document_path(&self) -> Option<PathBuf> { self.path.clone() }
     pub fn new(path: Option<PathBuf>) -> anyhow::Result<Self> {
         let mut window = Self { base: Window::new("ASCII Paint",layout!("a:c,w:92,h:34"),window::Flags::Sizeable),
             canvas: Handle::None, worker: PaintWorker::new(), path: None, saving_path: None,
-            pending: path.map(|path| Pending { intent: Intent::Open(path), approved: true }), guard_result: None, closing: false, updating: false };
+            pending: path.map(|path| Pending { intent: Intent::Open(path), approved: true }), guard_result: None, closing: false, updating: false, guard_hold: false };
         window.timer().ok_or_else(|| anyhow::anyhow!("ASCII Paint timer unavailable"))?.start(Duration::from_millis(40));
         window.canvas = window.add(PaintCanvas::new());
         window.base.request_focus_for_control(window.canvas);
         Ok(window)
     }
     pub fn is_closing(&self) -> bool { self.closing }
+    pub fn set_guard_hold(&mut self,held: bool) {
+        self.guard_hold = held;
+        // Desktop-wide decisions supersede queued local close/replacement actions.
+        // The file worker remains alive and its result is still applied normally.
+        if held && self.pending.as_ref().is_some_and(|pending| !matches!(pending.intent,Intent::Guard)) { self.pending = None; }
+        self.suspend(); self.freeze();
+    }
     // Desktop Exit calls this only after the unsaved-work guard has approved.
     pub fn shutdown(&mut self) { self.closing = true; self.suspend(); self.close(); }
     pub fn suspend(&mut self) { let handle = self.canvas; if let Some(canvas) = self.control_mut(handle) { canvas.document.finish_stroke(); } }
@@ -244,7 +251,7 @@ impl PaintWindow {
         }
     }
     fn request(&mut self,intent: Intent) {
-        if self.closing || self.pending.is_some() || self.guard_result.is_some() { return; }
+        if self.closing || self.guard_hold || self.pending.is_some() || self.guard_result.is_some() { return; }
         self.suspend();
         self.pending = Some(Pending { intent, approved: false });
         self.freeze();
@@ -262,9 +269,9 @@ impl PaintWindow {
         let result = self.guard_result.take(); self.freeze(); result
     }
     fn freeze(&mut self) {
-        let frozen = self.worker.is_busy() || self.pending.is_some() || self.guard_result.is_some();
+        let frozen = self.worker.is_busy() || self.pending.is_some() || self.guard_result.is_some() || self.guard_hold;
         let handle = self.canvas;
-        if let Some(canvas) = self.control_mut(handle) { canvas.frozen = frozen; }
+        if let Some(canvas) = self.control_mut(handle) { canvas.frozen = frozen; if frozen { canvas.action = None; } }
     }
     fn cancel_pending(&mut self) {
         if self.pending.take().is_some_and(|pending| matches!(pending.intent,Intent::Guard)) { self.guard_result = Some(false); }
@@ -321,7 +328,7 @@ impl PaintWindow {
         self.freeze();
     }
     fn action(&mut self,action: PaintAction) {
-        if self.worker.is_busy() || self.pending.is_some() || self.guard_result.is_some() { return; }
+        if self.worker.is_busy() || self.pending.is_some() || self.guard_result.is_some() || self.guard_hold { return; }
         match action {
             PaintAction::New => self.request(Intent::New),
             PaintAction::Open => if let Some(path) = dialogs::open("Open Paint project or ASCII text", "",Location::Path(&home_directory()),None,
@@ -418,13 +425,16 @@ impl WindowEvents for PaintWindow {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum UnsavedChoice { Save, Discard }
+pub(super) enum UnsavedChoice { Save, Discard }
 #[ModalWindow(response: UnsavedChoice, events: ButtonEvents)]
-struct UnsavedDialog { save: Handle<Button>, discard: Handle<Button>, cancel: Handle<Button> }
+pub(super) struct UnsavedDialog { save: Handle<Button>, discard: Handle<Button>, cancel: Handle<Button> }
 impl UnsavedDialog {
     fn new() -> Self {
-        let mut dialog = Self { base: ModalWindow::new("Unsaved ASCII Paint",layout!("a:c,w:56,h:9"),window::Flags::None),save: Handle::None,discard: Handle::None,cancel: Handle::None };
-        dialog.add(Label::new("Save the colored project before continuing?",layout!("l:2,t:1,r:2,h:2")));
+        Self::for_document("Unsaved ASCII Paint","Save the colored project before continuing?")
+    }
+    pub(super) fn for_document(title: &str,message: &str) -> Self {
+        let mut dialog = Self { base: ModalWindow::new(title,layout!("a:c,w:56,h:9"),window::Flags::None),save: Handle::None,discard: Handle::None,cancel: Handle::None };
+        dialog.add(Label::new(message,layout!("l:2,t:1,r:2,h:2")));
         dialog.save = dialog.add(button!("&Save,l:2,b:0,w:14"));
         dialog.discard = dialog.add(button!("&Discard,l:19,b:0,w:14"));
         dialog.cancel = dialog.add(button!("&Cancel,r:2,b:0,w:14"));
@@ -795,6 +805,13 @@ mod lifecycle_tests {
 mod followup_tests {
     use super::*;
     use crate::test_support::UI_LOCK;
+    #[test]
+    fn desktop_hold_supersedes_paint_close_while_another_document_is_guarded() {
+        let _lock = UI_LOCK.lock().unwrap(); let _app = App::debug(80,24,"Key.Pressed(Alt+D)\nPaint.Enable(false)").build().unwrap();
+        let mut window = PaintWindow::new(None).unwrap(); let handle = window.canvas; window.control_mut(handle).unwrap().stamp(false);
+        window.request_close(); window.set_guard_hold(true); window.tick(); assert!(!window.is_closing()); assert!(window.pending.is_none());
+        window.set_guard_hold(false); window.tick(); assert!(!window.is_closing()); assert!(window.control(handle).unwrap().document.is_dirty());
+    }
     #[test]
     fn short_canvas_footer_clears_toolbar_status_and_palette_fragments() {
         let _lock = UI_LOCK.lock().unwrap();

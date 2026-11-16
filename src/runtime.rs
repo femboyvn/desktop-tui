@@ -13,3 +13,4 @@ pub(crate) mod music;
 pub(crate) mod pdf;
 
 pub(crate) mod clipboard;
+pub(crate) mod kanban;

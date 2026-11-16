@@ -16,7 +16,7 @@ impl MyDesktop {
         let key = Self::association_key(path)?;
         let identity = self.preferences.workflow.file_associations.get(&key)?;
         match identity.as_str() {
-            "native:image" => Some(AppId::ImageViewer), "native:pdf" => Some(AppId::PdfReader),
+            "native:kanban" => Some(AppId::Kanban), "native:image" => Some(AppId::ImageViewer), "native:pdf" => Some(AppId::PdfReader),
             "native:music" => Some(AppId::MusicPlayer), "native:paint" => Some(AppId::AsciiPaint),
             value => value.strip_prefix("external:").and_then(|id| self.shortcuts.iter().enumerate().find(|(index,shortcut)| self.launcher_enabled[*index] && shortcut.stable_id() == id).map(|(index,_)| AppId::External(index))),
         }
@@ -24,7 +24,7 @@ impl MyDesktop {
     pub(super) fn remember_association(&mut self, path: &std::path::Path, id: AppId) {
         let Some(key) = Self::association_key(path) else { return; };
         let identity = match id {
-            AppId::ImageViewer => "native:image".to_owned(), AppId::PdfReader => "native:pdf".to_owned(),
+            AppId::Kanban => "native:kanban".to_owned(), AppId::ImageViewer => "native:image".to_owned(), AppId::PdfReader => "native:pdf".to_owned(),
             AppId::MusicPlayer => "native:music".to_owned(), AppId::AsciiPaint => "native:paint".to_owned(),
             AppId::External(index) => format!("external:{}",self.shortcuts[index].stable_id()), _ => return,
         };
@@ -40,6 +40,7 @@ impl MyDesktop {
             WindowTarget::Browser(h) => self.windowt(h).map(|w| &**w),
             WindowTarget::Image(h) => self.windowt(h).map(|w| &**w),
             WindowTarget::Music(h) => self.windowt(h).map(|w| &**w),
+            WindowTarget::Kanban(h) => self.windowt(h).map(|w| &**w),
             WindowTarget::Paint(h) => self.windowt(h).map(|w| &**w),
             WindowTarget::Pdf(h) => self.windowt(h).map(|w| &**w),
             WindowTarget::Game(h) => self.windowt(h).map(|w| &**w),
@@ -52,6 +53,7 @@ impl MyDesktop {
             WindowTarget::Browser(h) => self.window_mut(h).map(|w| &mut **w),
             WindowTarget::Image(h) => self.window_mut(h).map(|w| &mut **w),
             WindowTarget::Music(h) => self.window_mut(h).map(|w| &mut **w),
+            WindowTarget::Kanban(h) => self.window_mut(h).map(|w| &mut **w),
             WindowTarget::Paint(h) => self.window_mut(h).map(|w| &mut **w),
             WindowTarget::Pdf(h) => self.window_mut(h).map(|w| &mut **w),
             WindowTarget::Game(h) => self.window_mut(h).map(|w| &mut **w),

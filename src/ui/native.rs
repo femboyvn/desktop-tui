@@ -13,3 +13,5 @@ pub(crate) use image_viewer::select_image;
 
 mod ascii_paint;
 pub(crate) use ascii_paint::PaintWindow;
+pub(crate) mod kanban;
+pub(crate) use kanban::{KanbanWindow,KanbanAction};

@@ -56,6 +56,7 @@ impl MyDesktop {
     }
     fn suspend_target(&mut self, target: WindowTarget) {
         match target {
+            WindowTarget::Kanban(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); },
             WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); },
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); },
             _ => {},
@@ -118,6 +119,7 @@ impl MyDesktop {
                 WindowTarget::Image(handle) => SavedLaunch::Native { app: "image".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
                 WindowTarget::Pdf(handle) => SavedLaunch::Native { app: "pdf".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
                 WindowTarget::Music(handle) => SavedLaunch::Native { app: "music".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
+                WindowTarget::Kanban(handle) => SavedLaunch::Native { app: "kanban".into(),path: Some(SavedPath::new(&self.windowt(handle)?.document_path()?)) },
                 WindowTarget::Paint(handle) => SavedLaunch::Native { app: "paint".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
                 WindowTarget::Help(_) => SavedLaunch::Native { app: "help".into(),path: None },
                 WindowTarget::Game(handle) => SavedLaunch::Native { app: self.game_windows.iter().find(|(_,value)| **value == handle)?.0.name().to_owned(),path: None },
@@ -165,7 +167,7 @@ impl MyDesktop {
             Some(SessionResult::Loaded(Ok(Some(session)))) => {
                 self.session_loading = false;
                 let offer = !session.windows.is_empty(); self.session_declined = offer; self.saved_session = Some(session);
-                if offer && !self.exit_waiting { self.offer_restore(); }
+                if offer && !self.exit_waiting && self.pending_desktop.is_none() { self.offer_restore(); }
             }
             Some(SessionResult::Loaded(Ok(None))) => self.session_loading = false,
             Some(SessionResult::Loaded(Err(error))) => { self.session_loading = false; self.session_writable = false; dialogs::error("Saved workspace unavailable",&error); },
@@ -177,7 +179,7 @@ impl MyDesktop {
             _ => {},
         }
         if self.exit_waiting && !self.session_loading { self.exit_waiting = false; self.complete_desktop(DesktopIntent::Exit); }
-        if self.saving_exit { return; }
+        if self.saving_exit || self.pending_desktop.is_some() { return; }
         if let Some(window) = self.restore_queue.pop_front() {
             let workspace = window.workspace;
             match self.restore_window(window) {
@@ -194,7 +196,7 @@ impl MyDesktop {
         }
     }
     pub(super) fn offer_restore(&mut self) {
-        if !self.restore_queue.is_empty() { return; }
+        if !self.restore_queue.is_empty() || self.pending_desktop.is_some() { return; }
         let Some(session) = self.saved_session.clone() else { return; };
         if session.windows.is_empty() { return; }
         if RestoreDialog::new(session.windows.len()).show() == Some(true) {
@@ -244,6 +246,10 @@ impl MyDesktop {
                 "image" => { anyhow::ensure!(self.windowt(self.image_window).is_none(),"Image Viewer is already open; existing window kept"); anyhow::ensure!(path.is_some(),"Saved image has no path"); self.open_image(path); WindowTarget::Image(self.image_window) },
                 "pdf" => { anyhow::ensure!(self.windowt(self.pdf_window).is_none(),"PDF Reader is already open; existing window kept"); self.open_pdf(path); WindowTarget::Pdf(self.pdf_window) },
                 "music" => { anyhow::ensure!(self.windowt(self.music_window).is_none(),"Music Player is already open; existing window kept"); self.open_music(path); WindowTarget::Music(self.music_window) },
+                "kanban" => {
+                    anyhow::ensure!(path.is_some(),"Saved Kanban board has no path"); self.open_kanban(path);
+                    WindowTarget::Kanban(self.last_kanban.ok_or_else(|| anyhow::anyhow!("Could not restore Kanban board"))?)
+                },
                 "paint" => { anyhow::ensure!(self.windowt(self.paint_window).is_none(),"ASCII Paint is already open; existing window kept"); self.open_paint(path); WindowTarget::Paint(self.paint_window) },
                 "help" => { let handle = self.add_window(help_window()); self.help_windows.push(handle); let target = WindowTarget::Help(handle); self.track_window(target); target },
                 name => {

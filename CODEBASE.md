@@ -89,10 +89,11 @@ configuration/tool availability with a meaningful exit status.
 | [src/runtime/processes.rs](src/runtime/processes.rs) | Managed PTY runner, independent PID observation, asynchronous process-tree cleanup, and shutdown task draining. |
 | [src/runtime/music.rs](src/runtime/music.rs) | Bounded audio input, retained encoded streams, coalesced playback worker/state snapshots, and device cleanup after the event loop. |
 | [src/runtime/music/spectrum.rs](src/runtime/music/spectrum.rs) | Preallocated bounded capture, per-channel Hann/FFT analysis, 16 logarithmic bands, and bar/peak decay. |
+| [src/runtime/kanban.rs](src/runtime/kanban.rs), [src/ui/native/kanban.rs](src/ui/native/kanban.rs) | Stable ordered board/task model, bounded versioned files and worker leases; multiwindow board control, dialogs and deferred guards. |
 | [src/runtime/ascii_paint.rs](src/runtime/ascii_paint.rs) | Bounded RGB cell document, grouped undo/redo, project/text validation, atomic writes, and one-operation file worker. |
 | [src/ui/native/ascii_paint.rs](src/ui/native/ascii_paint.rs) | Paint canvas input/rendering, brush/dimensions dialogs, file actions, and unsaved-action guard. |
 | [src/runtime/pdf.rs](src/runtime/pdf.rs) | Bounded anonymous PDF snapshots, Poppler metadata/page rendering, cancellation, timeouts, and helper reaping after the event loop. |
-| [src/ui/native/](src/ui/native/) | Native Image Viewer, PDF Reader, File Browser, Music Player, ASCII Paint, and game windows and controls. |
+| [src/ui/native/](src/ui/native/) | Native Image Viewer, PDF Reader, File Browser, Music Player, ASCII Paint, Kanban, and game windows and controls. |
 | [src/ui/native/games.rs](src/ui/native/games.rs), [src/ui/native/games/](src/ui/native/games/) | Shared game window/input/rendering and bounded Snake, 2048, and Minesweeper rules. |
 | [src/config/shortcuts.rs](src/config/shortcuts.rs) | Serde types generated through `nestify::nest!`; `parse_shortcut_dir` loads exact .toml files deterministically, validates unique names/identities, retains source paths and resolves launcher directories. |
 | [src/ui/desktop/view.rs](src/ui/desktop/view.rs) | `MyDesktop`, app-bar menus, shortcut-to-window handles, launch/show/hide/close commands, arrangement, preferences/locking integration, and panel updates. |
@@ -206,7 +207,7 @@ The complete user example lives in [README.md](README.md). Source definitions in
 - `name` and `command` are required; top-level `args` defaults to an empty vector.
 - Optional top-level `category` defaults to User when absent or blank. System,
   Utility, User, and Games precede alphabetically ordered additional categories.
-  Native File Browser/Image Viewer/PDF Reader/Music Player/ASCII Paint and game entries remain separate from custom
+  Native File Browser/Image Viewer/PDF Reader/Music Player/ASCII Paint/Kanban and game entries remain separate from custom
   shortcuts; names matching Terminal, System Performance, Text editor, or Web Browser override
   external starters.
 - The `taskbar`, `window`, and `terminal` tables are required. Taskbar position is
@@ -397,8 +398,27 @@ Browser to it; existing text associations stay unchanged. Paint queues New,
 Open, Close, and desktop Exit/Shutdown/Restart behind Save/Discard/Cancel.
 A chosen save must succeed before continuation. Cancellation preserves other
 apps. Pending prompts and results wait while hidden/locked; restoration uses the
-launcher or Background windows. Desktop actions wait for Paint's guard before
-closing other windows or issuing a system request.
+launcher or Background windows. Desktop actions reveal and guard Paint and all Kanban boards sequentially before
+closing other windows or issuing a system request. Approvals remain frozen until
+every document approves; cancellation or failed saves release all holds without
+closing any application.
+
+Kanban uses stable globally unique IDs and ordered column/task vectors. Document
+edits validate transactionally; defaults apply only to new boards. Version 1
+`.kanban` TOML stores the board name, custom columns, next ID, task details, and
+manual ordering. Regular-file reads use O_NONBLOCK and a 2 MiB limit. Saves sync a
+same-directory temporary file and atomically replace the destination. One-operation
+workers keep callbacks responsive and update document paths/saved snapshots only
+on successful completion. Shared file leases reject conflicting Save As targets;
+canonical aliases focus the existing window. Leases survive active worker jobs.
+
+`KanbanWindow` queues New/Open requests for desktop polling. Board layout drives
+both painting and hit testing; graphemes and widths come from the terminal core.
+Drag edits commit only on valid release and cancel across focus, visibility,
+locking and geometry changes. File work and document decisions freeze controls;
+an updating flag rejects nested modal timer reentry. All board handles participate
+in taskbar, workspace, tiling, palette and lock paths. Sessions persist saved
+board paths only, never untitled boards or unsaved document snapshots.
 
 Each Image Viewer and File Browser window owns a latest-request worker with one active job, one pending
 request, and one result. New requests replace pending work and invalidate older
@@ -430,7 +450,7 @@ arguments; lossy text is used only for labels and the editable path display.
 Saved Open with associations in preferences take precedence and refer to stable
 application identities; unavailable saved choices report an error. Otherwise the
 desktop routes case-insensitive MP3/WAV/FLAC/OGG extensions to Music Player,
-supported images to Image Viewer, PDFs to PDF Reader, `.asciipaint` to ASCII Paint, and other files to the
+supported images to Image Viewer, PDFs to PDF Reader, `.asciipaint` to ASCII Paint, `.kanban` to Kanban, and other files to the
 configured Text editor. Audio opens preserve the original OS path and reuse and
 restore the native player; its worker loads and starts the selected track.
 Open with external choices and browser terminals use independent tracked terminal

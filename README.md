@@ -251,7 +251,7 @@ The top bar starts with **Desktop | Application | Tilling**. Application groups
 launchers under **System**, **Utility**, **User**, and **Games**, followed by
 additional named categories in alphabetical order. Empty categories show a
 disabled **No apps yet**. Selecting a launcher starts its window or restores
-and focuses the existing instance.
+and focuses the existing instance. Kanban launches a separate board window each time.
 
 The space after **Tilling |** shows open, visible windows in opening order,
 including native apps, separate editor documents, and Help. Opening a window’s
@@ -263,7 +263,7 @@ visible windows when space is limited; selecting one opens its Focus/Hide/Close
 actions. The status panel remains responsive.
 External windows with additional commands expose them through **App commands...**.
 
-Twelve starters are available even with an empty shortcut directory:
+Thirteen starters are available even with an empty shortcut directory:
 
 | Category | Application | Executable |
 | --- | --- | --- |
@@ -276,6 +276,7 @@ Twelve starters are available even with an empty shortcut directory:
 | Utility | Web Browser | `carboxyl` 0.2.0 (bundled in the Linux package) |
 | Utility | Music Player | Native (compiled audio engine) |
 | Utility | ASCII Paint | Native |
+| Utility | Kanban | Native |
 | Games | Snake | Native |
 | Games | 2048 | Native |
 | Games | Minesweeper | Native |
@@ -326,6 +327,44 @@ press Space/P to resume after returning. Windows too small for the board show a
 resize prompt and ignore game input. Score and session best for Snake/2048 stay
 in memory until the window closes. Close and relaunch for a fresh window.
 Game windows stay within the available desktop area when the terminal shrinks.
+
+**Kanban** opens under **Application > Utility > Kanban**. Each launch or
+**File > New** creates a separate board window. Boards start with **To do →
+In progress → Review → Done**. **Columns / Alt+C** adds, renames, reorders, or
+deletes any column. Keep at least one; deleting a populated column asks where
+to move its tasks. Column dialog changes apply together or cancel with Escape.
+
+Cards have a required title, multiline notes, Low/Medium/High priority (default
+Medium), and an optional valid `YYYY-MM-DD` due date. Cards show title, priority,
+and due date; open the editor for notes. Ordering is manual. Click a card to
+select it, double-click to edit, or drag to move/reorder. Escape, an invalid drop,
+focus loss, hiding, Terminal Lock, or resizing cancels a drag. Wheel vertically
+scrolls the column under the pointer; Shift+wheel or horizontal wheel scrolls
+columns. Keyboard navigation reveals the selected card.
+
+| Kanban action | Shortcut / menu |
+| --- | --- |
+| New board / Open board | Ctrl+N / Ctrl+O; File (Alt+F) |
+| Save / Save As | Ctrl+S / Ctrl+Shift+S; File |
+| Navigate / edit / add / delete | Arrows / Enter / Insert / Delete; Task (Alt+T) |
+| Move between adjacent columns / reorder | Shift+Left/Right / Shift+Up/Down; Task |
+| Manage columns / rename board | Columns (Alt+C) / File > Rename board |
+
+Save explicitly to a version 1 TOML `.kanban` file (up to 2 MiB). Each board has
+its own file and an unsaved `*` marker. Editing pauses during background file
+operations. Open and New leave the current board open; opening the same canonical
+path focuses its existing window. Save As refuses a file owned by another open
+board. Failed operations preserve the current board, saved state, and path.
+Saved board paths participate in workspace restoration; untitled boards and
+unsaved contents do not enter the session file. Limits are 64 columns, 4096 tasks,
+256-byte board/column names, 1024-byte task titles, and 64 KiB notes per task.
+
+Closing a dirty board offers **Save / Discard / Cancel**. Desktop Exit, Shutdown,
+and Restart guard Paint and every board in turn, revealing hidden documents.
+Approved documents stay frozen until all approve. Cancel or a failed save stops
+the action and keeps every document and other app open. Saving is explicit;
+autosave, reminders, collaboration, and dragging across board windows are outside
+this version.
 
 **ASCII Paint** opens under **Application > Utility > ASCII Paint**. It keeps one
 canvas window; selecting the launcher again restores it. A fresh canvas is 80×24
@@ -488,6 +527,7 @@ Desktop-TUI apps; extensions are case-insensitive:
 | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.bmp` | Image Viewer |
 | `.pdf` | PDF Reader |
 | `.asciipaint` | ASCII Paint |
+| `.kanban` | Kanban |
 | Other regular files | Configured Text editor, in independent document windows |
 
 For Text editor documents, each

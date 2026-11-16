@@ -71,11 +71,11 @@ an explicit shortcut directory is used. Typical locations are:
 
 No sample shortcuts are copied into the default directory. Platform-specific
 configuration paths do not establish runtime support beyond the Unix PTY
-requirement. An empty directory still provides the twelve starter apps through Application.
+requirement. An empty directory still provides the thirteen starter apps through Application.
 External starters (`sh`, `btm`, and `nano`) require separately installed tools.
 Carboxyl is included in the portable Linux package; source/Cargo installations
 can use a separately installed copy.
-Music Player and ASCII Paint are native and compiled into the desktop binary.
+Music Player, ASCII Paint, and Kanban are native and compiled into the desktop binary.
 Snake, 2048, and Minesweeper are built in under Application > Games.
 
 ## Run over SSH or another PTY
@@ -151,6 +151,19 @@ normally `$XDG_STATE_HOME/desktop-tui` or `~/.local/state/desktop-tui` on Linux.
 A custom shortcut directory redirects none of these. Browser state remembers
 location, view, filter, hidden toggle and favorites. Use **Open with > Always use
 for .extension** to save a default; use Open with again to choose another.
+
+## Use Kanban boards
+
+Choose Application > Utility > Kanban for a new board; each launch makes a
+separate window. Use File > Open (Ctrl+O) for an existing `.kanban` file or
+open it in File Browser. File > Save (Ctrl+S) and Save As (Ctrl+Shift+S) write
+explicitly. Task (Alt+T) and Columns (Alt+C) provide editing actions; arrows,
+Enter, Insert, Delete, and Shift+arrows provide keyboard navigation and movement.
+See [README](README.md#applications-and-files) for board limits and controls.
+
+Close and desktop power/exit actions ask about unsaved work across Paint and
+all boards. Cancel keeps the desktop running. Saved paths restore through the
+normal workspace mechanism; unsaved content remains outside session storage.
 
 ## Use the bundled Carboxyl browser
 

@@ -348,3 +348,30 @@ launching from another working directory, hiding/restoring, locking, closing,
 and no remaining child processes. Test a source/Cargo build without a companion
 to confirm normal PATH fallback, and a non-executable companion. Do not launch
 the interactive browser or desktop as an unattended packaging check.
+
+## Kanban verification
+
+Run focused model, file, input/rendering, dialog and desktop regressions:
+
+```sh
+cargo test --locked kanban
+```
+
+Then run all required Rust checks above. In a real terminal with a controlled
+shortcut directory, open several boards via Application > Utility > Kanban and
+File > New/Open. Save/reopen distinct `.kanban` files and Unicode paths; aliases
+must focus the existing board and Save As must refuse another open board's file.
+Verify custom columns and details survive reopening, manual task/column ordering,
+required titles, multiline notes, priorities, and leap-year dates. Cancel all
+editors and deletion destinations; keep at least one column.
+
+Check mouse selection, double-click editing, same-column reordering and moves,
+invalid release, Escape/focus loss, hide/show, Terminal Lock/unlock and resize
+mid-drag. Scroll columns horizontally and tasks vertically, navigate to offscreen
+cards, paint long combining/CJK/emoji titles and empty columns, shrink to tiny
+windows, tile, switch workspaces and change theme. Close clean/dirty/saving boards
+via titlebar and taskbar. Test Save/Discard/Cancel across Paint and multiple boards
+before Exit; a later Cancel or failed save must keep all apps and dirty contents.
+Use the mock system runner for Shutdown/Restart, never host power commands.
+Restore saved board paths in another session; exclude untitled and unsaved content.
+Headless tests do not replace this real-terminal matrix.

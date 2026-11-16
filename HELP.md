@@ -14,7 +14,7 @@ System, Utility, User, and Games are always present; extra categories
 follow alphabetically. Empty categories show No apps yet.
 
 File Browser, Terminal (sh), System Performance (btm / bottom),
-Image Viewer, PDF Reader, Text editor (nano), Web Browser (Carboxyl), native Music Player, ASCII Paint, and the games
+Image Viewer, PDF Reader, Text editor (nano), Web Browser (Carboxyl), native Music Player, ASCII Paint, Kanban, and the games
 Snake, 2048, and Minesweeper are
 available with an empty shortcut folder. External tools must be installed separately.
 System Performance uses bottom’s default-light theme to match the
@@ -131,6 +131,40 @@ Hide and Terminal Lock preserve every game's board. Restore through
 Application > Background windows or the game's launcher. If the
 window shows Resize window to play, enlarge it to use game controls.
 
+## Kanban
+
+Application > Utility > Kanban opens a new board window each time. New boards
+start with To do, In progress, Review, and Done. Each board saves separately.
+File (Alt+F) provides New/Open, Save/Save As, and Rename board. Ctrl+N/Ctrl+O
+open separate windows; Ctrl+S/Ctrl+Shift+S save. Open focuses an already-open
+canonical file. Save As cannot replace another open board's file.
+
+Columns (Alt+C) adds, renames, reorders, and deletes columns, including defaults.
+Keep one column. Deleting a populated column requires another task destination.
+Apply commits column changes; Cancel/Escape preserves the original board.
+
+Arrows navigate, Enter edits, Insert adds, and Delete requests task deletion.
+Shift+Left/Right moves a card between adjacent columns; Shift+Up/Down reorders.
+Task (Alt+T) provides the same actions. Cards show title, priority, and due date.
+The editor also holds multiline notes. Title is required; priority defaults to
+Medium; optional due dates must be valid YYYY-MM-DD dates.
+
+Click to select, double-click to edit, and drag to move or reorder. Invalid
+drops, Escape, focus loss, hiding, locking, and resizing cancel dragging.
+Wheel scrolls tasks under the pointer; Shift+wheel or horizontal wheel scrolls
+columns. Navigation reveals selection. Tiny windows ask for resizing.
+
+Save explicitly to .kanban (version 1 TOML, at most 2 MiB). An asterisk marks
+unsaved changes. File I/O freezes editing; errors preserve the board and path.
+Limits: 64 columns, 4096 tasks, 256-byte board/column names, 1024-byte titles,
+and 64 KiB notes. Saved paths restore with workspaces; untitled boards and
+unsaved contents are excluded from session storage.
+
+Close offers Save/Discard/Cancel. Exit, Shutdown, and Restart reveal and guard
+Paint and all boards sequentially. Approvals freeze editing until every document
+approves; Cancel or a failed save keeps every document and other application open.
+There is no autosave, reminder, collaboration, or drag across board windows.
+
 ## ASCII Paint
 
 Application > Utility > ASCII Paint opens one canvas window; its launcher
@@ -241,7 +275,7 @@ folder. Graphical Linux apps are not discovered.
 
 Open supported images in Image Viewer, PDFs in PDF Reader, and MP3, WAV,
 FLAC, or Ogg Vorbis files in Music Player, and .asciipaint projects in
-ASCII Paint. File extensions are case-insensitive.
+ASCII Paint, and .kanban boards in Kanban. File extensions are case-insensitive.
 Other regular files open in
 independent Text editor document windows, preserving any running
 editor. The selected absolute path is one OS argument, appended

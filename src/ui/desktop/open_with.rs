@@ -14,6 +14,7 @@ fn choices(path: &Path, shortcuts: &[Shortcut]) -> Vec<OpenChoice> {
         else if files::is_pdf(path) { Some((AppId::PdfReader,"PDF Reader")) }
         else if files::is_audio(path) { Some((AppId::MusicPlayer,"Music Player")) }
         else if path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("asciipaint")) { Some((AppId::AsciiPaint,"ASCII Paint")) }
+        else if crate::runtime::kanban::is_project(path) { Some((AppId::Kanban,"Kanban")) }
         else { None };
     let mut result = Vec::new();
     if let Some((id,name)) = native { result.push(OpenChoice { id, label: format!("{name} (native)") }); }
@@ -75,7 +76,7 @@ mod tests {
         assert_eq!(image[0].id,AppId::ImageViewer);
         assert_eq!(image[1].id,AppId::External(0));
         assert_ne!(image[0].label,image[1].label);
-        for (path,native) in [("a.PDF",Some(AppId::PdfReader)),("a.ogg",Some(AppId::MusicPlayer)),("a.asciipaint",Some(AppId::AsciiPaint)),("a.txt",None)] {
+        for (path,native) in [("a.PDF",Some(AppId::PdfReader)),("a.ogg",Some(AppId::MusicPlayer)),("a.asciipaint",Some(AppId::AsciiPaint)),("a.KANBAN",Some(AppId::Kanban)),("a.txt",None)] {
             let values = choices(Path::new(path),&shortcuts);
             assert_eq!(values.len(),shortcuts.len()+usize::from(native.is_some()));
             if let Some(native) = native { assert_eq!(values[0].id,native); }
