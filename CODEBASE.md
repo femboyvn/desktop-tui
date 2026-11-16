@@ -44,6 +44,11 @@ to the package registry unless dependencies are cached.
 The Carboxyl integration and pinned terminal core were checked with Rust 1.97.1.
 
 The selected UI backend is CrossTerm, with true-color support enabled on AppCUI.
+Linux PTYs, primarily over SSH, are the runtime target; a graphical session and
+X11 forwarding are not required. The input thread checks kernel PTY dimensions
+every 100 ms while idle as well as accepting resize notifications. Current
+tiling follows resizing and is reapplied when a workspace or locked desktop is
+revealed. Ordinary windows are clamped into the available desktop on shrink.
 The `virtual-terminal` dependency uses a Unix PTY; use a Unix-like environment for
 development and manual verification. Linux is the supported application target; platform-specific configuration
 paths do not establish support for other operating systems. Native build
@@ -70,13 +75,15 @@ dependencies are cached. The sample shortcuts refer to external executables;
 install the relevant program or use a small custom shortcut directory for manual
 checks. The full desktop requires a real terminal. `--help` exits through Clap
 before terminal initialization and is suitable for a noninteractive CLI check.
+`--doctor` also exits before terminal setup and directory creation, reporting
+configuration/tool availability with a meaningful exit status.
 
 ## Repository map
 
 | Path | Responsibility / main symbols |
 | --- | --- |
 | [src/main.rs](src/main.rs) | Module declarations, Tokio runtime, configuration directory selection, shortcut parsing, AppCUI setup and event loop. |
-| [src/args.rs](src/args.rs) | Clap-derived `Args`; optional positional `shortcut_dir: Option<PathBuf>`. |
+| [src/args.rs](src/args.rs) | Clap-derived `Args`; optional positional `shortcut_dir: Option<PathBuf>` and read-only `--doctor`. |
 | [src/config/catalog.rs](src/config/catalog.rs) | Starter merge, application IDs, categories, and native/external catalog entries. |
 | [src/runtime/latest.rs](src/runtime/latest.rs), [src/runtime/images.rs](src/runtime/images.rs), [src/runtime/files.rs](src/runtime/files.rs) | Bounded latest-request workers, image decode/geometry/render preparation, and directory enumeration. |
 | [src/runtime/processes.rs](src/runtime/processes.rs) | Managed PTY runner, independent PID observation, asynchronous process-tree cleanup, and shutdown task draining. |
@@ -87,11 +94,18 @@ before terminal initialization and is suitable for a noninteractive CLI check.
 | [src/runtime/pdf.rs](src/runtime/pdf.rs) | Bounded anonymous PDF snapshots, Poppler metadata/page rendering, cancellation, timeouts, and helper reaping after the event loop. |
 | [src/ui/native/](src/ui/native/) | Native Image Viewer, PDF Reader, File Browser, Music Player, ASCII Paint, and game windows and controls. |
 | [src/ui/native/games.rs](src/ui/native/games.rs), [src/ui/native/games/](src/ui/native/games/) | Shared game window/input/rendering and bounded Snake, 2048, and Minesweeper rules. |
-| [src/config/shortcuts.rs](src/config/shortcuts.rs) | Serde types generated through `nestify::nest!`; `parse_shortcut_dir` loads, deduplicates, and sorts shortcuts. |
+| [src/config/shortcuts.rs](src/config/shortcuts.rs) | Serde types generated through `nestify::nest!`; `parse_shortcut_dir` loads exact .toml files deterministically, validates unique names/identities, retains source paths and resolves launcher directories. |
 | [src/ui/desktop/view.rs](src/ui/desktop/view.rs) | `MyDesktop`, app-bar menus, shortcut-to-window handles, launch/show/hide/close commands, arrangement, preferences/locking integration, and panel updates. |
+| [src/ui/desktop/palette.rs](src/ui/desktop/palette.rs), [src/ui/desktop/workflow.rs](src/ui/desktop/workflow.rs) | Searchable command palette, shortcut rebinding, file associations, live catalog reload and desktop actions. |
+| [src/ui/desktop/launchers.rs](src/ui/desktop/launchers.rs) | Worker-backed TOML launcher manager and read-only diagnostics modal. |
+| [src/ui/desktop/workspaces.rs](src/ui/desktop/workspaces.rs), [src/config/session.rs](src/config/session.rs) | Four-workspace membership/visibility, bounded session storage, opt-in restoration and exit snapshots. |
+| [src/config/workflow.rs](src/config/workflow.rs) | Defaulted palette binding and extension-to-stable-application associations stored with preferences. |
+| [src/runtime/clipboard.rs](src/runtime/clipboard.rs) | Bounded asynchronous system/internal clipboard service, helper ownership, cancellation and shutdown. |
+| [src/runtime/files/operations.rs](src/runtime/files/operations.rs), [src/runtime/files/state.rs](src/runtime/files/state.rs) | Background filesystem mutations, safe publication/trash and bounded persistent browser state. |
+| [src/platform/diagnostics.rs](src/platform/diagnostics.rs) | Read-only configuration, executable, bundled browser, PDF and clipboard availability report. |
 | [src/ui/terminal/window.rs](src/ui/terminal/window.rs) | `TuiWindow`, child command/channels, canvas updates, resize synchronization, shutdown, file/folder selection. |
 | [src/ui/terminal/keyboard.rs](src/ui/terminal/keyboard.rs) | `CustomKeyboardControl`; UTF-8/application-cursor keys, paste, mouse translation, input queue errors, and focused child cursor painting. |
-| [src/runtime/terminal.rs](src/runtime/terminal.rs) | `TerminalParser` facade over pinned vendored WezTerm core; incremental byte feeds, grapheme projection, modes/cursor, mouse/paste encoding, bounded query replies, and palette resolution. |
+| [src/runtime/terminal.rs](src/runtime/terminal.rs) | `TerminalParser` facade over pinned vendored WezTerm core; incremental byte feeds, grapheme projection, bounded history/viewports, selection/literal search, modes/cursor, mouse/paste encoding, bounded query replies, and palette resolution. |
 | [src/ui/terminal/input_queue.rs](src/ui/terminal/input_queue.rs) | Ordered nonblocking 256 KiB pending input; adjacent motion/resize coalescing, small PTY writes, and explicit exhaustion errors. |
 | [src/config/preferences.rs](src/config/preferences.rs), [src/config/preferences/](src/config/preferences/) | Settings models/defaults, atomic storage, palette presets, palette drafts, and password-editing drafts. |
 | [src/config/preferences/ascii_background.rs](src/config/preferences/ascii_background.rs), [src/runtime/ascii_background.rs](src/runtime/ascii_background.rs) | Validated ASCII background text and bounded regular-file loading for Preference > Background. |
@@ -121,20 +135,27 @@ modules and expose shared types and entry points through crate-scoped re-exports
 
 ## Runtime flow
 
-1. `main` loads `preferences.toml` through `config::preferences`. With no shortcut
-   argument, shortcuts use the settings directory derived from
+1. `main` resolves configuration paths and handles `--doctor` before terminal
+   initialization or directory creation. Normal startup loads `preferences.toml`
+   through `config::preferences`. With no shortcut argument, shortcuts use the
+   settings directory derived from
    `ProjectDirs::from("com", "Julien-cpsn", "desktop-tui")`. An explicit shortcut
    directory does not change the settings location. The shortcut directory is
    created if necessary.
 2. `parse_shortcut_dir` recursively walks the selected directory, deserializes
-   matching files, excludes the exact settings file, drops duplicate shortcut names,
-   and sorts by taskbar position.
+   exact `.toml` files in sorted path order, excludes the exact settings file,
+   reports traversal/read/TOML errors, rejects duplicate names/IDs and sorts by
+   taskbar position. Source-relative launcher working directories become absolute.
 3. `MyDesktop::new` merges external starters without replacing user shortcuts.
    `on_start` creates Desktop/Application/Tilling menus and registers external
    shortcut command menus. Visible open windows receive taskbar buttons in opening
-   order; hidden windows are listed under Application > Background windows, then starts a 100 ms desktop timer for clock/panel updates and pending system
-   actions. Linux readings refresh in the background. Apps start on menu commands; native IDs and immutable external indices dispatch
-   independently of categories or labels. The application requests 255 AppCUI timer
+   order; hidden windows are listed under Application > Background windows.
+   A 100 ms desktop timer handles clock/panel updates, pending system actions
+   and session I/O. Linux readings refresh in the background. Apps start on
+   menu/palette commands; native IDs and retained external runtime
+   slots dispatch independently of categories or labels. Live reload matches
+   stable launcher IDs, updates enabled slots and retains removed entries while
+   their windows remain alive. The application requests 255 AppCUI timer
    slots for native windows and independently opened documents.
 4. `MyDesktop::create_window` passes the selected command, args, and window/terminal
    options to `TuiWindow::new`. Placeholder dialogs resolve `<FILE_PATH>` and
@@ -149,7 +170,10 @@ modules and expose shared types and entry points through crate-scoped re-exports
    Program and arguments are passed separately; the repository does not implicitly
    invoke a shell. A shell is used only when the shortcut explicitly names one.
 6. The terminal control and window share `Rc<RefCell<TerminalParser>>` on the UI thread. Focused UTF-8 keys, mode-aware paste, mouse events and query replies enter the ordered nonblocking input queue. Ctrl+C
-   is handled specially: it requests child termination and sets `should_exit`.
+   is byte 0x03 sent through the normal queue, leaving interrupt handling to the
+   child. Desktop preview-key hooks intercept the configured command prefix
+   before focused controls only outside menus/modals/locking; pressing it again
+   in the palette forwards its encoded key to the originating terminal.
 7. Each 25 ms window tick drains at most 64 output messages or 256 KiB, preserving
    a partial oversized message, then projects once to the canvas. PTY stdout and
    stderr are merged. Resize synchronizes PTY, emulator, canvas, input bounds and
@@ -163,12 +187,12 @@ modules and expose shared types and entry points through crate-scoped re-exports
    Input closure waits for the runner's final error/exit and remaining output;
    a broken writer with a live child gets a nonblocking one-second grace before
    error cleanup. Only the timer's observed result marks a terminal window closed.
-8. Titlebar closure, Ctrl+C, menu Close, and Desktop Exit share idempotent
+8. Titlebar closure, menu Close, and Desktop Exit share idempotent
    cleanup. A supervisor uses bmart (also used by virtual-terminal) to stop the
    child process tree asynchronously and retains the runner until child wait
    completes. Desktop Exit includes native windows and document handles; `main`
-   drains managed runner tasks and joins audio workers after the UI loop releases
-   its controls. Music workers coalesce desired controls, stream from bounded
+   drains managed runner tasks, clipboard helpers, file mutations, browser state and audio
+   workers after the UI loop releases its controls. Music workers coalesce desired controls, stream from bounded
    encoded input. A bounded PCM buffer feeds a nonblocking audio callback;
    closure silences it immediately, and device teardown joins its callback thread.
    The desktop denies AppCUI's Escape close request so an Escape prefix from an
@@ -193,21 +217,33 @@ The complete user example lives in [README.md](README.md). Source definitions in
 - Terminal padding and RGB background are optional. The saved terminal palette
   supplies default colors; an explicit shortcut background overrides its background.
   Padding affects both canvas placement and inner dimensions.
-- Names are deduplicated by first encountered entry. Walk order is not explicitly
-  sorted, so do not rely on a particular duplicate winning. Sorting uses
-  `position.unwrap_or(99)`; an omitted position is not guaranteed to sort last.
+- Optional `id` falls back to the name; names and IDs must be unique, including
+  starter fallbacks. Optional `working_directory` resolves against its source
+  TOML's parent. `source_path` is runtime metadata skipped by Serde; the editor
+  retains the original path and raw source so relative cwd/comments are editable.
+- Traversal is sorted by filename and strict `.toml` extension; I/O/traversal and
+  parse errors include path context. Stable sorting uses `position.unwrap_or(99)`;
+  an omitted position is not guaranteed to sort last.
+- Defaulted preferences `[workflow]` holds `palette_shortcut = "Ctrl+Space"` and
+  extension associations. Rebinding accepts Ctrl/Alt-modified keys or function
+  keys, excluding Ctrl+C, Escape and Enter. Open with persists explicit choices
+  by native identity or external stable launcher ID, independently of menu slots.
+- Session and browser state are outside shortcut discovery. Both use
+  `ProjectDirs::state_dir().unwrap_or(data_local_dir())`: `session.toml` for
+  windows and `state/browser.toml` for browser settings. On Linux this is normally
+  `$XDG_STATE_HOME/desktop-tui` or `~/.local/state/desktop-tui`.
 
 ## Current boundaries to understand before changing code
 
 These describe the current implementation, not promises to preserve defects:
 
-- Directory traversal errors are filtered out; readable matching files with I/O
-  or TOML errors propagate a failure. The extension check uses `ends_with("toml")`,
-  not strict equality. No separate validation layer currently checks all options.
+- Launcher loading rejects ambiguous names/identities and blank names/executables.
+  It does not execute tools to validate them; diagnostics resolves executable
+  availability, and launch failures use the normal managed error path.
 - AppCUI attribute macros generate base fields, command enums, and event wiring.
   Imports and trait implementations that look unused can participate in generated
   code; inspect macro usage before removing them.
-- Immutable shortcut indices connect external menu vectors and `app_windows`;
+- Retained runtime slots connect external menu vectors and `app_windows`;
   categorized launch commands map menu handles to application IDs. Taskbar entries
   have typed window targets and separate popup/selector handles, and are removed
   along with their owned menus on closure. Native windows
@@ -231,6 +267,69 @@ These describe the current implementation, not promises to preserve defects:
   the existing 10,000-cell-per-axis limit.
 - Several error paths currently use `unwrap`, `expect`, or `.ok()`. Their presence
   is not a rule to copy into new fallible code. See the coding conventions.
+
+## Desktop workflow and bounded terminal history
+
+The default Ctrl+Space command palette searches command labels by words and can
+launch apps, focus/hide/close tracked windows, open an independent Terminal, and
+operate on the originating terminal's Copy/Search/Paste/Live state. Desktop menu
+fallback and shortcut rebinding use the same actions. The palette is a modal;
+its second prefix returns a forwarding result rather than recursively opening it.
+Terminal taskbar and palette identities use the original application name, so
+temporary Copy/Search/clipboard feedback in a window title cannot change matches.
+Four workspace memberships track deliberate hidden state separately from being
+on another workspace. Switching/moving updates visibility without terminating
+processes; tiling uses only currently visible windows.
+
+Normal Desktop Exit snapshots windows before cleanup. Session storage accepts
+up to 256 windows and reports a limit error without replacing the previous
+snapshot if that bound is exceeded. Session I/O
+runs in a latest-request worker; storage validates version, workspace/geometry,
+path lengths and a 1 MiB file limit. Atomic mode-0600 replacement keeps sessions
+separate from launchers. A valid nonempty session is offered for restoration;
+no saved application starts until Restore is chosen. Missing applications,
+additional commands and files are reported individually. Snapshot entries store
+launch identity, actual picker bindings, document path, effective launch
+directory, workspace/hidden state and geometry; terminal
+output, process memory, unsaved buffers and game state are outside the format.
+Invalid/unreadable sessions are reported without silently overwriting them.
+While Exit waits for session I/O, windows are hidden and suspended and desktop
+launch commands are ignored, preserving the unsaved-work guard's decision.
+
+Primary history retains up to 2,000 rows and `200_000 / width` rows, with an
+8 MiB retained grapheme-text budget; live/alternate-screen storage has separate
+emulator geometry limits. Budget enforcement prunes the oldest complete rows
+while preserving recent history, live rows/cursor and surviving stable row IDs.
+It also runs after resize, including while the alternate screen is active. Stable
+core row IDs anchor the viewport during new output; eviction clamps it and invalidates evicted selections. Copy mode
+uses cell-aware keyboard/mouse anchors and extracts complete graphemes, joining
+soft wraps. Resize cancels selection/search and tries a nearby content anchor;
+repeated prefixes can make that choice ambiguous. Alternate-screen switches
+reset desktop view/copy/search state and use no-history storage.
+
+Literal search has a 256-scalar query, 4,096-match cap and incremental work of at
+most 16 rows/128 KiB per tick, resumable within large rows/cells. Streaming search
+preserves soft-wrap matches and searches the retained snapshot when the query
+is entered. Later output requires a new query/re-entry. Copy/paste text is capped
+at 256 KiB. The clipboard service owns one worker with eight queued requests and
+eight replies per client; foreground Wayland/X11 helpers have bounded I/O,
+two-second deadlines, process-group cleanup and shared in-memory fallback.
+Acquired clipboard ownership survives the copying window until replacement or
+desktop shutdown. UI callbacks poll results; main joins cleanup after the loop.
+Unix CrossTerm native text controls use AppCUI's thread-safe, bounded internal
+text cache, shared with the terminal worker. They perform no graphical I/O and
+cannot panic on a missing display. This is normal PTY/SSH operation; terminal
+clipboard helpers are optional. Paste from the SSH client still arrives as a
+terminal input event. Neither the internal cache nor optional remote graphical
+helpers claim to manage the SSH client's operating-system clipboard.
+
+LauncherManager loads, validates, saves and reloads on background workers.
+Existing source paths remain attached to entries; stale drafts and duplicate
+catalog identities stop Save before replacement. Same-directory synced temporary
+files are atomically renamed; new files use atomic no-replace publication.
+Explicit Reload matches stable IDs and leaves existing windows alive.
+Diagnostics shares one read-only report between the CLI and a worker-backed
+modal, with fatal configuration/Terminal errors and optional-feature warnings.
 
 ## Native application workers
 
@@ -328,7 +427,9 @@ for the desktop timer. The scrollable desktop OpenWithDialog uses stable AppId
 values and labels compatible native viewers separately from every external shortcut.
 Original PathBuf values drive navigation and document
 arguments; lossy text is used only for labels and the editable path display.
-The desktop routes case-insensitive MP3/WAV/FLAC/OGG extensions to Music Player,
+Saved Open with associations in preferences take precedence and refer to stable
+application identities; unavailable saved choices report an error. Otherwise the
+desktop routes case-insensitive MP3/WAV/FLAC/OGG extensions to Music Player,
 supported images to Image Viewer, PDFs to PDF Reader, `.asciipaint` to ASCII Paint, and other files to the
 configured Text editor. Audio opens preserve the original OS path and reuse and
 restore the native player; its worker loads and starts the selected track.
@@ -340,8 +441,31 @@ contexts set the child directory through virtual-terminal's current_dir API,
 without changing the desktop process directory. Default and document constructors
 retain their existing picker and append behavior. ProcessGuard owns cleanup for
 all terminal instances, including these launches and asynchronous launch failures.
-Native windows and all tracked terminal instances participate in arrangement,
-palette updates, Terminal Lock visibility snapshots, and desktop shutdown.
+
+Browser mutations use one-operation background workers with bounded channels,
+progress counters and cancellation. Same-filesystem rename/move uses Linux
+`renameat2(RENAME_NOREPLACE)`. Copy/cross-filesystem move stages completed content
+beside the destination before publication; confirmed file/symlink replacements
+carry identity snapshots and recoverable backups. Existing destination directories
+are rejected. Pinned directory descriptors and no-follow reads prevent parent or
+symlink replacement from redirecting publication/cleanup. Recursive limits are
+100,000 entries and depth 128; special files are refused and symlinks copy as links.
+Failed/incomplete operations retain sources or report recoverable paths. Only
+basic rwx permissions are copied; timestamps, ownership, ACLs, xattrs and hardlink
+topology are not preserved. Trash writes FreeDesktop restore metadata in the
+owner-checked user Trash and refuses cross-filesystem moves without permanent
+fallback. Linux /proc/self/fd and renameat2 are required.
+
+A bounded coalescing state worker reads/writes last location, view, hidden toggle,
+512-byte filter and up to 64 favorites. Browser state is capped at 128 KiB and
+stores exact Unix path bytes, with 4,096-byte path limits. Saves use synced,
+atomic mode-0600 files; close drains the final accepted state save outside UI
+callbacks. Reads reject symlinks and nonregular or unowned files without blocking
+on FIFOs. After the UI exits, main cancels and joins file-operation workers before
+draining state saves, so normal exit waits for mutation rollback and staging
+cleanup. Malformed initial state disables writes for that window and displays
+an error. Native windows and all tracked terminal instances participate in
+arrangement, palette updates, Terminal Lock visibility snapshots, and desktop shutdown.
 
 Native timer callbacks defer result polling while hidden, including during Terminal
 Lock. Failed terminal launch dialogs are also deferred until the window is visible.

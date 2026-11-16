@@ -6,3 +6,5 @@ pub(crate) use shortcuts::{
 };
 
 pub(crate) mod catalog;
+pub(crate) mod workflow;
+pub(crate) mod session;

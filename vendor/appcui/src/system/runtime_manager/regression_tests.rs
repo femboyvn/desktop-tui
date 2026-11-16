@@ -1,5 +1,22 @@
 use super::*;
 
+#[ModalWindow(response = bool, events = TimerEvents, internal=true)]
+struct TimerModal {}
+impl TimerEvents for TimerModal {}
+
+#[test]
+fn modal_registration_connects_a_timer_started_before_showing() {
+    let app = App::debug(80,24,"Paint.Enable(false)").timers_count(4).build().unwrap();
+    let mut modal = TimerModal { base: ModalWindow::new("Worker",layout!("a:c,w:30,h:10"),window::Flags::None) };
+    modal.timer().unwrap().start(std::time::Duration::from_millis(50));
+    let timer = modal.base.timer_handle;
+    let runtime = RuntimeManager::get();
+    let handle = runtime.add_modal_window(modal);
+    let receiver = runtime.timers_manager.control_handle(timer.index() as u8);
+    app.run();
+    assert_eq!(receiver,handle.cast::<()>(),"modal worker timers must route to the registered window");
+}
+
 #[test]
 fn file_picker_preserves_background_colors_when_requested() {
     let mut theme = Theme::new(crate::system::Themes::Light);

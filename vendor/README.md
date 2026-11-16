@@ -3,7 +3,23 @@
 Desktop-TUI uses two local Rust dependencies: AppCUI below, and the pinned
 [`tattoy-wezterm-term` 0.1.0-fork.5 core](wezterm-term/PATCHES.md). The core's
 patch record includes archive hash, VCS provenance, retained MIT license, and
-the grapheme/reply/capability corrections. The root Cargo.lock controls both.
+changes to graphemes, replies, capabilities and host-driven history retention.
+The root Cargo.lock controls both.
+
+The core additionally exposes `TerminalState::enforce_scrollback_limits` backed
+by `Screen` retention pruning. Desktop-TUI supplies its row and text budgets
+without simulating child output or moving its cursor. The helper removes the
+oldest complete rows, keeps live cells/cursor and surviving stable row IDs,
+and applies primary-history bounds even while the alternate screen is active.
+The facade invokes it after resize so quiet reflow cannot leave oversized history.
+This patch retains the upstream license and attribution; details belong in the
+[core patch record](wezterm-term/PATCHES.md).
+
+Application regressions for pruning/reflow are included in:
+
+```sh
+cargo test --locked runtime::terminal::tests
+```
 
 ## AppCUI
 
@@ -35,6 +51,31 @@ Modified packaged sources:
   dragging, keyboard input, resize, and scrolling cancel the pair.
 - `src/system/runtime_manager.rs`: keep double clicks in open menus from reaching
   controls underneath.
+
+- `src/ui/desktop/events.rs`, `src/ui/window/events.rs`, and
+  `src/system/runtime_manager.rs`: default preview-key hooks before focused-child
+  dispatch. Desktop commands can open the palette while a PTY owns focus;
+  open menus and modals retain their input. A modal preview hook lets the palette
+  consume its second prefix and return it for terminal forwarding. Default hooks
+  ignore input, preserving existing controls; Terminal Lock excludes desktop
+  shortcut handling at the application layer.
+
+- `src/system/runtime_manager.rs`: connect timers allocated before a modal is
+  registered to its final control handle and schedule their threads, matching
+  ordinary child registration. Launcher Manager and Diagnostics need this to
+  display background results. The regression
+  `modal_registration_connects_a_timer_started_before_showing` covers routing.
+
+- `src/backend/crossterm/input.rs`: periodically compare the kernel PTY size
+  while waiting for input, so missed resize notifications over a PTY/SSH relay
+  cannot leave the desktop at stale dimensions. Duplicate or invalid sizes are
+  ignored; keyboard/modifier notifications are retained.
+- `src/system/clipboard.rs` and `src/backend/crossterm/implementation.rs`:
+  a bounded, thread-safe internal text cache replaces Unix CrossTerm's
+  display-dependent clipboard calls in native controls. The application's
+  asynchronous terminal clipboard service shares this cache. Native copying
+  therefore works without DISPLAY/Wayland and cannot panic on X11 connection
+  failure. Graphical helper processes remain optional at the application layer.
 
 - `src/dialogs.rs`, `src/dialogs/open_save_dialog.rs`, `src/ui/common/control_base.rs`,
   and `src/system/runtime_manager.rs`: opt-in file-picker background preservation;
@@ -109,6 +150,17 @@ native controls explicitly decline these metadata variants. DoubleClick retains
 the native second-press callback and captures its matching release. Legacy
 backend event constructors were updated for compatibility; Linux CrossTerm is
 the supported, verified build target.
+
+Desktop workflow coverage lives in the application debug-backend tests:
+
+```sh
+cargo test --locked ui::desktop::palette::tests
+cargo test --locked ui::desktop::view::tests
+```
+
+These exercise palette filtering/cancellation/second-prefix forwarding and desktop
+integration without initializing a real terminal. Manual focus, modal, lock,
+rebind and outer-terminal interception checks remain necessary.
 
 Additional regressions and the complete dependency suite:
 

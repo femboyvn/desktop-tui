@@ -34,6 +34,7 @@ pub struct PreferencesDialog {
     background_browse: Handle<Button>,
     background_clear: Handle<Button>,
     background_worker: Option<LatestWorker<PathBuf, Result<AsciiBackground, String>>>,
+    workflow: crate::config::workflow::WorkflowPreferences,
 }
 impl PreferencesDialog {
     pub fn new(preferences: &Preferences, path: PathBuf) -> Self {
@@ -67,6 +68,7 @@ impl PreferencesDialog {
             background_browse: Handle::None,
             background_clear: Handle::None,
             background_worker: None,
+            workflow: preferences.workflow.clone(),
         };
         let mut content = PreferencesContent::new();
         content.add(Label::new("Preset", layout!("l:1,t:0,w:7,h:1")));
@@ -287,6 +289,7 @@ impl PreferencesDialog {
             Ok(mut preferences) => {
                 preferences.panel = self.panel_draft();
                 preferences.ascii_background = self.background.clone();
+                preferences.workflow = self.workflow.clone();
                 let action = self.password_change();
                 let result = match &mut self.security {
                     None => Err(anyhow::anyhow!(

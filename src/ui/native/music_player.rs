@@ -105,6 +105,7 @@ impl OnPaint for MusicStatus {
 #[Window(events = TimerEvents+WindowEvents)]
 pub(crate) struct MusicWindow { status: Handle<MusicStatus>, closing: bool }
 impl MusicWindow {
+    pub fn document_path(&self) -> Option<PathBuf> { self.control(self.status).and_then(|status| status.player.snapshot().path.clone()) }
     pub fn new() -> anyhow::Result<Self> {
         let status = MusicStatus::new()?;
         let mut window = Self {

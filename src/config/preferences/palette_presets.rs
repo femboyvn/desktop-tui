@@ -87,6 +87,7 @@ impl PalettePreset {
             ascii_background: super::AsciiBackground::default(),
             terminal_lock: None,
             panel: crate::config::preferences::PanelPreferences::default(),
+            workflow: crate::config::workflow::WorkflowPreferences::default(),
             desktop: DesktopPalette {
                 background: background_desktop,
                 surface,

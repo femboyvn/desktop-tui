@@ -187,6 +187,7 @@ impl OnMouseEvent for PdfCanvas {
 #[Window(events = TimerEvents+WindowEvents)]
 pub(crate) struct PdfWindow { canvas: Handle<PdfCanvas>, closing: bool }
 impl PdfWindow {
+    pub fn document_path(&self) -> Option<PathBuf> { self.control(self.canvas).and_then(|canvas| canvas.path.clone()) }
     pub fn new(path: Option<PathBuf>, background: Rgb) -> anyhow::Result<Self> {
         let canvas = PdfCanvas::new(path, background)?;
         let mut window = Self { base: Window::new("PDF Reader", layout!("a:c,w:80%,h:80%"), window::Flags::Sizeable), canvas: Handle::None, closing: false };

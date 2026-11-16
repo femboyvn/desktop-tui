@@ -723,6 +723,13 @@ impl TerminalState {
         &mut self.screen
     }
 
+    /// Apply host retention budgets to primary history even while the
+    /// alternate screen is active; alternate-screen rows are never history.
+    pub fn enforce_scrollback_limits(&mut self, max_rows: usize, max_text_bytes: usize) {
+        self.screen.screen.enforce_scrollback_limits(max_rows, max_text_bytes);
+        self.screen.alt_screen.enforce_scrollback_limits(0, 0);
+    }
+
     fn set_clipboard_contents(
         &self,
         selection: ClipboardSelection,

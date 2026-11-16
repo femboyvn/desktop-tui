@@ -58,6 +58,8 @@ pub struct Preferences {
     pub terminal_lock: Option<LockCredential>,
     #[serde(default)]
     pub panel: PanelPreferences,
+    #[serde(default)]
+    pub workflow: crate::config::workflow::WorkflowPreferences,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -65,6 +67,7 @@ impl Default for Preferences {
             ascii_background: super::AsciiBackground::default(),
             terminal_lock: None,
             panel: PanelPreferences::default(),
+            workflow: crate::config::workflow::WorkflowPreferences::default(),
             desktop: DesktopPalette {
                 background: Rgb(246, 217, 238),
                 surface: Rgb(255, 247, 252),

@@ -10,17 +10,17 @@ use std::time::Duration;
 pub(crate) enum BrowserAction { Open(PathBuf), OpenWith(PathBuf), OpenTerminal(PathBuf) }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ViewMode { Grid, Details }
-enum EntryRequest { Open(Entry), OpenWith(PathBuf), Terminal(Option<Entry>), Information(Entry), Refresh, Hidden }
+enum EntryRequest { Open(Entry), OpenWith(PathBuf), Terminal(Option<Entry>), Information(Entry), Refresh, Hidden, Mutate(Mutation,Option<Entry>), Favorite, Favorites }
 
 #[CustomControl(events = MenuEvents, overwrite = OnPaint+OnKeyPressed+OnMouseEvent+OnResize,
-    commands = Open+OpenWith+Terminal+Information+Refresh+Hidden+Grid+Details)]
+    commands = Open+OpenWith+Terminal+Information+Refresh+Hidden+Grid+Details+NewFile+NewFolder+Rename+Copy+Move+Trash+Favorite+Favorites)]
 struct BrowserEntries {
     entries: Vec<Entry>, selected: Option<usize>, offset: usize, viewport: Size, mode: ViewMode,
     request: Option<EntryRequest>, menu: Handle<Menu>, menu_target: Option<Option<Entry>>, loading: bool, hidden: bool,
 }
 impl BrowserEntries {
     fn new() -> Self {
-        Self { base: ControlBase::new(layout!("l:0,r:0,t:3,b:0"),true), entries: Vec::new(), selected: None,
+        Self { base: ControlBase::new(layout!("l:0,r:0,t:5,b:1"),true), entries: Vec::new(), selected: None,
             offset: 0, viewport: Size::new(0,0), mode: ViewMode::Grid, request: None,
             menu: Handle::None, menu_target: None, loading: false, hidden: false }
     }
@@ -69,6 +69,13 @@ impl BrowserEntries {
             self.request = self.selected_entry().map(EntryRequest::Information);
             return if self.request.is_some() { EventProcessStatus::Processed } else { EventProcessStatus::Ignored };
         }
+        let mutation = if key.value() == key!("Ctrl+N") { Some(Mutation::NewFile) }
+            else if key.value() == key!("Ctrl+Shift+N") { Some(Mutation::NewFolder) }
+            else if key.value() == key!("F2") { Some(Mutation::Rename) }
+            else if key.value() == key!("F5") { Some(Mutation::Copy) }
+            else if key.value() == key!("F6") { Some(Mutation::Move) }
+            else if key.value() == key!("Delete") { Some(Mutation::Trash) } else { None };
+        if let Some(mutation) = mutation { self.release_menu(); self.request = Some(EntryRequest::Mutate(mutation,self.selected_entry())); return EventProcessStatus::Processed; }
         if key.modifier != KeyModifier::None { return EventProcessStatus::Ignored; }
         let selected = self.selected.unwrap_or(0);
         let step = self.columns();
@@ -107,6 +114,13 @@ impl BrowserEntries {
         }
         menu.add(menu::Command::new(if target.is_some() { "Open in &terminal" } else { "Open &terminal here" },Key::None,Commands::Terminal));
         if target.is_some() { menu.add(menu::Command::new("File &information…",key!("Alt+Enter"),Commands::Information)); }
+        if target.is_some() {
+            for (caption,command) in [("&Rename…",Commands::Rename),("&Copy to…",Commands::Copy),("&Move to…",Commands::Move),("Move to &trash…",Commands::Trash)] { menu.add(menu::Command::new(caption,Key::None,command)); }
+        }
+        menu.add(menu::Command::new("New &file…",key!("Ctrl+N"),Commands::NewFile));
+        menu.add(menu::Command::new("New f&older…",key!("Ctrl+Shift+N"),Commands::NewFolder));
+        menu.add(menu::Command::new("Add/remove current f&avorite",Key::None,Commands::Favorite));
+        menu.add(menu::Command::new("Fa&vorite folders…",Key::None,Commands::Favorites));
         menu.add(menu::Separator::new());
         menu.add(menu::Command::new("&Refresh",Key::None,Commands::Refresh));
         menu.add(menu::Command::new(if self.hidden { "&Hidden: on" } else { "&Hidden: off" },Key::None,Commands::Hidden));
@@ -130,6 +144,13 @@ impl MenuEvents for BrowserEntries {
             Commands::Refresh => self.request = Some(EntryRequest::Refresh),
             Commands::Hidden => self.request = Some(EntryRequest::Hidden),
             Commands::Grid => self.set_mode(ViewMode::Grid), Commands::Details => self.set_mode(ViewMode::Details),
+            Commands::NewFile => self.request = Some(EntryRequest::Mutate(Mutation::NewFile,None)),
+            Commands::NewFolder => self.request = Some(EntryRequest::Mutate(Mutation::NewFolder,None)),
+            Commands::Rename => self.request = target.map(|entry| EntryRequest::Mutate(Mutation::Rename,Some(entry))),
+            Commands::Copy => self.request = target.map(|entry| EntryRequest::Mutate(Mutation::Copy,Some(entry))),
+            Commands::Move => self.request = target.map(|entry| EntryRequest::Mutate(Mutation::Move,Some(entry))),
+            Commands::Trash => self.request = target.map(|entry| EntryRequest::Mutate(Mutation::Trash,Some(entry))),
+            Commands::Favorite => self.request = Some(EntryRequest::Favorite), Commands::Favorites => self.request = Some(EntryRequest::Favorites),
         }
         self.release_menu();
     }
@@ -224,6 +245,92 @@ impl ButtonEvents for FileInformationDialog {
     }
 }
 
+fn dialog_path(original: &std::path::Path, text: &str) -> PathBuf {
+    if text == original.to_string_lossy() { original.to_owned() } else { PathBuf::from(text) }
+}
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+enum Mutation { NewFile, NewFolder, Rename, Copy, Move, Trash }
+struct Favorite { path: PathBuf, label: String }
+impl listview::ListItem for Favorite {
+    fn columns_count() -> u16 { 1 }
+    fn column(_: u16) -> Column { Column::new("Favorite folders",66,TextAlignment::Left) }
+    fn render_method(&self, _: u16) -> Option<listview::RenderMethod<'_>> { Some(listview::RenderMethod::Text(&self.label)) }
+}
+#[derive(Debug,PartialEq,Eq)]
+enum FavoriteChoice { Open(PathBuf), Remove(PathBuf) }
+#[ModalWindow(response = FavoriteChoice, events = ListViewEvents<Favorite>+ButtonEvents)]
+struct FavoritesDialog { listing: Handle<ListView<Favorite>>, remove: Handle<Button>, cancel: Handle<Button> }
+impl FavoritesDialog {
+    fn new(paths: &[PathBuf]) -> Self {
+        let mut dialog = Self { base: ModalWindow::new("Favorites — Enter to open",layout!("a:c,w:74,h:18"),window::Flags::Sizeable),listing: Handle::None,remove: Handle::None,cancel: Handle::None };
+        let mut list = ListView::new(layout!("l:1,r:1,t:1,b:3"),listview::Flags::ScrollBars); list.add_items(paths.iter().cloned().map(|path| Favorite { label: path.to_string_lossy().into_owned(), path }).collect());
+        dialog.listing = dialog.add(list);
+        dialog.remove = dialog.add(Button::new("&Remove",layout!("l:12,b:0,w:18")));
+        dialog.cancel = dialog.add(Button::new("&Cancel",layout!("r:12,b:0,w:18"))); dialog.base.request_focus_for_control(dialog.listing); dialog
+    }
+    fn picker(paths: &[PathBuf]) -> Self {
+        let mut dialog = Self::new(paths); let handle = dialog.remove;
+        if let Some(button) = dialog.control_mut(handle) { button.set_enabled(false); }
+        dialog
+    }
+}
+impl ListViewEvents<Favorite> for FavoritesDialog {
+    fn on_item_action(&mut self, handle: Handle<ListView<Favorite>>, index: usize) -> EventProcessStatus {
+        if let Some(path) = self.control(handle).and_then(|list| list.item(index)).map(|favorite| favorite.path.clone()) { self.exit_with(FavoriteChoice::Open(path)); }
+        EventProcessStatus::Processed
+    }
+}
+impl ButtonEvents for FavoritesDialog {
+    fn on_pressed(&mut self, handle: Handle<Button>) -> EventProcessStatus {
+        if handle == self.remove {
+            if let Some(path) = self.control(self.listing).and_then(|list| list.current_item()).map(|favorite| favorite.path.clone()) { self.exit_with(FavoriteChoice::Remove(path)); }
+        } else if handle == self.cancel { self.exit(); } else { return EventProcessStatus::Ignored; }
+        EventProcessStatus::Processed
+    }
+}
+
+#[ModalWindow(response = PathBuf, events = ButtonEvents+WindowEvents)]
+struct DestinationDialog {
+    folder: Handle<TextField>, name: Handle<TextField>, original_folder: PathBuf, original_name: PathBuf,
+    favorites: Vec<PathBuf>, choose_favorite: Handle<Button>, apply: Handle<Button>, cancel: Handle<Button>, status: Handle<Label>,
+}
+impl DestinationDialog {
+    fn new(title: &str, source: &std::path::Path, favorites: &[PathBuf]) -> Self {
+        let original_folder = source.parent().unwrap_or(std::path::Path::new("/")).to_owned();
+        let original_name = source.file_name().map(PathBuf::from).unwrap_or_default();
+        let mut dialog = Self { base: ModalWindow::new(title,layout!("a:c,w:76,h:13"),window::Flags::None),
+            folder: Handle::None,name: Handle::None,original_folder,original_name,favorites: favorites.to_vec(),choose_favorite: Handle::None,apply: Handle::None,cancel: Handle::None,status: Handle::None };
+        dialog.add(Label::new("Destination folder (absolute or relative to the browser)",layout!("l:2,r:2,t:1,h:1")));
+        let text = dialog.original_folder.to_string_lossy().into_owned(); dialog.folder = dialog.add(TextField::new(&text,layout!("l:2,r:2,t:2,h:1"),textfield::Flags::None));
+        dialog.add(Label::new("Filename (unchanged names retain exact OS bytes)",layout!("l:2,r:2,t:4,h:1")));
+        let text = dialog.original_name.to_string_lossy().into_owned(); dialog.name = dialog.add(TextField::new(&text,layout!("l:2,r:2,t:5,h:1"),textfield::Flags::None));
+        dialog.status = dialog.add(Label::new("Existing files require confirmation; folders are never merged.",layout!("l:2,r:2,t:7,h:2")));
+        dialog.choose_favorite = dialog.add(Button::new("&Favorites…",layout!("l:2,b:0,w:18")));
+        dialog.apply = dialog.add(Button::new("&Apply",layout!("l:28,b:0,w:18"))); dialog.cancel = dialog.add(Button::new("&Cancel",layout!("r:2,b:0,w:18")));
+        dialog.base.request_focus_for_control(dialog.folder); dialog
+    }
+    fn destination(&self) -> anyhow::Result<PathBuf> {
+        let folder = self.control(self.folder).map(|field| field.text()).unwrap_or(""); let name = self.control(self.name).map(|field| field.text()).unwrap_or("");
+        anyhow::ensure!(!folder.is_empty() && !folder.contains('\0'),"Choose a nonempty destination folder");
+        anyhow::ensure!(!name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\0'),"Enter one filename without / or NUL");
+        Ok(dialog_path(&self.original_folder,folder).join(dialog_path(&self.original_name,name)))
+    }
+    fn submit(&mut self) { match self.destination() { Ok(path) => self.exit_with(path), Err(error) => { let handle = self.status; if let Some(status) = self.control_mut(handle) { status.set_caption(&error.to_string()); } } } }
+}
+impl WindowEvents for DestinationDialog { fn on_accept(&mut self) { self.submit(); } }
+impl ButtonEvents for DestinationDialog {
+    fn on_pressed(&mut self, handle: Handle<Button>) -> EventProcessStatus {
+        if handle == self.apply { self.submit(); } else if handle == self.cancel { self.exit(); }
+        else if handle == self.choose_favorite {
+            if let Some(FavoriteChoice::Open(path)) = FavoritesDialog::picker(&self.favorites).show() {
+                let text = path.to_string_lossy().into_owned(); self.original_folder = path; let handle = self.folder; if let Some(field) = self.control_mut(handle) { field.set_text(&text); }
+            }
+        } else { return EventProcessStatus::Ignored; }
+        EventProcessStatus::Processed
+    }
+}
+
+
 #[Window(events = TimerEvents+WindowEvents+TextFieldEvents+ButtonEvents)]
 pub(crate) struct BrowserWindow {
     path: PathBuf,
@@ -235,25 +342,52 @@ pub(crate) struct BrowserWindow {
     mode_button: Handle<Button>,
     hidden: bool,
     closing: bool,
+    filter_field: Handle<TextField>, favorite_button: Handle<Button>, favorites_button: Handle<Button>, cancel_operation: Handle<Button>, status: Handle<Label>,
+    saved: files::BrowserState, state_worker: Option<files::StateWorker>, state_ready: bool, restore_location: bool,
+    operation: files::OperationWorker,
     worker: LatestWorker<(PathBuf, bool), Result<Listing, String>>,
     action: Option<BrowserAction>,
     pending_entries: VecDeque<Entry>,
 }
 impl BrowserWindow {
-    pub fn new() -> anyhow::Result<Self> { Self::at(home_directory()) }
-    fn at(path: PathBuf) -> anyhow::Result<Self> {
+    pub fn new() -> anyhow::Result<Self> { Self::with_user_state(home_directory(),true) }
+    /// Open an explicit location while loading saved view/filter/favorites in the background.
+    pub fn new_at(path: PathBuf) -> anyhow::Result<Self> { Self::with_user_state(path,false) }
+    pub fn current_path(&self) -> Option<PathBuf> { (!self.closing).then(|| self.path.clone()) }
+    fn with_user_state(path: PathBuf, restore: bool) -> anyhow::Result<Self> {
+        // Headless tests must never write host user state; persistence tests inject isolated paths.
+        let state_path = if cfg!(test) { Ok(None) } else { files::default_state_path().map(Some) };
+        let mut window = Self::with_state(path,state_path.as_ref().ok().cloned().flatten(),restore)?;
+        if let Err(error) = state_path { window.set_status(&format!("Browser state unavailable: {error:#}")); }
+        Ok(window)
+    }
+    #[cfg(test)]
+    fn at(path: PathBuf) -> anyhow::Result<Self> { Self::with_state(path,None,false) }
+    fn with_state(path: PathBuf, state_path: Option<PathBuf>, restore_location: bool) -> anyhow::Result<Self> {
+        let path = if path.is_absolute() { path } else { std::env::current_dir()?.join(path) };
+        let mut state_worker = state_path.map(files::StateWorker::new).transpose()?;
+        if let Some(worker) = &mut state_worker { worker.submit(files::StateJob::Load); }
+        let state_ready = state_worker.is_none();
         let worker = LatestWorker::new(|(path, hidden): (PathBuf, bool)| files::list_directory(&path, hidden).map_err(|e| format!("{e:#}")))?;
         let mut window = Self {
             base: Window::new("File Browser — Enter Open | Alt+U Parent | Alt+R Refresh | Alt+H Hidden", layout!("a:c,w:90%,h:80%"), window::Flags::Sizeable),
             path, path_field: Handle::None, listing: Handle::None, up: Handle::None, refresh: Handle::None, hidden_button: Handle::None, mode_button: Handle::None,
             hidden: false, closing: false, worker, action: None, pending_entries: VecDeque::new(),
+            filter_field: Handle::None, favorite_button: Handle::None, favorites_button: Handle::None, cancel_operation: Handle::None, status: Handle::None,
+            saved: files::BrowserState::default(), state_worker, state_ready, restore_location, operation: files::OperationWorker::new()?,
         };
         let path_text = window.path.to_string_lossy().into_owned();
-        window.path_field = window.add(TextField::new(&path_text, layout!("l:0,r:0,t:0,h:1"), textfield::Flags::None));
+        window.path_field = window.add(TextField::new(&path_text, layout!("l:0,r:0,t:0,h:1"), textfield::Flags::ProcessEnter));
         window.up = window.add(Button::with_type("&Up", layout!("x:0,y:1,w:10"), button::Type::Flat));
         window.refresh = window.add(Button::with_type("&Refresh", layout!("x:11,y:1,w:12"), button::Type::Flat));
         window.hidden_button = window.add(Button::with_type("&Hidden: off", layout!("x:24,y:1,w:16"), button::Type::Flat));
         window.mode_button = window.add(Button::with_type("&View: Grid", layout!("x:41,y:1,w:17"), button::Type::Flat));
+        window.favorite_button = window.add(Button::with_type("Add/remove favorite",layout!("x:0,y:2,w:23"),button::Type::Flat));
+        window.favorites_button = window.add(Button::with_type("Favorites…",layout!("x:24,y:2,w:17"),button::Type::Flat));
+        window.cancel_operation = window.add(Button::with_type("Cancel operation",layout!("x:42,y:2,w:21"),button::Type::Flat));
+        window.add(Label::new("Filter (Enter):",layout!("x:0,y:3,w:15,h:1")));
+        window.filter_field = window.add(TextField::new("",layout!("l:15,r:0,t:3,h:1"),textfield::Flags::ProcessEnter));
+        window.status = window.add(Label::new("F2 Rename | F5 Copy | F6 Move | Delete Trash | Ctrl+N File | Ctrl+Shift+N Folder",layout!("l:0,r:0,b:0,h:1")));
         window.listing = window.add(BrowserEntries::new());
         // Keep directories first: user sorting is deliberately disabled for this view.
         window.timer().ok_or_else(|| anyhow::anyhow!("File Browser timer unavailable"))?.start(Duration::from_millis(40));
@@ -277,12 +411,13 @@ impl BrowserWindow {
         if let Some(button) = self.control_mut(button) { button.set_caption(if hidden { "&Hidden: on" } else { "&Hidden: off" }); }
         let handle = self.listing;
         if let Some(list) = self.control_mut(handle) { list.hidden = hidden; }
-        self.refresh();
+        self.save_view(); self.refresh();
     }
     pub fn take_action(&mut self) -> Option<BrowserAction> { if self.is_visible() && !self.closing { self.action.take() } else { None } }
     pub fn is_closing(&self) -> bool { self.closing }
     pub fn shutdown(&mut self) { self.cleanup(); self.close(); }
     fn cleanup(&mut self) {
+        self.operation.cancel();
         self.closing = true; self.worker.close(); self.action = None; self.pending_entries.clear();
         let handle = self.listing;
         if let Some(list) = self.control_mut(handle) { list.invalidate(); }
@@ -306,7 +441,9 @@ impl BrowserWindow {
                 self.action = Some(BrowserAction::OpenTerminal(path));
             }
             Some(EntryRequest::Information(entry)) => { FileInformationDialog::new(&entry).show(); }
-            Some(EntryRequest::Refresh) => self.refresh(), Some(EntryRequest::Hidden) => self.toggle_hidden(), None => {}
+            Some(EntryRequest::Refresh) => self.refresh(), Some(EntryRequest::Hidden) => self.toggle_hidden(),
+            Some(EntryRequest::Mutate(mutation,entry)) => self.mutate(mutation,entry),
+            Some(EntryRequest::Favorite) => self.toggle_favorite(), Some(EntryRequest::Favorites) => self.show_favorites(), None => {}
         }
         let mode = self.control(handle).map(|list| list.mode);
         let button = self.mode_button;
@@ -314,11 +451,72 @@ impl BrowserWindow {
             let caption = if mode == Some(ViewMode::Details) { "View: Details" } else { "View: Grid" };
             if button.caption() != caption { button.set_caption(&format!("&{caption}")); changed = true; }
         }
+        if mode.is_some_and(|mode| (mode == ViewMode::Details) != self.saved.details) { self.save_view(); }
         changed
+    }
+    fn set_status(&mut self, text: &str) { let handle = self.status; if let Some(status) = self.control_mut(handle) { status.set_caption(text); } }
+    fn save_view(&mut self) {
+        if !self.state_ready { return; }
+        self.saved.location = Some(self.path.clone()); self.saved.hidden = self.hidden;
+        self.saved.details = self.control(self.listing).is_some_and(|list| list.mode == ViewMode::Details);
+        if let Some(worker) = &mut self.state_worker { worker.submit(files::StateJob::Save(self.saved.clone())); }
+    }
+    fn toggle_favorite(&mut self) {
+        if !self.state_ready { self.set_status("Favorites are still loading"); return; }
+        if let Some(index) = self.saved.favorites.iter().position(|path| *path == self.path) { self.saved.favorites.remove(index); self.set_status("Favorite removed"); }
+        else if self.saved.favorites.len() < 64 { self.saved.favorites.push(self.path.clone()); self.set_status("Current folder added to favorites"); }
+        else { self.set_status("Favorite limit reached (64); remove a favorite first"); return; }
+        self.save_view();
+    }
+    fn show_favorites(&mut self) {
+        if !self.state_ready { self.set_status("Favorites are still loading"); return; }
+        match FavoritesDialog::new(&self.saved.favorites).show() {
+            Some(FavoriteChoice::Open(path)) => self.navigate(path),
+            Some(FavoriteChoice::Remove(path)) => { self.saved.favorites.retain(|favorite| *favorite != path); self.save_view(); self.set_status("Favorite removed"); }
+            None => {}
+        }
+    }
+    fn start_operation(&mut self, operation: files::Operation) {
+        match self.operation.submit(operation) { Ok(()) => self.set_status("Working… Cancel operation stops before publication"), Err(error) => self.set_status(&format!("{error:#}")) }
+    }
+    fn mutate(&mut self, mutation: Mutation, entry: Option<Entry>) {
+        if self.operation.busy() { self.set_status("Another file operation is running; cancel it or wait"); return; }
+        if matches!(mutation,Mutation::NewFile | Mutation::NewFolder) {
+            let title = if mutation == Mutation::NewFolder { "Create folder" } else { "Create empty file" };
+            if let Some(name) = dialogs::input::<String>(title,"Name in the current folder (spaces are preserved)",None,None) {
+                if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\0') { self.set_status("Enter one nonempty filename without / or NUL"); return; }
+                self.start_operation(files::Operation::Create { path: self.path.join(name), directory: mutation == Mutation::NewFolder });
+            }
+            return;
+        }
+        let Some(entry) = entry else { self.set_status("Select an entry first"); return; };
+        if mutation == Mutation::Trash {
+            if dialogs::validate("Move to user trash?",&format!("Move {} to the user trash? Restoration metadata will be retained. No permanent deletion fallback is used.",entry.path.display())) {
+                self.start_operation(files::Operation::Trash { source: entry.path, root: None });
+            }
+            return;
+        }
+        let destination = if mutation == Mutation::Rename {
+            let original = entry.path.file_name().map(PathBuf::from).unwrap_or_default();
+            let initial = original.to_string_lossy().into_owned();
+            dialogs::input::<String>("Rename entry","New filename (unchanged opaque names retain exact bytes)",Some(initial),None).and_then(|text| {
+                if text.is_empty() || text == "." || text == ".." || text.contains('/') || text.contains('\0') { self.set_status("Enter one filename without / or NUL"); None }
+                else { Some(self.path.join(dialog_path(&original,&text))) }
+            })
+        } else { DestinationDialog::new(if mutation == Mutation::Copy { "Copy to folder and filename" } else { "Move to folder and filename" },&entry.path,&self.saved.favorites).show() };
+        if let Some(destination) = destination {
+            let destination = if destination.is_absolute() { destination } else { self.path.join(destination) };
+            self.start_operation(files::Operation::Transfer { source: entry.path, destination, moving: mutation != Mutation::Copy, approval: None });
+        }
     }
 }
 impl TextFieldEvents for BrowserWindow {
-    fn on_validate(&mut self, _: Handle<TextField>, text: &str) -> EventProcessStatus {
+    fn on_validate(&mut self, handle: Handle<TextField>, text: &str) -> EventProcessStatus {
+        if handle == self.filter_field {
+            if !self.state_ready { self.set_status("Browser preferences are still loading; apply the filter again"); return EventProcessStatus::Processed; }
+            if text.len() > 512 { self.set_status("Filename filter is limited to 512 bytes"); return EventProcessStatus::Processed; }
+            self.saved.filter = text.to_owned(); self.save_view(); self.refresh(); return EventProcessStatus::Processed;
+        }
         // Unedited display text can be lossy for non-UTF-8 directories; retain the original OS path.
         let path = if text == self.path.to_string_lossy() { self.path.clone() } else { PathBuf::from(text) };
         self.navigate(path);
@@ -330,6 +528,9 @@ impl ButtonEvents for BrowserWindow {
         if handle == self.up { self.parent(); }
         else if handle == self.refresh { self.refresh(); }
         else if handle == self.hidden_button { self.toggle_hidden(); }
+        else if handle == self.favorite_button { self.toggle_favorite(); }
+        else if handle == self.favorites_button { self.show_favorites(); }
+        else if handle == self.cancel_operation { self.operation.cancel(); self.set_status("Cancellation requested; already published work is retained"); }
         else if handle == self.mode_button {
             let handle = self.listing;
             if let Some(list) = self.control_mut(handle) { list.set_mode(if list.mode == ViewMode::Grid { ViewMode::Details } else { ViewMode::Grid }); list.request_focus(); }
@@ -343,6 +544,36 @@ impl TimerEvents for BrowserWindow {
     fn on_update(&mut self, _: u64) -> EventProcessStatus {
         if self.closing || !self.is_visible() { return EventProcessStatus::Ignored; }
         let mut changed = self.poll_request();
+        if let Some(result) = self.state_worker.as_mut().and_then(|worker| worker.poll()) {
+            match result {
+                Ok(Some(saved)) => {
+                    self.saved = saved; self.hidden = self.saved.hidden; self.state_ready = true;
+                    let handle = self.listing; let mode = if self.saved.details { ViewMode::Details } else { ViewMode::Grid }; let hidden = self.hidden;
+                    if let Some(list) = self.control_mut(handle) { list.set_mode(mode); list.hidden = hidden; }
+                    let handle = self.filter_field; let filter = self.saved.filter.clone(); if let Some(field) = self.control_mut(handle) { field.set_text(&filter); }
+                    let handle = self.hidden_button; if let Some(button) = self.control_mut(handle) { button.set_caption(if hidden { "&Hidden: on" } else { "&Hidden: off" }); }
+                    let target = if self.restore_location { self.saved.location.clone().unwrap_or_else(|| self.path.clone()) } else { self.path.clone() };
+                    self.navigate(target);
+                }
+                Ok(None) => {},
+                Err(error) => { self.set_status(&format!("Browser state: {error}")); if !self.state_ready { self.state_worker = None; self.state_ready = true; } }
+            }
+            changed = true;
+        }
+        if let Some(outcome) = self.operation.poll() {
+            match outcome {
+                files::Outcome::Complete(message) => { self.set_status(&message); self.refresh(); }
+                files::Outcome::Failed(error) => { self.set_status(&error); dialogs::error("File operation stopped",&error); }
+                files::Outcome::Confirm(operation) => {
+                    let destination = match &operation { files::Operation::Transfer { destination, .. } => destination.display().to_string(), _ => String::new() };
+                    if dialogs::validate("Replace existing file?",&format!("Replace {destination}? The source and destination will be checked again before publication.")) { self.start_operation(operation); }
+                    else { self.set_status("Replacement canceled; source and destination preserved"); }
+                }
+            }
+            changed = true;
+        } else if self.operation.busy() {
+            let (entries,bytes) = self.operation.progress(); self.set_status(&format!("Working: {entries} entries, {bytes} bytes | Cancel operation to stop")); changed = true;
+        }
         match self.worker.poll() {
             Some(Ok(listing)) => {
                 self.path = listing.path;
@@ -352,6 +583,7 @@ impl TimerEvents for BrowserWindow {
                 let handle = self.listing;
                 if let Some(list) = self.control_mut(handle) { list.clear(); list.loading = false; list.request_focus(); }
                 self.pending_entries = listing.entries.into();
+                self.save_view();
                 changed = true;
             }
             Some(Err(error)) => {
@@ -364,7 +596,8 @@ impl TimerEvents for BrowserWindow {
         }
         if !self.pending_entries.is_empty() {
             // Large directories are inserted incrementally to keep callbacks short.
-            let batch = self.pending_entries.drain(..self.pending_entries.len().min(256)).collect();
+            let filter = self.saved.filter.to_lowercase();
+            let batch = self.pending_entries.drain(..self.pending_entries.len().min(256)).filter(|entry| filter.is_empty() || entry.name.to_lowercase().contains(&filter)).collect();
             let handle = self.listing;
             if let Some(list) = self.control_mut(handle) { list.add_items(batch); }
             changed = true;
@@ -387,6 +620,109 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "directory result did not arrive");
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+    #[test]
+    fn stale_favorite_can_be_removed_without_navigation_and_releases_a_full_favorite_list() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new();
+        let app = App::debug(100,32,"Paint.Enable(false)\nKey.Pressed(Tab)\nKey.Pressed(Enter)").build().unwrap();
+        let store = dir.path().join("state/browser.toml");
+        let favorites = (0..64).map(|index| dir.path().join(format!("missing-{index}"))).collect::<Vec<_>>();
+        let removed = favorites[0].clone(); std::fs::create_dir(&removed).unwrap();
+        files::save_state(&store,&files::BrowserState { favorites, ..files::BrowserState::default() }).unwrap();
+        std::fs::remove_dir(&removed).unwrap();
+        let mut window = BrowserWindow::with_state(dir.path().to_owned(),Some(store.clone()),false).unwrap();
+        pump_until(&mut window,|w| w.state_ready && !w.control(w.listing).unwrap().loading);
+        window.show_favorites();
+        assert_eq!(window.saved.favorites.len(),63); assert!(!window.saved.favorites.contains(&removed));
+        assert_eq!(window.current_path(),Some(dir.path().to_owned()));
+        let deadline = std::time::Instant::now()+Duration::from_secs(3);
+        while files::load_state(&store).unwrap().favorites.contains(&removed) { assert!(std::time::Instant::now()<deadline); std::thread::yield_now(); }
+        window.toggle_favorite(); assert_eq!(window.saved.favorites.len(),64); assert!(window.saved.favorites.contains(&dir.path().to_owned()));
+        window.shutdown(); app.run();
+    }
+    #[test]
+    fn create_rename_and_cancel_dialogs_reach_native_worker_without_blocking_navigation() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new();
+        let app = App::debug(100,32,"Paint.Enable(false)\nKey.TypeText('created 文 file')\nKey.Pressed(Enter)").build().unwrap();
+        let mut window = BrowserWindow::at(dir.path().to_owned()).unwrap();
+        window.mutate(Mutation::NewFile,None);
+        pump_until(&mut window,|w| !w.operation.busy());
+        assert!(dir.path().join("created 文 file").exists()); window.shutdown(); app.run();
+        let app = App::debug(100,32,"Paint.Enable(false)\nKey.Pressed(Ctrl+A)\nKey.TypeText('renamed 文 file')\nKey.Pressed(Enter)").build().unwrap();
+        let mut window = BrowserWindow::at(dir.path().to_owned()).unwrap();
+        let entry = files::list_directory(dir.path(),false).unwrap().entries.remove(0);
+        window.mutate(Mutation::Rename,Some(entry)); pump_until(&mut window,|w| !w.operation.busy());
+        assert!(!dir.path().join("created 文 file").exists()); assert!(dir.path().join("renamed 文 file").exists()); window.shutdown(); app.run();
+        let app = App::debug(100,32,"Paint.Enable(false)\nKey.Pressed(Escape)").build().unwrap();
+        let mut window = BrowserWindow::at(dir.path().to_owned()).unwrap(); window.mutate(Mutation::NewFolder,None);
+        assert!(!window.operation.busy()); assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(),1); window.shutdown(); app.run();
+    }
+    #[test]
+    fn favorite_chooser_returns_exact_opaque_folder_and_filter_and_favorites_save_atomically() {
+        use std::os::unix::ffi::OsStringExt;
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new();
+        let opaque = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/favorite \xff".to_vec()));
+        let app = App::debug(100,32,"Paint.Enable(false)\nKey.Pressed(Enter)").build().unwrap();
+        assert_eq!(FavoritesDialog::new(std::slice::from_ref(&opaque)).show(),Some(FavoriteChoice::Open(opaque))); app.run();
+        let store = dir.path().join("state/browser.toml");
+        let app = App::debug(100,32,"Paint.Enable(false)").build().unwrap();
+        let mut window = BrowserWindow::with_state(dir.path().to_owned(),Some(store.clone()),false).unwrap();
+        pump_until(&mut window,|w| w.state_ready && !w.control(w.listing).unwrap().loading);
+        window.toggle_favorite(); let handle = window.filter_field;
+        TextFieldEvents::on_validate(&mut window,handle," 文 ");
+        let deadline = std::time::Instant::now()+Duration::from_secs(3);
+        loop { TimerEvents::on_update(&mut window,0); if files::load_state(&store).is_ok_and(|state| state.filter == " 文 " && state.favorites == vec![dir.path().to_owned()]) { break; } assert!(std::time::Instant::now()<deadline); std::thread::yield_now(); }
+        window.toggle_favorite(); assert!(window.saved.favorites.is_empty()); window.shutdown(); app.run();
+    }
+    #[test]
+    fn typing_filter_and_pressing_enter_routes_validation_through_the_real_control() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new();
+        let store = dir.path().join("state/browser.toml");
+        let mut app = App::debug(100,32,"Paint.Enable(false)\nKey.Pressed(Tab,9)\nKey.TypeText('smoke')\nKey.Pressed(Enter)").build().unwrap();
+        let mut window = BrowserWindow::with_state(dir.path().to_owned(),Some(store.clone()),false).unwrap();
+        pump_until(&mut window,|w| w.state_ready && !w.control(w.listing).unwrap().loading);
+        app.add_window(window); app.run(); files::finish_shutdown();
+        assert_eq!(files::load_state(&store).unwrap().filter,"smoke");
+    }
+    #[test]
+    fn destination_dialog_retains_opaque_filename_when_only_folder_changes_and_escape_cancels() {
+        use std::os::unix::ffi::OsStringExt;
+        let _lock = UI_LOCK.lock().unwrap(); let app = App::debug(100,32,"Paint.Enable(false)").build().unwrap();
+        let source = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/opaque \xff".to_vec()));
+        let mut dialog = DestinationDialog::new("Copy",&source,&[]);
+        let folder = dialog.folder; dialog.control_mut(folder).unwrap().set_text("/tmp/new 文 folder");
+        assert_eq!(dialog.destination().unwrap(),PathBuf::from("/tmp/new 文 folder").join(source.file_name().unwrap()));
+        let name = dialog.name; dialog.control_mut(name).unwrap().set_text("../escape"); assert!(dialog.destination().is_err());
+        app.run();
+        let app = App::debug(100,32,"Key.Pressed(Escape)").build().unwrap(); assert_eq!(DestinationDialog::new("Move",&source,&[]).show(),None); app.run();
+    }
+    #[test]
+    fn filter_keeps_exact_paths_and_persisted_preferences_restore_from_an_isolated_store() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new();
+        std::fs::write(dir.path().join("文 target.txt"),b"keep").unwrap();
+        std::fs::write(dir.path().join("other.txt"),b"other").unwrap();
+        let state_path = dir.path().join("state/browser.toml");
+        files::save_state(&state_path,&files::BrowserState { location: Some(dir.path().to_owned()), details: true, hidden: true, filter: "target".into(), favorites: vec![dir.path().to_owned()] }).unwrap();
+        let app = App::debug(100,32,"Paint.Enable(false)").build().unwrap();
+        let mut window = BrowserWindow::with_state(dir.path().to_owned(),Some(state_path),true).unwrap();
+        pump_until(&mut window,|w| w.state_ready && w.control(w.listing).unwrap().entries.len() == 1 && !w.control(w.listing).unwrap().loading);
+        assert_eq!(window.control(window.listing).unwrap().mode,ViewMode::Details);
+        assert_eq!(window.control(window.listing).unwrap().entries[0].path,dir.path().join("文 target.txt"));
+        assert_eq!(window.current_path(),Some(dir.path().to_owned())); assert_eq!(window.saved.favorites,vec![dir.path().to_owned()]);
+        window.shutdown(); app.run();
+    }
+    #[test]
+    fn native_mutation_requests_preserve_target_path_in_both_views() {
+        let _lock = UI_LOCK.lock().unwrap(); let app = App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let mut list = BrowserEntries::new(); list.viewport = Size::new(48,15); list.add_items((0..2).map(|index| Entry { path: PathBuf::from(format!("/tmp/{index}")),name: index.to_string(),kind: FileKind::File,size: "1".into(),modified: "—".into() }).collect());
+        for mode in [ViewMode::Grid,ViewMode::Details] {
+            list.set_mode(mode); list.selected = Some(1); list.input(key!("F2").into());
+            assert!(matches!(list.request.take(),Some(EntryRequest::Mutate(Mutation::Rename,Some(entry))) if entry.path == std::path::Path::new("/tmp/1")));
+            list.context_at(0,if mode == ViewMode::Grid { 0 } else { 1 }); let menu = list.menu;
+            MenuEvents::on_command(&mut list,menu,Handle::None,browserentries::Commands::Copy);
+            assert!(matches!(list.request.take(),Some(EntryRequest::Mutate(Mutation::Copy,Some(entry))) if entry.path == std::path::Path::new("/tmp/0")));
+        }
+        list.release_menu(); app.run();
     }
     #[test]
     fn keyboard_information_releases_context_menu_before_dialog_and_single_escape() {

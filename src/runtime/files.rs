@@ -1,5 +1,15 @@
+mod operations;
+mod state;
+pub(crate) use operations::{Operation, OperationWorker, Outcome};
+pub(crate) use state::{BrowserState, default_state_path, StateJob, StateWorker};
+#[cfg(test)]
+pub(crate) use state::{load as load_state, save as save_state};
 use anyhow::Context;
 use std::path::{Path, PathBuf};
+
+/// Called after the UI exits; normal exit waits for mutation cancellation,
+/// rollback/cleanup, and the final accepted browser-state writes.
+pub(crate) fn finish_shutdown() { operations::finish_shutdown(); state::finish_shutdown(); }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FileKind { Directory, File, Other }

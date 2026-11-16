@@ -17,17 +17,44 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::ffi::{OsStr, OsString};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use virtual_terminal::{Command, Output};
 
-/// File/Folder contexts bind browser paths without dialogs and set only this child's directory.
-/// Document retains the original constructor's picker-then-append behavior.
+/// Actual selected bindings and effective cwd, retained for session restoration.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LaunchPaths {
+    pub file: Option<PathBuf>,
+    pub folder: Option<PathBuf>,
+    pub document: Option<PathBuf>,
+    pub directory: Option<PathBuf>,
+}
+
+/// File/Folder bind browser paths; Document retains picker-then-append behavior.
+/// Restore reuses recorded bindings and never opens a new picker.
 #[derive(Clone, Copy, Default)]
-pub(crate) enum LaunchContext<'a> { #[default] Default, Document(&'a Path), File(&'a Path), Folder(&'a Path) }
+pub(crate) enum LaunchContext<'a> {
+    #[default] Default, Document(&'a Path), File(&'a Path), Folder(&'a Path),
+    Restore(&'a LaunchPaths),
+}
 impl<'a> LaunchContext<'a> {
     fn directory(self) -> Option<&'a Path> {
-        match self { Self::File(path) => path.parent(), Self::Folder(path) => Some(path), _ => None }
+        match self {
+            Self::File(path) => path.parent(), Self::Folder(path) => Some(path),
+            Self::Restore(paths) => paths.directory.as_deref(), _ => None,
+        }
+    }
+    fn template_directory(self) -> Option<&'a Path> {
+        match self { Self::Restore(paths) => paths.folder.as_deref(), _ => self.directory() }
+    }
+    fn selected_file(self) -> Option<&'a Path> {
+        match self { Self::File(path) => Some(path), Self::Restore(paths) => paths.file.as_deref(), _ => None }
+    }
+    fn explicit_document(self) -> Option<&'a Path> {
+        match self { Self::Document(path) => Some(path), Self::Restore(paths) => paths.document.as_deref(), _ => None }
+    }
+    fn appended_document(self, has_file_template: bool) -> Option<&'a Path> {
+        self.explicit_document().or_else(|| if has_file_template { None } else { self.selected_file() })
     }
 }
 
@@ -45,6 +72,8 @@ pub struct TuiWindow {
     closing: bool,
     launch_command: String,
     pending_error: Option<String>,
+    original_title: String,
+    launch_paths: LaunchPaths,
 }
 
 impl TuiWindow {
@@ -77,6 +106,16 @@ impl TuiWindow {
     pub(crate) fn new_with_context<S, I>(
         app_name: &str, program: S, args: I, window_options: WindowOptions,
         terminal_options: TerminalOptions, palette: &TerminalPalette, context: LaunchContext<'_>,
+    ) -> anyhow::Result<Self>
+    where S: AsRef<OsStr>, I: IntoIterator<Item = S>,
+    {
+        Self::new_with_context_and_directory(app_name, program, args, window_options, terminal_options, palette, context, None)
+    }
+
+    /// Explicit file/folder contexts override a configured cwd; cwd never binds picker templates.
+    pub(crate) fn new_with_context_and_directory<S, I>(
+        app_name: &str, program: S, args: I, window_options: WindowOptions,
+        terminal_options: TerminalOptions, palette: &TerminalPalette, context: LaunchContext<'_>, directory: Option<&Path>,
     ) -> anyhow::Result<Self>
     where S: AsRef<OsStr>, I: IntoIterator<Item = S>,
     {
@@ -114,14 +153,14 @@ impl TuiWindow {
 
         let mut configured = vec![program.as_ref().to_owned()];
         configured.extend(args.into_iter().map(|arg| arg.as_ref().to_owned()));
-        let (modified_program, modified_args) = resolve_templates(configured,context)?;
+        let (modified_program, modified_args, launch_paths) = resolve_launch(configured,context,directory)?;
         let modified_program = crate::platform::bundled::resolve_program(&modified_program);
         let launch_command = modified_program.to_string_lossy().into_owned();
         let mut cmd = Command::new(modified_program).args(modified_args)
             .terminal_size((inner_size.width as usize, inner_size.height as usize))
             .terminal_id("xterm-256color")
             .env("COLORTERM", "truecolor");
-        if let Some(directory) = context.directory() { cmd = cmd.current_dir(directory); }
+        if let Some(directory) = &launch_paths.directory { cmd = cmd.current_dir(directory); }
         let tx = cmd.in_tx();
         let (process, rx) = processes::start(cmd);
 
@@ -143,7 +182,7 @@ impl TuiWindow {
             horizontal_adjustment: 2 + x as u32,
             vertical_adjustment: 2 + y as u32,
             padding, pending_output: None, input_closed_at: None,
-            process, closing: false, launch_command, pending_error: None,
+            process, closing: false, launch_command, pending_error: None, original_title: app_name.into(), launch_paths,
         };
 
         tui_win.canvas = tui_win.add(Canvas::new(
@@ -173,6 +212,19 @@ impl TuiWindow {
                 .width(inner_size.width).height(inner_size.height).build()));
 
         Ok(tui_win)
+    }
+
+    pub(crate) fn launch_paths(&self) -> &LaunchPaths { &self.launch_paths }
+    pub(crate) fn application_title(&self) -> &str { &self.original_title }
+
+    /// Queues literal bytes through the same ordered input path as typed keys.
+    pub(crate) fn send_input(&mut self, bytes: Vec<u8>) {
+        let handle = self.custom_keyboard_control;
+        if let Some(control) = self.control_mut(handle) { control.enqueue(bytes, false); }
+    }
+    pub(crate) fn terminal_action(&mut self, action: super::TerminalAction) {
+        let handle = self.custom_keyboard_control;
+        if let Some(control) = self.control_mut(handle) { control.terminal_action(action); }
     }
 
     pub fn apply_palette(&mut self, palette: &TerminalPalette) {
@@ -212,6 +264,7 @@ impl TuiWindow {
         self.process.close();
         let handle = self.custom_keyboard_control;
         if let Some(control) = self.control_mut(handle) {
+            control.close_clipboard();
             control.tx.close();
             control.rx.close();
         }
@@ -243,10 +296,17 @@ impl TimerEvents for TuiWindow {
         };
         if should_close { self.close_command(); return EventProcessStatus::Processed; }
 
+        let (view_changed, status) = {
+            let control = self.control_mut(control_handle).unwrap();
+            (control.tick(), control.status())
+        };
+        let status: String = status.chars().take(160).collect();
+        let title = if status.is_empty() { self.original_title.clone() } else { format!("{} [{status}]", self.original_title) };
+        self.set_title(&title);
         let parser = self.terminal_parser.clone();
         let mut parser = parser.borrow_mut();
         let batch = drain_output(&rx, &mut self.pending_output, |bytes| parser.advance_bytes(bytes));
-        if batch.changed {
+        if batch.changed || view_changed {
             let canvas = self.base.control_mut(self.canvas).unwrap();
             parser.project(canvas.drawing_surface_mut());
         }
@@ -270,7 +330,7 @@ impl TimerEvents for TuiWindow {
                 if let Some(message) = self.input_failure(error, &rx) { self.fail_child(message); }
             } else { self.input_closed_at = None; }
         }
-        if batch.changed || batch.terminated || self.closing { EventProcessStatus::Processed }
+        if batch.changed || view_changed || batch.terminated || self.closing { EventProcessStatus::Processed }
         else { EventProcessStatus::Ignored }
     }
 }
@@ -333,25 +393,50 @@ fn terminal_geometry(size: Size, padding: (i32, i32)) -> (i32, i32, Size) {
     (x, y, Size::new(client_width - x as u32, client_height - y as u32))
 }
 
-fn resolve_templates(mut configured: Vec<OsString>, context: LaunchContext<'_>) -> anyhow::Result<(OsString, Vec<OsString>)> {
+#[cfg(test)]
+fn resolve_templates(configured: Vec<OsString>, context: LaunchContext<'_>) -> anyhow::Result<(OsString, Vec<OsString>)> {
+    let (program,args,_) = resolve_launch(configured,context,None)?;
+    Ok((program,args))
+}
+
+fn resolve_launch(mut configured: Vec<OsString>, context: LaunchContext<'_>, configured_directory: Option<&Path>)
+    -> anyhow::Result<(OsString, Vec<OsString>, LaunchPaths)> {
     let contains = |token: &[u8]| configured.iter().any(|arg| arg.as_bytes().windows(token.len()).any(|window| window == token));
-    let home = directories::UserDirs::new().map(|dirs| dirs.home_dir().to_owned()).unwrap_or_else(|| "/".into());
     let has_file_template = contains(b"<FILE_PATH>");
-    let selected_file = match context { LaunchContext::File(path) => Some(path), _ => None };
-    let selected_folder = context.directory();
-    let file = if let Some(path) = selected_file { Some(path.to_owned()) } else if has_file_template {
+    let has_folder_template = contains(b"<FOLDER_PATH>");
+    let restoring = matches!(context,LaunchContext::Restore(_));
+    if restoring {
+        for (required,bound,token) in [(has_file_template,context.selected_file().is_some(),"<FILE_PATH>"),
+            (has_folder_template,context.template_directory().is_some(),"<FOLDER_PATH>")] {
+            if required && !bound {
+                return Err(anyhow!("Cannot restore terminal: saved {token} binding is missing. Relaunch this application and select its path again."));
+            }
+        }
+    }
+    let home = directories::UserDirs::new().map(|dirs| dirs.home_dir().to_owned()).unwrap_or_else(|| "/".into());
+    let file = if let Some(path) = context.selected_file() { Some(path.to_owned()) } else if has_file_template {
         Some(dialogs::open("Select file", "", Location::Path(&home), None,
             OpenFileDialogFlags::Icons | OpenFileDialogFlags::CheckIfFileExists).ok_or_else(|| anyhow!("No file selected"))?)
     } else { None };
-    let folder = if let Some(path) = selected_folder { Some(path.to_owned()) } else if contains(b"<FOLDER_PATH>") {
+    let folder = if let Some(path) = context.template_directory() { Some(path.to_owned()) } else if has_folder_template {
         Some(dialogs::select_folder("Select folder", Location::Path(&home), SelectFolderDialogFlags::Icons)
             .ok_or_else(|| anyhow!("No folder selected"))?)
     } else { None };
     configured = configured.iter().map(|arg| expand_argument(arg, file.as_deref(), folder.as_deref())).collect();
     let program = configured.remove(0);
-    let document = match context { LaunchContext::Document(path) => Some(path), LaunchContext::File(path) if !has_file_template => Some(path), _ => None };
-    append_document(&mut configured,document);
-    Ok((program, configured))
+    append_document(&mut configured,context.appended_document(has_file_template));
+    // Record an absolute effective cwd so a later restore does not reinterpret
+    // relative launcher paths against whichever directory starts the desktop.
+    let requested_directory = context.directory().or(configured_directory);
+    let directory = match requested_directory {
+        Some(path) if path.is_absolute() => path.to_owned(),
+        path => {
+            let current = std::env::current_dir().map_err(|error| anyhow!("Unable to determine the terminal working directory: {error}"))?;
+            match path { Some(path) => current.join(path),None => current }
+        },
+    };
+    let paths = LaunchPaths { file,folder,document: context.explicit_document().map(Path::to_owned),directory: Some(directory) };
+    Ok((program,configured,paths))
 }
 fn expand_argument(arg: &OsStr, file: Option<&Path>, folder: Option<&Path>) -> OsString {
     let mut bytes = arg.as_bytes();
@@ -376,6 +461,96 @@ fn append_document(args: &mut Vec<OsString>, document: Option<&Path>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use appcui::prelude::{Desktop,DesktopEvents};
+
+    #[Desktop(events=DesktopEvents)]
+    struct LaunchMetadataProbe {
+        document: PathBuf, directory: PathBuf,
+        result: std::sync::Arc<std::sync::Mutex<Option<Result<LaunchPaths,String>>>>,
+    }
+    impl DesktopEvents for LaunchMetadataProbe {
+        fn on_start(&mut self) {
+            let options = WindowOptions { resizable: true,close_button: true,fixed_position: false,size: None };
+            let terminal = TerminalOptions { padding: None,background_color: None };
+            let result = TuiWindow::new_with_context_and_directory("metadata","/bin/sh",["-c","exit 0","<FILE_PATH>","<FOLDER_PATH>"],
+                options,terminal,&crate::config::preferences::Preferences::default().terminal,LaunchContext::Document(&self.document),Some(&self.directory))
+                .map(|mut window| { let paths = window.launch_paths().clone(); window.cleanup(); paths }).map_err(|error|error.to_string());
+            *self.result.lock().unwrap() = Some(result);
+        }
+    }
+    #[test]
+    fn review_restore_launch_metadata_preserves_all_opaque_paths_and_rejects_missing_bindings() {
+        let paths = LaunchPaths {
+            file: Some(PathBuf::from(OsString::from_vec(b"/tmp/file \xff <FOLDER_PATH>".to_vec()))),
+            folder: Some(PathBuf::from(OsString::from_vec(b"/tmp/folder \xfe".to_vec()))),
+            document: Some(PathBuf::from(OsString::from_vec(b"/tmp/document \xfd".to_vec()))),
+            directory: Some(PathBuf::from(OsString::from_vec(b"/tmp/cwd \xfc".to_vec()))),
+        };
+        let configured: Vec<OsString> = vec!["editor".into(),"--file=<FILE_PATH>".into(),"--folder=<FOLDER_PATH>".into()];
+        let (program,args,metadata) = resolve_launch(configured.clone(),LaunchContext::Restore(&paths),Some(Path::new("/ignored"))).unwrap();
+        assert_eq!(program,"editor"); assert_eq!(args.len(),3);
+        assert_eq!(args[0].as_bytes(),[b"--file=".as_slice(),paths.file.as_ref().unwrap().as_os_str().as_bytes()].concat());
+        assert_eq!(args[1].as_bytes(),[b"--folder=".as_slice(),paths.folder.as_ref().unwrap().as_os_str().as_bytes()].concat());
+        assert_eq!(args[2],paths.document.as_ref().unwrap().as_os_str());
+        assert_eq!(metadata.file,paths.file); assert_eq!(metadata.folder,paths.folder);
+        assert_eq!(metadata.document,paths.document); assert_eq!(metadata.directory,paths.directory);
+        let (_,restored,_) = resolve_launch(configured,LaunchContext::Restore(&metadata),None).unwrap();
+        assert_eq!(restored,args);
+        for token in ["<FILE_PATH>","<FOLDER_PATH>"] {
+            let error = resolve_launch(vec!["editor".into(),token.into()],LaunchContext::Restore(&LaunchPaths::default()),None).unwrap_err();
+            assert!(error.to_string().contains(token)); assert!(error.to_string().contains("restore"));
+        }
+        let file_only = LaunchPaths { file: paths.file.clone(),..LaunchPaths::default() };
+        let (_,args,_) = resolve_launch(vec!["editor".into()],LaunchContext::Restore(&file_only),None).unwrap();
+        assert_eq!(args,[paths.file.unwrap().into_os_string()]);
+        let current = std::env::current_dir().unwrap();
+        let (_,_,inherited) = resolve_launch(vec!["editor".into()],LaunchContext::Default,None).unwrap();
+        assert_eq!(inherited.directory,Some(current.clone()));
+        let (_,args,relative) = resolve_launch(vec!["editor".into()],LaunchContext::Document(Path::new("explicit document")),Some(Path::new("relative cwd"))).unwrap();
+        assert_eq!(relative.directory,Some(current.join("relative cwd")));
+        assert_eq!(relative.document,Some(PathBuf::from("explicit document")));
+        assert_eq!(args,[OsString::from("explicit document")]);
+    }
+    #[test]
+    fn review_launch_metadata_retains_debug_picker_bindings_document_and_configured_cwd() {
+        let _lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let runtime = tokio::runtime::Runtime::new().unwrap(); let _entered = runtime.enter();
+        let dir = crate::test_support::TestDir::new();
+        let file = dir.path().join("pick me.txt"); std::fs::write(&file,b"file").unwrap();
+        let folder = dir.path().join("picked folder"); std::fs::create_dir(&folder).unwrap();
+        let document = dir.path().join("explicit document.txt"); std::fs::write(&document,b"doc").unwrap();
+        let directory = dir.path().join("configured cwd"); std::fs::create_dir(&directory).unwrap();
+        // The native picker treats Name as relative to its initial folder.
+        let home = directories::UserDirs::new().map(|dirs|dirs.home_dir().to_owned()).unwrap_or_else(||"/".into());
+        let mut picker_file = PathBuf::new();
+        for component in home.components() { if matches!(component,std::path::Component::Normal(_)) { picker_file.push(".."); } }
+        picker_file.push(file.strip_prefix("/").unwrap());
+        let script = format!("Paint.Enable(false)\nKey.TypeText('{}')\nKey.Pressed(Enter)\nKey.Pressed(Alt+P)\nKey.Pressed(Ctrl+A)\nKey.TypeText('{}')\nKey.Pressed(Enter)\nMouse.Click(68,22,left)",picker_file.display(),folder.display());
+        let result = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let probe = LaunchMetadataProbe { base: appcui::prelude::Desktop::new(),document: document.clone(),directory: directory.clone(),result: result.clone() };
+        let app = appcui::prelude::App::debug(80,30,&script).desktop(probe).build().unwrap();
+        app.run(); runtime.block_on(processes::finish_shutdown());
+        let paths = result.lock().unwrap().take().unwrap().unwrap();
+        assert_eq!(paths.file.as_deref(),Some(file.as_path()));
+        assert_eq!(paths.folder.as_deref(),Some(folder.as_path()));
+        assert_eq!(paths.document.as_deref(),Some(document.as_path()));
+        assert_eq!(paths.directory.as_deref(),Some(directory.as_path()));
+        let (_,args,restored) = resolve_launch(vec!["/bin/sh".into(),"-c".into(),"exit 0".into(),"<FILE_PATH>".into(),"<FOLDER_PATH>".into()],LaunchContext::Restore(&paths),None).unwrap();
+        assert_eq!(args,[OsString::from("-c"),OsString::from("exit 0"),paths.file.as_ref().unwrap().as_os_str().to_owned(),
+            paths.folder.as_ref().unwrap().as_os_str().to_owned(),document.into_os_string()]);
+        assert_eq!(restored.directory,paths.directory);
+    }
+    #[test]
+    fn configured_working_directory_does_not_bind_folder_templates() {
+        let directory = Path::new("/tmp/configured cwd");
+        let context = LaunchContext::Default;
+        assert_eq!(context.directory(),None);
+        assert_eq!(context.template_directory(),None);
+        let (program,args,paths) = resolve_launch(vec!["sh".into(),"literal argument".into()],context,Some(directory)).unwrap();
+        assert_eq!(program,"sh"); assert_eq!(args,[OsString::from("literal argument")]);
+        assert_eq!(paths.directory.as_deref(),Some(directory)); assert!(paths.folder.is_none());
+        assert_eq!(LaunchContext::Folder(directory).template_directory(),Some(directory));
+    }
     #[test]
     fn completed_child_drains_queries_and_output_before_clean_close() {
         let _lock = crate::test_support::UI_LOCK.lock().unwrap();

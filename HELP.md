@@ -30,6 +30,79 @@ folder picker when a shortcut uses `<FILE_PATH>` or
 `<FOLDER_PATH>`. Additional commands open separate windows.
 Choose Close to stop the primary application process.
 
+## Command palette
+
+Ctrl+Space opens the searchable command palette. Desktop > Command
+palette opens it when the outer terminal or input method consumes that key.
+Type words to filter, arrows/PageUp/PageDown to choose, Enter to select,
+and Escape to cancel. Launch apps, focus visible/hidden windows, and
+choose Hide or Close. Desktop > New terminal, also in the palette, creates
+an independent configured Terminal; ordinary launchers restore an existing
+window.
+
+Desktop > Desktop shortcut saves another modified key or function key.
+Ctrl+C remains a child interrupt. Press the configured shortcut again
+while the palette is open to forward it to the originating terminal:
+Ctrl+Space twice sends literal Ctrl+Space by default. Menus, modal dialogs
+and Terminal Lock retain their own input.
+
+## Terminal history and clipboard
+
+Ctrl+C sends a normal interrupt to the child. Choose Close or the window
+close button for explicit shutdown. A child that exits closes its window.
+Shift+PageUp/PageDown scroll retained output. New output keeps the current
+history position; use palette > Terminal: Return to live to follow output
+again, even after scrolling to the bottom.
+
+With a terminal focused, palette > Terminal: Copy mode starts a caret.
+Arrows move it; Space sets an anchor; subsequent arrows extend the
+selection; Enter copies. Mouse press/drag/release selects and the wheel
+scrolls in Copy mode. Home/End/PageUp/PageDown also move the caret.
+Escape leaves Copy mode without sending Escape to the child.
+
+Palette > Terminal: Search history accepts literal text and Backspace.
+Enter/Shift+Enter finds next/previous, wrapping through results. Escape
+leaves Search. Selection copies complete Unicode graphemes, joins soft
+wraps and preserves hard line breaks. Resize clears selection/search and
+tries to keep visible text anchored; eviction may clamp it. Alternate
+screens have no retained history.
+
+History is bounded to 2,000 rows, 200,000 cells and 8 MiB of retained text.
+Search accepts 256 Unicode scalars and up to 4,096 stored matches. It
+searches output present when the query was entered; change the query or
+re-enter Search for later output. Selection/clipboard text is at most
+256 KiB. Palette > Terminal: Paste sends clipboard text outside Copy/Search.
+
+Wayland uses wl-copy/wl-paste, X11 uses xclip or xsel. Missing tools or
+provider failures use a shared in-memory clipboard. PTY/SSH sessions need no
+graphical session: native text controls and terminal windows share the internal
+clipboard, and client-terminal paste reaches the focused control. Copying to
+the SSH client's operating-system clipboard depends on that terminal client.
+Window-title status
+shows success, fallback and errors. Nothing is saved to disk. Child mouse
+reporting and bracketed paste continue outside desktop Copy/Search modes.
+
+## Workspaces and restoration
+
+Desktop > Workspaces selects one of four numbered workspaces. The palette
+offers Switch to workspace N, and Move current window to workspace N
+when a window was focused. Switching keeps applications running and
+preserves deliberate Hide state. Focusing an app on another workspace
+switches there. Tiling arranges visible windows in the current workspace.
+
+Desktop > Exit saves window layout, workspace/hidden state, launcher
+identity, working directories and saved document paths before cleanup.
+A later start offers Restore before relaunching saved applications.
+Cancel leaves them closed; Desktop > Restore saved workspace offers it
+again. Missing apps/files are reported individually. Restoring recreates
+windows; it does not restore process memory, terminal output, unsaved
+buffers or game progress.
+
+The separate session.toml lives in the application state directory,
+normally ~/.local/state/desktop-tui or $XDG_STATE_HOME/desktop-tui on Linux.
+Sessions accept up to 256 windows and 1 MiB. They are exit snapshots,
+not crash recovery or attachment to surviving processes.
+
 ## Games
 
 Application > Games offers built-in Snake, 2048, and Minesweeper.
@@ -128,10 +201,11 @@ player; only that example requires mp3blaster to be installed separately.
 
 ## File Browser
 
-Application > System > File Browser starts in your home directory.
+Application > System > File Browser remembers the last successful folder;
+the initial location is your home directory.
 Enter an absolute or relative path, or double-click a folder in the listing.
 Double-click a regular file to open it; Enter opens the selected entry.
-New windows use an icon grid. View (Alt+V) switches Grid/Details while
+The initial view is an icon grid. View (Alt+V) switches Grid/Details while
 keeping the selection visible. Use arrows, Home/End, PageUp/PageDown,
 or the mouse wheel. Long names are clipped only for display.
 Up (Alt+U) opens the parent, Refresh (Alt+R) reloads, and Hidden
@@ -154,14 +228,16 @@ Refresh updates them. Folder and special-entry sizes are not calculated.
 
 Open with lists compatible native viewers and every configured shortcut,
 labeled native/shortcut. Enter or double-click chooses; Escape cancels.
+Check Always use for .extension to save an extension default in preferences.
+Saved defaults take precedence over built-in associations. A missing saved
+launcher reports an error; choose another app through Open with.
 External choices create independent windows. FILE_PATH templates use the
 selected file; FOLDER_PATH uses its parent. With no FILE_PATH template,
 the selected file is appended once. Paths retain their original bytes,
 including literal template text. The child starts in the file's parent.
 Open in terminal creates a fresh configured Terminal window in the selected
 folder, file's parent, or current folder. Its FOLDER_PATH binding uses that
-folder. View changes last only in the current window; graphical Linux apps
-are not discovered.
+folder. Graphical Linux apps are not discovered.
 
 Open supported images in Image Viewer, PDFs in PDF Reader, and MP3, WAV,
 FLAC, or Ogg Vorbis files in Music Player, and .asciipaint projects in
@@ -171,7 +247,33 @@ independent Text editor document windows, preserving any running
 editor. The selected absolute path is one OS argument, appended
 after configured templates are resolved. Display labels may replace
 invalid UTF-8 bytes; navigation and launch arguments retain them.
-File Browser does not modify files or open special files.
+Special files are not opened as documents.
+
+With the listing focused, Ctrl+N creates an empty file and Ctrl+Shift+N
+creates a folder. F2 renames, F5 copies, F6 moves, and Delete asks to move
+the entry to trash. These actions are also in context menus. Copy/Move
+use separate destination folder and filename fields; unchanged opaque
+names keep their exact bytes. Existing files/symlinks require confirmation;
+existing destination folders cannot be merged/replaced. A background
+worker reports progress; Cancel operation stops pending work. Already
+published content remains. Failed transfers preserve the source;
+incomplete cleanup reports retained source/backup paths.
+
+Recursive copies preserve symlinks without following them and reject
+special files. Limits are 100,000 entries and depth 128. Basic permissions
+are copied; timestamps, ownership, ACLs, extended attributes and hardlink
+relationships are not preserved. Trash uses the user's FreeDesktop Trash
+with restore metadata and never falls back to permanent deletion. Trash
+across filesystems is unsupported; use system trash tools to restore.
+
+Use Add/remove favorite and Favorites for up to 64 folders.
+Favorites also appear in destination dialogs. In the browser Favorites chooser,
+Remove deletes a saved entry even if its folder no longer exists.
+Enter a filename substring in Filter and press
+Enter; matching ignores case. Last location, view, hidden toggle, filter
+(up to 512 bytes) and favorites persist separately in state/browser.toml
+under the application state directory. State errors are visible and
+malformed state is not overwritten.
 
 ## Image Viewer
 
@@ -217,8 +319,8 @@ and Desktop Exit cancel active rendering and reap helper processes.
 
 Drag the title bar to move a window. Drag its bottom-right corner
 to resize a resizable window. Use the maximize button to maximize
-or restore it. Close buttons stop the window; Ctrl+C in a terminal
-stops its running command.
+or restore it. Close buttons request explicit shutdown. Ctrl+C in a terminal
+is forwarded to the child as a normal interrupt.
 
 Hide (run in background) removes a window from the taskbar while its
 process keeps running. Application > Background windows restores hidden
@@ -230,8 +332,8 @@ their taskbar buttons. Reopening creates a new instance.
 
 The Tilling menu offers No arrangement, Cascade, Vertical,
 Horizontal, and Grid. The chosen arrangement is reapplied when
-windows open or close. Choose No arrangement to position windows
-yourself.
+visible windows open or close in the current workspace. Choose No arrangement
+to position windows yourself.
 
 ## Keyboard shortcuts
 
@@ -250,10 +352,33 @@ Without one, shortcuts are read from the application configuration
 folder (normally `~/.config/desktop-tui` on Linux, or
 `$XDG_CONFIG_HOME/desktop-tui`). Shortcut TOML files describe
 commands, arguments, taskbar order, window controls, size,
-padding, and an optional terminal background override. An optional
-top-level category (for example `category = "Utility"`) controls
+padding, optional working_directory and a terminal background override.
+An optional top-level category (for example `category = "Utility"`) controls
 the Application menu grouping; omitted categories use User. See the
 README for a complete example.
+
+Optional id preserves identity when a launcher is renamed; without it,
+the name is its identity. Duplicate names/IDs are errors. Only exact
+.toml extensions are loaded, with deterministic path/taskbar ordering.
+Relative working_directory uses the TOML file's parent; an explicit
+file/folder launch context takes precedence.
+
+Desktop > Launchers creates or edits TOML with separate command and args.
+Select a launcher then Edit, or choose New. Save validates and atomically
+writes the original source; Reload applies saved changes without stopping
+running windows. Editing a starter creates an override. Invalid drafts do
+not replace source files. Unsaved changes prompt before discard.
+
+## Diagnostics
+
+Desktop > Diagnostics runs configuration/tool checks in the background.
+The noninteractive --doctor flag provides the same report before terminal
+initialization or configuration-directory creation. It checks settings,
+launchers and working directories, external executables, bundled Carboxyl,
+Poppler helpers, DISPLAY/WAYLAND_DISPLAY and clipboard providers.
+It does not execute configured commands. Configuration or Terminal
+executable failures return nonzero; missing optional tools are warnings.
+Provider availability does not prove a graphical connection will succeed.
 
 ## Preferences
 
@@ -373,7 +498,8 @@ Application > Utility > Web Browser launches Carboxyl 0.2.0
 on its blank page with native text and quadrant graphics at 20 FPS. Click its top-row address field,
 then type or paste a URL. A same-name shortcut overrides the launcher.
 Hide/restore, tiling, locking, closing and child cleanup follow other terminal
-windows. Ctrl+C closes the child. The Linux package includes libexec/carboxyl;
+windows. Ctrl+C is a child interrupt; Close requests shutdown.
+The Linux package includes libexec/carboxyl;
 keep it beside the desktop executable's directory. That binary needs glibc 2.43
 or newer. Source/Cargo installs can use a separate browser from the pinned Git tag or release;
 the crates.io package with the same name is a different project. See HOW_TO_RUN.md.
@@ -431,5 +557,5 @@ disposable VM.
 
 ## Exit
 
-Desktop > Exit closes Desktop-TUI and its managed applications. It
-does not lock, shut down, or restart the computer.
+Desktop > Exit saves the workspace snapshot, then closes Desktop-TUI and
+its managed applications. It does not lock, shut down, or restart the computer.

@@ -1,19 +1,38 @@
 use std::marker::PhantomData;
+use std::sync::Mutex;
 
 use crate::prelude::RuntimeManager;
 
 use super::App;
 
-/// The `Clipboard` structure provides system-wide clipboard functionality:
-/// - Text-based clipboard operations
-/// - Thread-safe clipboard access
-/// - Platform-independent clipboard management
-/// - Integration with terminal capabilities
+/// Clipboard access for native controls. Unix CrossTerm uses process-local text;
+/// other backends may use a platform clipboard. The ordinary methods require
+/// the application/UI thread. The explicit internal-cache methods are bounded,
+/// thread-safe and perform no graphical or terminal I/O.
 pub struct Clipboard {
     _phantom: PhantomData<*mut ()>,
 }
 
+static INTERNAL_TEXT: Mutex<Option<String>> = Mutex::new(None);
+
 impl Clipboard {
+    /// Maximum UTF-8 bytes retained in the shared process-local clipboard.
+    pub const MAX_INTERNAL_TEXT_BYTES: usize = 256 * 1024;
+
+    /// Shared process-local text, usable from workers without accessing the UI
+    /// singleton or a graphical session. CrossTerm native controls use this cache.
+    pub fn internal_text() -> Option<String> {
+        INTERNAL_TEXT.lock().ok()?.clone()
+    }
+
+    /// Rejects oversized text without replacing the previous internal clipboard.
+    /// This method performs no host clipboard I/O and is safe on worker threads.
+    pub fn set_internal_text(text: &str) -> bool {
+        if text.len() > Self::MAX_INTERNAL_TEXT_BYTES { return false; }
+        let Ok(mut clipboard) = INTERNAL_TEXT.lock() else { return false; };
+        *clipboard = Some(text.to_owned());
+        true
+    }
     /// Clears the clipboard content
     pub fn clear() {
         if !App::is_created() {

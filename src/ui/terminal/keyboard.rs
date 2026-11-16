@@ -15,6 +15,9 @@ pub(crate) struct CustomKeyboardControl {
     pub(super) input: InputQueue,
     pub(super) input_error: Option<InputError>,
     parser: Rc<RefCell<TerminalParser>>,
+    clipboard: Option<crate::runtime::clipboard::Clipboard>,
+    status: String,
+    dirty: bool,
 }
 
 impl CustomKeyboardControl {
@@ -23,14 +26,140 @@ impl CustomKeyboardControl {
             should_exit: false,
             base: ControlBase::new(layout, true),
             input: InputQueue::new(tx.clone()), input_error: None,
-            tx, rx, parser,
+            tx, rx, parser, clipboard: None, status: String::new(), dirty: false,
         }
     }
-    fn enqueue(&mut self, bytes: Vec<u8>, motion: bool) {
+    pub(super) fn enqueue(&mut self, bytes: Vec<u8>, motion: bool) {
         let result = if motion { self.input.motion(bytes) } else { self.input.data(bytes) };
         if let Err(error) = result { self.input_error = Some(error); }
     }
 
+    pub(super) fn terminal_action(&mut self, action: super::TerminalAction) {
+        self.status.clear();
+        match action {
+            super::TerminalAction::CopyMode => self.parser.borrow_mut().start_copy(),
+            super::TerminalAction::Search => self.parser.borrow_mut().start_search(),
+            super::TerminalAction::Live => self.parser.borrow_mut().live(),
+            super::TerminalAction::Paste => {
+                if self.parser.borrow().copy_mode() || self.parser.borrow().search_mode() {
+                    self.status = "Exit Copy/Search mode before pasting to the child".into();
+                } else if let Err(error) = self.clipboard().and_then(|clipboard| clipboard.paste()) { self.status = error; }
+                else { self.status = "Reading clipboard…".into(); }
+            },
+        }
+        self.dirty = true;
+    }
+    fn clipboard(&mut self) -> Result<&crate::runtime::clipboard::Clipboard, String> {
+        if self.clipboard.is_none() { self.clipboard = Some(crate::runtime::clipboard::Clipboard::new()?); }
+        self.clipboard.as_ref().ok_or_else(|| "Clipboard unavailable".into())
+    }
+    pub(super) fn close_clipboard(&mut self) { self.clipboard = None; }
+    pub(super) fn tick(&mut self) -> bool {
+        let result = self.clipboard.as_ref().and_then(|clipboard| clipboard.poll());
+        if let Some(result) = result {
+            self.status = result.status;
+            if let Some(text) = result.text {
+                if self.parser.borrow().copy_mode() || self.parser.borrow().search_mode() {
+                    self.status = "Paste cancelled because Copy/Search mode was entered".into();
+                } else {
+                    let bytes = self.parser.borrow().paste(&text);
+                    if bytes.len() > 256 * 1024 { self.status = "Paste exceeds the terminal's 256 KiB input limit".into(); }
+                    else {
+                        // Clipboard admission is fallible without turning a
+                        // busy live child into a terminal-wide input failure.
+                        match self.input.data(bytes) {
+                            Ok(()) => {},
+                            Err(InputError::Full) => self.status = "Paste refused: child input queue is busy; try again after it drains".into(),
+                            Err(error @ InputError::Closed) => self.input_error = Some(error),
+                        }
+                    }
+                }
+            }
+            self.dirty = true;
+        }
+        self.dirty |= self.parser.borrow_mut().search_step();
+        std::mem::take(&mut self.dirty)
+    }
+    pub(super) fn status(&self) -> String {
+        let mode = self.parser.borrow().status();
+        match (mode.is_empty(), self.status.is_empty()) {
+            (true, _) => self.status.clone(), (_, true) => mode, _ => format!("{} | {mode}", self.status),
+        }
+    }
+    fn handle_key(&mut self, key: Key, character: char) {
+        self.dirty = true;
+        if key.modifier == KeyModifier::Shift && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown) {
+            let rows = self.size().height.saturating_sub(1).max(1) as isize;
+            self.parser.borrow_mut().scroll(if key.code == KeyCode::PageUp { rows } else { -rows });
+            return;
+        }
+        if self.parser.borrow().search_mode() {
+            match key.code {
+                KeyCode::Escape => self.parser.borrow_mut().exit_mode(),
+                KeyCode::Enter => self.parser.borrow_mut().search_next(key.modifier.contains(KeyModifier::Shift)),
+                KeyCode::Backspace => { let mut query = self.parser.borrow().search_query().to_owned(); query.pop(); self.parser.borrow_mut().set_search_query(query); },
+                _ if !character.is_control() && character != '\0' && !key.modifier.contains(KeyModifier::Ctrl) && !key.modifier.contains(KeyModifier::Alt) => {
+                    let mut query = self.parser.borrow().search_query().to_owned(); query.push(character);
+                    self.parser.borrow_mut().set_search_query(query);
+                },
+                _ => {},
+            }
+            return;
+        }
+        if self.parser.borrow().copy_mode() {
+            match key.code {
+                KeyCode::Escape => self.parser.borrow_mut().exit_mode(),
+                KeyCode::Space => self.parser.borrow_mut().mark_selection(),
+                KeyCode::Left => self.parser.borrow_mut().move_caret(-1, 0),
+                KeyCode::Right => self.parser.borrow_mut().move_caret(1, 0),
+                KeyCode::Up => self.parser.borrow_mut().move_caret(0, -1),
+                KeyCode::Down => self.parser.borrow_mut().move_caret(0, 1),
+                KeyCode::PageUp => self.parser.borrow_mut().move_caret(0, -(self.size().height as isize).max(1)),
+                KeyCode::PageDown => self.parser.borrow_mut().move_caret(0, (self.size().height as isize).max(1)),
+                KeyCode::Home => self.parser.borrow_mut().move_caret(-(self.size().width as isize), 0),
+                KeyCode::End => self.parser.borrow_mut().move_caret(self.size().width as isize, 0),
+                KeyCode::Enter => {
+                    let selection = self.parser.borrow().selected_text();
+                    self.status = match selection {
+                        Ok(text) => match self.clipboard().and_then(|clipboard| clipboard.copy(text)) {
+                            Ok(()) => "Copying…".into(), Err(error) => error,
+                        },
+                        Err(error) => error.into(),
+                    };
+                },
+                _ => {},
+            }
+            return;
+        }
+        let application_cursor = self.parser.borrow().application_cursor_keys();
+        if let Some(data) = key_bytes(key, character, application_cursor) { self.enqueue(data, false); }
+    }
+
+    fn handle_mouse(&mut self, event: &MouseEvent, size: Size) -> EventProcessStatus {
+        if self.parser.borrow().copy_mode() {
+            match event {
+                MouseEvent::Pressed(data) | MouseEvent::DoubleClick(data) => {
+                    self.parser.borrow_mut().select_at(data.x.max(0) as usize, data.y.max(0) as usize, true);
+                },
+                MouseEvent::Drag(data) | MouseEvent::Released(data) => {
+                    self.parser.borrow_mut().select_at(data.x.max(0) as usize, data.y.max(0) as usize, false);
+                },
+                MouseEvent::WheelAt(data) => {
+                    let rows = if data.direction == appcui::input::MouseWheelDirection::Up { 3 } else { -3 };
+                    self.parser.borrow_mut().scroll(rows);
+                },
+                _ => {},
+            }
+            self.dirty = true;
+            return EventProcessStatus::Processed;
+        }
+        if self.parser.borrow().search_mode() { return EventProcessStatus::Processed; }
+        let bytes = mouse_bytes(&mut self.parser.borrow_mut(), event, size);
+        if let Some((bytes, motion)) = bytes {
+            self.enqueue(bytes, motion);
+            EventProcessStatus::Processed
+        } else { EventProcessStatus::Ignored }
+    }
 }
 
 impl OnKeyPressed for CustomKeyboardControl {
@@ -39,21 +168,22 @@ impl OnKeyPressed for CustomKeyboardControl {
             return EventProcessStatus::Ignored;
         }
 
-        if key.modifier == KeyModifier::Ctrl && key.code == KeyCode::C {
-            self.should_exit = true;
-        }
-        else {
-            let application_cursor = self.parser.borrow().application_cursor_keys();
-            if let Some(data) = key_bytes(key, character, application_cursor) {
-                self.enqueue(data, false);
-            }
-        }
+        self.handle_key(key, character);
 
         EventProcessStatus::Processed
     }
 
     fn on_paste(&mut self, text: &str) -> EventProcessStatus {
         if !self.has_focus() { return EventProcessStatus::Ignored; }
+        if self.parser.borrow().search_mode() {
+            let mut query = self.parser.borrow().search_query().to_owned();
+            let remaining = 256usize.saturating_sub(query.chars().count());
+            query.extend(text.chars().take(remaining));
+            self.parser.borrow_mut().set_search_query(query);
+            self.dirty = true;
+            return EventProcessStatus::Processed;
+        }
+        if self.parser.borrow().copy_mode() { return EventProcessStatus::Processed; }
         let bytes = self.parser.borrow_mut().paste(text);
         self.enqueue(bytes, false);
         EventProcessStatus::Processed
@@ -61,13 +191,7 @@ impl OnKeyPressed for CustomKeyboardControl {
 }
 
 impl OnMouseEvent for CustomKeyboardControl {
-    fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus {
-        let bytes = mouse_bytes(&mut self.parser.borrow_mut(), event, self.size());
-        if let Some((bytes, motion)) = bytes {
-            self.enqueue(bytes, motion);
-            EventProcessStatus::Processed
-        } else { EventProcessStatus::Ignored }
-    }
+    fn on_mouse_event(&mut self, event: &MouseEvent) -> EventProcessStatus { self.handle_mouse(event, self.size()) }
 }
 
 impl OnPaint for CustomKeyboardControl {
@@ -256,6 +380,107 @@ fn ss3_or_csi(final_byte: &[u8], base_code: u8, mod_param: u8) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn copy_outcome_precedes_instructions_and_new_modes_clear_stale_feedback() {
+        use crate::runtime::clipboard::{Clipboard,ClipboardResult};
+        let _lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let app = App::debug(40,12,"Paint.Enable(false)").build().unwrap();
+        let parser = Rc::new(RefCell::new(TerminalParser::with_palette(10,4,
+            &crate::config::preferences::Preferences::default().terminal,None)));
+        let (tx,_input) = async_channel::bounded(1); let (_output,rx) = async_channel::bounded(1);
+        let mut control = CustomKeyboardControl::new(tx,rx,parser,Layout::fill());
+        control.terminal_action(super::super::TerminalAction::CopyMode);
+        control.clipboard = Some(Clipboard::with_result(ClipboardResult {
+            text: None,status: "Copied to internal clipboard (system clipboard unavailable)".into(),
+        }));
+        control.tick();
+        let copied = control.status();
+        control.terminal_action(super::super::TerminalAction::Search);
+        let search = control.status();
+        control.terminal_action(super::super::TerminalAction::Live);
+        let live = control.status();
+        app.run();
+        assert!(copied.starts_with("Copied to internal clipboard"),"{copied}");
+        assert!(copied.contains("Copy"),"mode remains visible after the outcome");
+        assert!(search.starts_with("Search"),"{search}");
+        assert!(!search.contains("Copied"));
+        assert!(!live.contains("Copied"));
+    }
+
+    #[test]
+    fn review_clipboard_backpressure_refusal_preserves_earlier_input_and_child() {
+        use crate::runtime::clipboard::{Clipboard,ClipboardResult};
+        let _lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let app = App::debug(40,12,"Paint.Enable(false)").build().unwrap();
+        let parser = Rc::new(RefCell::new(TerminalParser::with_palette(10,4,
+            &crate::config::preferences::Preferences::default().terminal,None)));
+        let (tx,input) = async_channel::bounded(1); let (_output,rx) = async_channel::bounded(1);
+        tx.try_send(Input::Data(b"busy".to_vec())).unwrap();
+        let mut control = CustomKeyboardControl::new(tx,rx,parser,Layout::fill());
+        control.enqueue(vec![b'a';128*1024],false);
+        control.clipboard = Some(Clipboard::with_result(ClipboardResult { text: Some("b".repeat(200*1024)),status: "System paste".into() }));
+        assert!(control.tick());
+        let error = control.input_error;
+        let status = control.status.clone();
+        let child_open = !control.tx.is_closed() && !control.should_exit;
+        assert_eq!(input.try_recv().unwrap(),Input::Data(b"busy".to_vec()));
+        let mut retained = Vec::new();
+        loop {
+            control.input.flush().unwrap();
+            let Ok(Input::Data(bytes)) = input.try_recv() else { break; };
+            retained.extend(bytes);
+        }
+        input.close();
+        control.clipboard = Some(Clipboard::with_result(ClipboardResult { text: Some("closed".into()),status: "System paste".into() }));
+        control.tick();
+        let closed_error = control.input_error;
+        app.run();
+        assert_eq!(closed_error,Some(InputError::Closed),"a disconnected child still uses the existing cleanup path");
+        assert_eq!(error,None,"clipboard refusal must not become a fatal child input error");
+        assert!(child_open);
+        assert!(status.contains("Paste refused"),"{status}");
+        assert_eq!(retained,vec![b'a';128*1024],"existing input survives in order; no partial paste");
+    }
+    #[test]
+    fn explicit_copy_mode_owns_selection_and_restores_child_mouse_reporting() {
+        use appcui::input::{MouseButton, MouseEventData};
+        let _lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let app = App::debug(40, 12, "Paint.Enable(false)").build().unwrap();
+        let parser = Rc::new(RefCell::new(TerminalParser::with_palette(10, 4,
+            &crate::config::preferences::Preferences::default().terminal, None)));
+        parser.borrow_mut().advance_bytes("A中e\u{301}\x1b[?1000h\x1b[?1006h".as_bytes());
+        let (tx, input) = async_channel::bounded(8); let (_output, rx) = async_channel::bounded(1);
+        let mut control = CustomKeyboardControl::new(tx,rx,parser.clone(),Layout::fill());
+        let at = |x,y| MouseEventData { x,y,button: MouseButton::Left,modifier: KeyModifier::None };
+        control.handle_mouse(&MouseEvent::Pressed(at(2,1)),Size::new(10,4));
+        assert!(matches!(input.try_recv().unwrap(),Input::Data(bytes) if bytes == b"\x1b[<0;3;2M"));
+        parser.borrow_mut().start_copy();
+        control.handle_mouse(&MouseEvent::Pressed(at(2,0)),Size::new(10,4));
+        control.handle_mouse(&MouseEvent::Drag(at(3,0)),Size::new(10,4));
+        assert_eq!(parser.borrow().selected_text().unwrap(),"中e\u{301}");
+        assert!(input.is_empty());
+        control.handle_key(Key { code: KeyCode::Escape,modifier: KeyModifier::None },'\0');
+        control.handle_mouse(&MouseEvent::Pressed(at(2,1)),Size::new(10,4));
+        assert!(matches!(input.try_recv().unwrap(),Input::Data(bytes) if bytes == b"\x1b[<0;3;2M"));
+        app.run();
+    }
+    #[test]
+    fn ctrl_c_queues_interrupt_without_requesting_window_close() {
+        let _lock = crate::test_support::UI_LOCK.lock().unwrap();
+        let app = App::debug(40, 12, "Paint.Enable(false)").build().unwrap();
+        let parser = Rc::new(RefCell::new(TerminalParser::with_palette(10, 4,
+            &crate::config::preferences::Preferences::default().terminal, None)));
+        let (tx, input) = async_channel::bounded(1); let (_output, rx) = async_channel::bounded(1);
+        let mut control = CustomKeyboardControl::new(tx, rx, parser.clone(), Layout::fill());
+        control.handle_key(Key { code: KeyCode::C, modifier: KeyModifier::Ctrl }, '\0');
+        assert!(!control.should_exit);
+        assert!(matches!(input.try_recv().unwrap(), Input::Data(bytes) if bytes == [3]));
+        parser.borrow_mut().start_copy();
+        control.handle_key(Key { code: KeyCode::Escape, modifier: KeyModifier::None }, '\0');
+        assert!(!parser.borrow().copy_mode());
+        assert!(input.is_empty());
+        app.run();
+    }
     #[test]
     fn printable_input_preserves_unicode_case_and_shifted_punctuation() {
         for (code, modifier, character, expected) in [

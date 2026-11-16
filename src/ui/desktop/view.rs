@@ -8,7 +8,7 @@ use crate::config::catalog::{self, AppId, GameKind};
 use crate::platform::linux::{StatusMonitor, SystemAction, SystemActionRunner, SystemActions};
 use crate::ui::locking::{LockSetupDialog, TerminalLockScreen};
 use crate::ui::preferences::PreferencesDialog;
-use crate::ui::terminal::{TuiWindow, LaunchContext};
+use crate::ui::terminal::{TuiWindow, LaunchContext, TerminalAction};
 use super::open_with::OpenWithDialog;
 use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow, PdfWindow, PaintWindow};
 use crate::ui::build_theme;
@@ -21,14 +21,39 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+#[path = "workflow.rs"]
+mod workflow;
+#[path = "workspaces.rs"]
+mod workspaces;
+use workspaces::{WorkspaceMember, SessionJob, SessionResult};
+use crate::config::session::{self, Session, SavedLaunch};
+use crate::runtime::latest::LatestWorker;
+
 #[Desktop(
     events = [AppBarEvents, MenuEvents, DesktopEvents, TimerEvents],
     overwrite = OnPaint+OnResize,
-    commands = [Help, Preference, TerminalLock, ScreenLock, Shutdown, Restart, Exit, NoArrange, Cascade, Vertical, Horizontal, Grid, AppVisibilityToggle, OpenApp, CloseApp, AppCommand, SelectWindow, LaunchApplication, FocusWindow, HideWindow, CloseWindow, WindowCommands, BackgroundWindows, None]
+    commands = [Help, Preference, Palette, NewTerminal, ConfigureShortcut, LauncherManager, Diagnostics, Workspace1, Workspace2, Workspace3, Workspace4, RestoreSession, TerminalLock, ScreenLock, Shutdown, Restart, Exit, NoArrange, Cascade, Vertical, Horizontal, Grid, AppVisibilityToggle, OpenApp, CloseApp, AppCommand, SelectWindow, LaunchApplication, FocusWindow, HideWindow, CloseWindow, WindowCommands, BackgroundWindows, None]
 )]
 pub struct MyDesktop {
     pub preferences: Preferences,
     settings_path: PathBuf,
+    shortcut_dir: Option<PathBuf>,
+    launcher_enabled: Vec<bool>,
+    members: Vec<WorkspaceMember>,
+    active_workspace: u8,
+    terminal_launches: Vec<(Handle<TuiWindow>,SavedLaunch)>,
+    session_path: Option<PathBuf>,
+    session_worker: Option<LatestWorker<SessionJob,SessionResult>>,
+    saved_session: Option<Session>,
+    saving_exit: bool,
+    exit_saved: bool,
+    session_loading: bool,
+    exit_waiting: bool,
+    session_writable: bool,
+    session_declined: bool,
+    restore_queue: std::collections::VecDeque<crate::config::session::SavedWindow>,
+    restore_errors: Vec<String>,
+    restore_workspace: u8,
     startup_warning: Option<String>,
     system_actions: SystemActions,
     terminal_locked: bool,
@@ -95,6 +120,7 @@ struct LockVisibility {
 }
 
 impl MyDesktop {
+    pub fn set_shortcut_dir(&mut self, path: PathBuf) { self.shortcut_dir = Some(path); self.session_path = session::session_path(); }
     pub fn new(
         shortcuts: Vec<Shortcut>,
         preferences: Preferences,
@@ -103,10 +129,17 @@ impl MyDesktop {
         runner: Arc<dyn SystemActionRunner>,
     ) -> Self {
         let shortcuts = catalog::with_starters(shortcuts);
+        let launcher_enabled = vec![true; shortcuts.len()];
         Self {
             base: Desktop::new(),
             preferences,
             settings_path,
+            shortcut_dir: None, launcher_enabled,
+            members: Vec::new(), active_workspace: 0, terminal_launches: Vec::new(),
+            session_path: None, session_worker: None, saved_session: None, saving_exit: false, exit_saved: false,
+            session_loading: false, exit_waiting: false, session_writable: true,
+            session_declined: false,
+            restore_queue: std::collections::VecDeque::new(), restore_errors: Vec::new(), restore_workspace: 0,
             startup_warning,
             system_actions: SystemActions::new(runner),
             terminal_locked: false,
@@ -153,7 +186,9 @@ impl MyDesktop {
     }
 
     fn track_window(&mut self, target: WindowTarget) {
+        self.members.push(WorkspaceMember { target, workspace: self.active_workspace, hidden: false });
         self.window_order.push(target);
+        if let Some(method) = self.arrange_method { self.arrange_workspace(method); }
         self.sync_taskbar();
     }
     fn window_info(&self, target: WindowTarget) -> Option<WindowInfo> {
@@ -162,7 +197,7 @@ impl MyDesktop {
                 let window = self.windowt(handle)?;
                 if window.is_closing() { return None; }
                 let shortcut = self.app_windows.iter().find(|(_, value)| **value == handle).map(|(index, _)| *index);
-                let caption = shortcut.map_or_else(|| window.title().to_owned(), |index| self.shortcuts[index].name.clone());
+                let caption = shortcut.map_or_else(|| window.application_title().to_owned(), |index| self.shortcuts[index].name.clone());
                 (caption, window.is_visible(), shortcut)
             }
             WindowTarget::Browser(handle) => {
@@ -199,9 +234,14 @@ impl MyDesktop {
             }
             WindowTarget::Help(handle) => ("Help".into(), self.windowt(handle)?.is_visible(), None),
         };
+        let caption = match self.members.iter().find(|member| member.target == target) {
+            Some(member) if member.workspace != self.active_workspace => format!("{caption} [workspace {}]",member.workspace+1),
+            _ => caption,
+        };
         Some(WindowInfo { target, caption, visible, shortcut })
     }
     fn focus_window(&mut self, target: WindowTarget) {
+        self.reveal_workspace(target);
         match target {
             WindowTarget::Terminal(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
@@ -212,8 +252,10 @@ impl MyDesktop {
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Help(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
         }
+        if let Some(method) = self.arrange_method { self.arrange_workspace(method); }
     }
     fn hide_window(&mut self, target: WindowTarget) {
+        if let Some(member) = self.members.iter_mut().find(|member| member.target == target) { member.hidden = true; }
         match target {
             WindowTarget::Terminal(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
@@ -271,6 +313,8 @@ impl MyDesktop {
             else { self.unregister_menu(task.menu); self.appbar().remove(task.button); }
         }
         self.window_order = infos.iter().map(|info| info.target).collect();
+        self.members.retain(|member| infos.iter().any(|info| info.target == member.target));
+        self.terminal_launches.retain(|(handle,_)| infos.iter().any(|info| info.target == WindowTarget::Terminal(*handle)));
         for info in &infos {
             let caption = taskbar_caption(&info.caption);
             if let Some(task) = self.window_tasks.iter_mut().find(|task| task.info.target == info.target) {
@@ -282,7 +326,7 @@ impl MyDesktop {
                 let focus = menu.add(Command::new("Focus", Key::None, Commands::FocusWindow));
                 let hide = menu.add(Command::new("Hide (run in background)", Key::None, Commands::HideWindow));
                 let close = menu.add(Command::new("Close", Key::None, Commands::CloseWindow));
-                let commands = info.shortcut.filter(|index| !self.shortcuts[*index].taskbar.additional_commands.is_empty())
+                let commands = info.shortcut.filter(|index| self.launcher_enabled[*index] && !self.shortcuts[*index].taskbar.additional_commands.is_empty())
                     .map(|_| menu.add(Command::new("App commands...", Key::None, Commands::WindowCommands)));
                 let menu = self.register_menu(menu);
                 let button = self.appbar().add(MenuButton::with_handle(&caption, menu, 6, Side::Left));
@@ -408,6 +452,7 @@ impl MyDesktop {
         for (handle, visible) in visibility.games { if let Some(window) = self.window_mut(handle) { window.set_visible(visible); } }
         for (handle, visible) in visibility.help { if let Some(window) = self.window_mut(handle) { window.set_visible(visible); } }
         self.terminal_locked = false;
+        if let Some(method) = self.arrange_method { self.arrange_workspace(method); }
         self.sync_taskbar();
         self.refresh_panel();
     }
@@ -463,11 +508,13 @@ impl MyDesktop {
         } else { self.complete_desktop(intent); }
     }
     fn complete_desktop(&mut self, intent: DesktopIntent) {
+        if matches!(intent,DesktopIntent::Exit) && self.save_before_exit() { return; }
         match intent {
             DesktopIntent::Power(action) => if let Err(error) = self.system_actions.request(action, true) {
                 dialogs::error("System request failed", &error);
             },
             DesktopIntent::Exit => {
+                self.exit_saved = true;
                 let paint = self.paint_window;
                 if let Some(window) = self.window_mut(paint) { window.shutdown(); }
                 for handle in self.terminal_handles() {
@@ -501,6 +548,7 @@ impl MyDesktop {
         if let Some(approved) = result && let Some(intent) = self.pending_desktop.take() && approved { self.complete_desktop(intent); }
     }
     fn open_paint(&mut self, path: Option<PathBuf>) {
+        self.reveal_workspace(WindowTarget::Paint(self.paint_window));
         let handle = self.paint_window;
         if let Some(window) = self.window_mut(handle) && !window.is_closing() {
             if let Some(path) = path { window.open(path); }
@@ -517,6 +565,7 @@ impl MyDesktop {
     }
 
     fn open_image(&mut self, path: Option<PathBuf>) {
+        self.reveal_workspace(WindowTarget::Image(self.image_window));
         let handle = self.image_window;
         if let Some(window) = self.window_mut(handle)
             && !window.is_closing() {
@@ -532,6 +581,7 @@ impl MyDesktop {
         }
     }
     fn open_pdf(&mut self, path: Option<PathBuf>) {
+        self.reveal_workspace(WindowTarget::Pdf(self.pdf_window));
         let handle = self.pdf_window;
         if let Some(window) = self.window_mut(handle) && !window.is_closing() {
             if let Some(path) = path { window.open(path); }
@@ -545,6 +595,14 @@ impl MyDesktop {
         }
     }
     fn open_file(&mut self, path: PathBuf) {
+        if let Some(id) = self.file_association(&path) {
+            if let Err(error) = self.open_with_application(path,id) { dialogs::error("Cannot open file",&format!("{error:#}")); }
+            return;
+        }
+        if Self::association_key(&path).is_some_and(|key| self.preferences.workflow.file_associations.contains_key(&key)) {
+            dialogs::error("Default application unavailable","The saved application is no longer available. Use Open with to choose another application.");
+            return;
+        }
         if path.extension().is_some_and(|extension| extension.eq_ignore_ascii_case("asciipaint")) { self.open_paint(Some(path)); }
         else if crate::runtime::files::is_image(&path) { self.open_image(Some(path)); }
         else if crate::runtime::files::is_pdf(&path) { self.open_pdf(Some(path)); }
@@ -552,6 +610,7 @@ impl MyDesktop {
         else if let Err(error) = self.open_document(path) { dialogs::error("Cannot open file", &format!("{error:#}")); }
     }
     fn open_browser(&mut self) {
+        self.reveal_workspace(WindowTarget::Browser(self.browser_window));
         let handle = self.browser_window;
         if let Some(window) = self.window_mut(handle)
             && !window.is_closing() {
@@ -565,6 +624,7 @@ impl MyDesktop {
         }
     }
     fn open_music(&mut self, path: Option<PathBuf>) {
+        self.reveal_workspace(WindowTarget::Music(self.music_window));
         let handle = self.music_window;
         if let Some(window) = self.window_mut(handle)
             && !window.is_closing() {
@@ -583,25 +643,33 @@ impl MyDesktop {
         }
     }
     fn open_document(&mut self, path: PathBuf) -> anyhow::Result<()> {
-        let editor = self.shortcuts.iter().find(|shortcut| shortcut.name == "Text editor")
+        let index = self.shortcuts.iter().enumerate().find(|(index,shortcut)| self.launcher_enabled[*index] && shortcut.name == "Text editor").map(|(index,_)| index)
             .ok_or_else(|| anyhow::anyhow!("Configure a Text editor shortcut to open this file."))?;
-        let window = TuiWindow::new_with_document(
-            &format!("Text editor — {}", path.file_name().unwrap_or(path.as_os_str()).to_string_lossy()),
+        let editor = self.shortcuts[index].clone();
+        let title = format!("Text editor — {}", path.file_name().unwrap_or(path.as_os_str()).to_string_lossy());
+        let window = if editor.working_directory.is_none() {
+            TuiWindow::new_with_document(&title,editor.command,editor.args,editor.window,editor.terminal,&self.preferences.terminal,Some(&path))?
+        } else { TuiWindow::new_with_context_and_directory(
+            &title,
             editor.command.clone(), editor.args.clone(), editor.window.clone(), editor.terminal.clone(),
-            &self.preferences.terminal, Some(&path),
-        )?;
+            &self.preferences.terminal, LaunchContext::Document(&path), editor.working_directory.as_deref(),
+        )? };
         let handle = self.add_window(window);
         self.document_windows.push(handle);
+        self.remember_terminal(handle,index,LaunchContext::Document(&path),None);
         self.track_window(WindowTarget::Terminal(handle));
         Ok(())
     }
 
     fn launch_independent(&mut self, index: usize, context: LaunchContext<'_>, title: &str) -> anyhow::Result<()> {
         let shortcut = self.shortcuts.get(index).ok_or_else(|| anyhow::anyhow!("This shortcut is no longer available."))?;
-        let window = TuiWindow::new_with_context(title,shortcut.command.clone(),shortcut.args.clone(),
-            shortcut.window.clone(),shortcut.terminal.clone(),&self.preferences.terminal,context)?;
+        let window = if shortcut.working_directory.is_none() {
+            TuiWindow::new_with_context(title,shortcut.command.clone(),shortcut.args.clone(),shortcut.window.clone(),shortcut.terminal.clone(),&self.preferences.terminal,context)?
+        } else { TuiWindow::new_with_context_and_directory(title,shortcut.command.clone(),shortcut.args.clone(),
+            shortcut.window.clone(),shortcut.terminal.clone(),&self.preferences.terminal,context,shortcut.working_directory.as_deref())? };
         let handle = self.add_window(window);
         self.document_windows.push(handle);
+        self.remember_terminal(handle,index,context,None);
         self.track_window(WindowTarget::Terminal(handle));
         Ok(())
     }
@@ -619,7 +687,7 @@ impl MyDesktop {
         Ok(())
     }
     fn open_browser_terminal(&mut self, folder: PathBuf) -> anyhow::Result<()> {
-        let index = self.shortcuts.iter().position(|shortcut| shortcut.name == "Terminal")
+        let index = self.shortcuts.iter().enumerate().find(|(index,shortcut)| self.launcher_enabled[*index] && shortcut.name == "Terminal").map(|(index,_)| index)
             .ok_or_else(|| anyhow::anyhow!("Configure a Terminal shortcut to open this folder."))?;
         self.launch_independent(index,LaunchContext::Folder(&folder),&format!("Terminal — {}",folder.display()))
     }
@@ -627,8 +695,13 @@ impl MyDesktop {
         let result = match action {
             native::BrowserAction::Open(path) => { self.open_file(path); Ok(()) }
             native::BrowserAction::OpenWith(path) => {
-                match OpenWithDialog::new(&path,&self.shortcuts).show() {
-                    Some(id) => self.open_with_application(path,id), None => Ok(()),
+                let dialog = if self.launcher_enabled.iter().all(|enabled| *enabled) { OpenWithDialog::new(&path,&self.shortcuts) }
+                    else { OpenWithDialog::with_enabled(&path,&self.shortcuts,&self.launcher_enabled) };
+                match dialog.show() {
+                    Some(selection) => {
+                        if selection.remember { self.remember_association(&path,selection.id); }
+                        self.open_with_application(path,selection.id)
+                    }, None => Ok(()),
                 }
             }
             native::BrowserAction::OpenTerminal(folder) => self.open_browser_terminal(folder),
@@ -637,6 +710,7 @@ impl MyDesktop {
     }
 
     fn open_game(&mut self, kind: GameKind) {
+        if let Some(handle) = self.game_windows.get(&kind).copied() { self.reveal_workspace(WindowTarget::Game(handle)); }
         if let Some(handle) = self.game_windows.get(&kind).copied()
             && let Some(window) = self.window_mut(handle)
             && !window.is_closing() {
@@ -675,6 +749,7 @@ impl MyDesktop {
             && let Some(item) = self.menuitem_mut(menu, item) { item.set_caption("Hide"); }
     }
     fn launch_external(&mut self, index: usize, command: String, args: Vec<String>) {
+        if let Some(handle) = self.app_windows.get(&index).copied() { self.reveal_workspace(WindowTarget::Terminal(handle)); }
         if let Some(handle) = self.app_windows.get(&index).copied()
             && let Some(window) = self.window_mut(handle)
             && !window.is_closing() {
@@ -698,17 +773,22 @@ impl MyDesktop {
         let window = self.shortcuts[index].window.clone();
         let terminal = self.shortcuts[index].terminal.clone();
 
-        let window = TuiWindow::new(
+        let window = if self.shortcuts[index].working_directory.is_none() {
+            TuiWindow::new(&app_name,command,args,window,terminal,&self.preferences.terminal)?
+        } else { TuiWindow::new_with_context_and_directory(
             &app_name,
             command,
             args,
             window,
             terminal,
             &self.preferences.terminal,
-        )?;
+            LaunchContext::Default,
+            self.shortcuts[index].working_directory.as_deref(),
+        )? };
 
         let win_handle = self.add_window(window);
         self.app_windows.insert(index, win_handle);
+        self.remember_terminal(win_handle,index,LaunchContext::Default,None);
         self.track_window(WindowTarget::Terminal(win_handle));
 
         Ok(())
@@ -738,6 +818,8 @@ impl OnResize for MyDesktop {
         for handle in self.game_windows.values().copied().collect::<Vec<_>>() {
             if let Some(window) = self.window_mut(handle) { window.constrain_to(available); }
         }
+        self.fit_workspace_windows();
+        if !self.terminal_locked && let Some(method) = self.arrange_method { self.arrange_workspace(method); }
         if self.terminal_locked || self.status_label.is_none() {
             return;
         }
@@ -753,13 +835,30 @@ impl OnResize for MyDesktop {
 }
 
 impl DesktopEvents for MyDesktop {
+    fn on_preview_key_pressed(&mut self, key: Key, _: char) -> EventProcessStatus {
+        if self.saving_exit || self.exit_waiting || self.exit_saved { return EventProcessStatus::Processed; }
+        if self.terminal_locked || key != self.preferences.workflow.palette_shortcut.key() { return EventProcessStatus::Ignored; }
+        self.show_palette();
+        EventProcessStatus::Processed
+    }
     fn on_start(&mut self) {
         let shortcuts = self.shortcuts.clone();
         self.status_label = self.appbar().add(appbar::Label::new("", 0, Side::Right));
         let mut desktop_menu = Menu::new();
 
         desktop_menu.add(Command::new("Help", Key::None, Commands::Help));
+        desktop_menu.add(Command::new("Command palette...", Key::None, Commands::Palette));
+        desktop_menu.add(Command::new("New terminal", Key::None, Commands::NewTerminal));
         desktop_menu.add(Command::new("Preference", Key::None, Commands::Preference));
+        desktop_menu.add(Command::new("Desktop shortcut...", Key::None, Commands::ConfigureShortcut));
+        desktop_menu.add(Command::new("Launchers...", Key::None, Commands::LauncherManager));
+        desktop_menu.add(Command::new("Diagnostics...", Key::None, Commands::Diagnostics));
+        desktop_menu.add(Command::new("Restore saved workspace...", Key::None, Commands::RestoreSession));
+        let mut workspaces = Menu::new();
+        for (label,command) in [("Workspace 1",Commands::Workspace1),("Workspace 2",Commands::Workspace2),("Workspace 3",Commands::Workspace3),("Workspace 4",Commands::Workspace4)] {
+            workspaces.add(Command::new(label,Key::None,command));
+        }
+        desktop_menu.add(menu::SubMenu::new("Workspaces",workspaces));
         desktop_menu.add(menu::Separator::new());
         desktop_menu.add(Command::new(
             "Terminal Lock",
@@ -874,6 +973,7 @@ impl DesktopEvents for MyDesktop {
         if let Some(warning) = self.startup_warning.take() {
             dialogs::error("Preferences warning", &warning);
         }
+        self.start_session_io();
     }
 
     fn on_update_window_count(&mut self, _count: usize) {
@@ -883,7 +983,7 @@ impl DesktopEvents for MyDesktop {
         let m = self.arrange_method;
 
         if let Some(method) = m {
-            self.arrange_windows(method);
+            self.arrange_workspace(method);
         }
     }
 
@@ -940,10 +1040,20 @@ impl MenuEvents for MyDesktop {
     }
 
     fn on_command(&mut self, menu: Handle<Menu>, item: Handle<Command>, command: Commands) {
-        if self.terminal_locked {
+        if self.terminal_locked || self.saving_exit || self.exit_waiting || self.exit_saved {
             return;
         }
         match command {
+            Commands::Palette => self.show_palette(),
+            Commands::NewTerminal => self.new_terminal(),
+            Commands::ConfigureShortcut => self.configure_shortcut(),
+            Commands::LauncherManager => self.manage_launchers(),
+            Commands::Diagnostics => self.show_diagnostics(),
+            Commands::RestoreSession => self.offer_restore(),
+            Commands::Workspace1 => self.switch_workspace(0),
+            Commands::Workspace2 => self.switch_workspace(1),
+            Commands::Workspace3 => self.switch_workspace(2),
+            Commands::Workspace4 => self.switch_workspace(3),
             Commands::LaunchApplication => {
                 if let Some(id) = self.application_commands.iter().find(|entry| entry.0 == item).map(|entry| entry.1) {
                     self.launch_application(id);
@@ -1002,20 +1112,18 @@ impl MenuEvents for MyDesktop {
                         self.app_windows.remove(&index);
                     }
                     Commands::AppVisibilityToggle => {
-                        if let Some(window) = self.window_mut(handle) {
-                            let visible = !window.is_visible();
-                            window.set_visible(visible);
-                            if visible { window.request_focus(); }
-                            if let Some(item) = self.menuitem_mut(menu, item) { item.set_caption(if visible { "Hide" } else { "Show" }); }
-                        }
+                        let visible = self.windowt(handle).is_some_and(|window| window.is_visible());
+                        if visible { self.hide_window(WindowTarget::Terminal(handle)); } else { self.focus_window(WindowTarget::Terminal(handle)); }
+                        if let Some(item) = self.menuitem_mut(menu,item) { item.set_caption(if visible { "Show" } else { "Hide" }); }
                     }
                     Commands::AppCommand => {
                         // Command handles, rather than captions, select additional commands.
                         let extra = self.additional_commands.iter().find(|entry| entry.0 == item).cloned();
                         if let Some((_, _, command, args)) = extra {
                             let shortcut = self.shortcuts[index].clone();
-                            match TuiWindow::new(&shortcut.name, command, args, shortcut.window, shortcut.terminal, &self.preferences.terminal) {
-                                Ok(window) => { let handle = self.add_window(window); self.document_windows.push(handle); self.track_window(WindowTarget::Terminal(handle)); }
+                            let extra_name = shortcut.taskbar.additional_commands.iter().find(|extra| extra.command == command && extra.args == args).map(|extra| extra.name.clone());
+                            match TuiWindow::new_with_context_and_directory(&shortcut.name, command, args, shortcut.window, shortcut.terminal, &self.preferences.terminal,LaunchContext::Default,shortcut.working_directory.as_deref()) {
+                                Ok(window) => { let handle = self.add_window(window); self.document_windows.push(handle); self.remember_terminal(handle,index,LaunchContext::Default,extra_name); self.track_window(WindowTarget::Terminal(handle)); }
                                 Err(error) => dialogs::error("Unable to launch command", &format!("{error:#}")),
                             }
                         }
@@ -1048,7 +1156,7 @@ impl MenuEvents for MyDesktop {
         let m = self.arrange_method;
 
         if let Some(method) = m {
-            self.arrange_windows(method);
+            self.arrange_workspace(method);
         }
     }
 }
@@ -1059,6 +1167,8 @@ impl TimerEvents for MyDesktop {
             return EventProcessStatus::Ignored;
         }
         self.poll_desktop_guard();
+        self.poll_session_io();
+        if self.saving_exit || self.exit_waiting || self.exit_saved { return EventProcessStatus::Processed; }
         let handle = self.browser_window;
         let action = self.window_mut(handle).and_then(BrowserWindow::take_action);
         if let Some(action) = action { self.dispatch_browser_action(action); }
@@ -1097,6 +1207,150 @@ mod tests {
     use crate::config::preferences::Rgb;
     use crate::test_support::{TestDir, UI_LOCK};
     use virtual_terminal::{Input, Output};
+    #[test]
+    fn restored_documents_keep_the_original_launch_directory_after_launcher_changes() {
+        let _lock = UI_LOCK.lock().unwrap(); let runtime = tokio::runtime::Runtime::new().unwrap(); let _entered = runtime.enter();
+        let dir = TestDir::new(); let original_dir = dir.path().join("original folder"); let changed_dir = dir.path().join("new folder");
+        std::fs::create_dir(&original_dir).unwrap(); std::fs::create_dir(&changed_dir).unwrap();
+        let document = original_dir.join("文 file.txt"); std::fs::write(&document,"contents").unwrap();
+        let capture = dir.path().join("capture"); let mut editor = catalog::with_starters(vec![]).remove(0);
+        editor.name = "Text editor".into(); editor.id = Some("editor".into()); editor.command = "/bin/sh".into();
+        editor.args = vec!["-c".into(),"printf '%s\\0' \"$PWD\" \"$@\" > \"$1\"; printf D; read answer".into(),"editor".into(),capture.to_string_lossy().into_owned()];
+        editor.working_directory = Some(original_dir.clone());
+        let mut desktop = MyDesktop::new(vec![editor],Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"").app_bar().timers_count(32).build().unwrap(); DesktopEvents::on_start(&mut desktop);
+        desktop.open_document(document.clone()).unwrap(); let first = desktop.document_windows[0]; pump_until(desktop.window_mut(first).unwrap(),'D');
+        let snapshot = desktop.session_snapshot(); assert_eq!(snapshot.windows.len(),1);
+        let state = dir.path().join("session.toml"); session::save(&state,&snapshot).unwrap();
+        desktop.close_window(WindowTarget::Terminal(first)); desktop.shortcuts[0].working_directory = Some(changed_dir);
+        let restored = desktop.restore_window(session::load(&state).unwrap().unwrap().windows.remove(0)).unwrap();
+        let WindowTarget::Terminal(handle) = restored else { panic!("document terminal expected"); };
+        pump_until(desktop.window_mut(handle).unwrap(),'D');
+        let captured = std::fs::read(capture).unwrap(); let values = captured.split(|byte| *byte == 0).collect::<Vec<_>>();
+        use std::os::unix::ffi::OsStrExt;
+        assert_eq!(values[0],original_dir.as_os_str().as_bytes()); assert_eq!(values[2],document.as_os_str().as_bytes());
+        desktop.complete_desktop(DesktopIntent::Exit); app.run(); runtime.block_on(crate::runtime::processes::finish_shutdown());
+    }
+    #[test]
+    fn pending_exit_hides_documents_and_rejects_new_launch_commands() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new();
+        let mut desktop = MyDesktop::new(vec![],Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"").app_bar().timers_count(32).build().unwrap(); DesktopEvents::on_start(&mut desktop);
+        desktop.open_paint(None); let paint = desktop.paint_window;
+        desktop.session_loading = true;
+        assert!(desktop.save_before_exit());
+        assert!(!desktop.windowt(paint).unwrap().is_visible());
+        assert!(!desktop.members.iter().find(|member| member.target == WindowTarget::Paint(paint)).unwrap().hidden);
+        assert!(DesktopEvents::on_preview_key_pressed(&mut desktop,key!("Ctrl+Space").into(),'\0') == EventProcessStatus::Processed);
+        MenuEvents::on_command(&mut desktop,Handle::None,Handle::None,Commands::NewTerminal);
+        assert!(desktop.document_windows.is_empty());
+        assert_eq!(desktop.window_order.len(),1);
+        desktop.session_loading = false; desktop.exit_waiting = false;
+        desktop.complete_desktop(DesktopIntent::Exit); app.run();
+    }
+    #[test]
+    fn restoration_keeps_primary_launchers_directories_and_reports_missing_entries() {
+        use crate::config::session::{SavedContext,SavedPath,SavedWindow};
+        let _lock = UI_LOCK.lock().unwrap(); let runtime = tokio::runtime::Runtime::new().unwrap(); let _entered = runtime.enter();
+        let dir = TestDir::new(); let mut shortcut = catalog::with_starters(vec![]).remove(0);
+        shortcut.command = "/bin/sh".into(); shortcut.args = vec!["-c".into(),"printf T; read answer".into()]; shortcut.id = Some("stable-shell".into());
+        let mut desktop = MyDesktop::new(vec![shortcut],Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"").app_bar().timers_count(32).build().unwrap(); DesktopEvents::on_start(&mut desktop);
+        let saved = SavedWindow { launch: SavedLaunch::External { launcher: "stable-shell".into(),primary: true,additional: None,bindings: None,context: SavedContext::Default,path: Some(SavedPath::new(dir.path())) },workspace: 2,hidden: false,x: 3,y: 2,width: 30,height: 8 };
+        desktop.restore_workspace = 2;
+        let target = desktop.restore_window(saved.clone()).unwrap();
+        let WindowTarget::Terminal(handle) = target else { panic!("terminal expected"); };
+        pump_until(desktop.window_mut(handle).unwrap(),'T');
+        assert_eq!(desktop.app_windows[&0],handle); assert!(desktop.document_windows.is_empty());
+        desktop.switch_workspace(2); assert!(desktop.windowt(handle).unwrap().is_visible());
+        desktop.launch_application(AppId::External(0)); assert_eq!(desktop.app_windows[&0],handle);
+        let snapshot = desktop.session_snapshot(); assert_eq!(snapshot.windows.len(),1);
+        let SavedLaunch::External { launcher,primary,bindings: Some(bindings),.. } = &snapshot.windows[0].launch else { panic!("recorded launch metadata expected"); };
+        assert_eq!(launcher,"stable-shell"); assert!(*primary); assert_eq!(bindings.directory.as_ref().unwrap().path(),dir.path());
+        let missing = SavedWindow { launch: SavedLaunch::External { launcher: "removed".into(),primary: false,additional: None,bindings: None,context: SavedContext::Default,path: None },..saved };
+        assert!(desktop.restore_window(missing).unwrap_err().to_string().contains("removed"));
+        assert!(!desktop.windowt(handle).unwrap().is_closing());
+        MenuEvents::on_command(&mut desktop,Handle::None,Handle::None,Commands::Exit); app.run(); runtime.block_on(crate::runtime::processes::finish_shutdown());
+    }
+    #[test]
+    fn exit_waits_for_initial_session_read_and_preserves_a_declined_snapshot() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new(); let path = dir.path().join("session.toml");
+        let saved = Session { windows: vec![crate::config::session::SavedWindow { launch: SavedLaunch::Native { app: "Snake".into(),path: None },workspace: 1,hidden: true,x: 0,y: 0,width: 30,height: 10 }],..Session::default() };
+        session::save(&path,&saved).unwrap(); let before = std::fs::read(&path).unwrap();
+        let mut desktop = MyDesktop::new(vec![],Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"").app_bar().timers_count(32).build().unwrap();
+        desktop.session_path = Some(path.clone()); DesktopEvents::on_start(&mut desktop);
+        assert!(desktop.session_loading); assert!(desktop.save_before_exit()); assert!(desktop.exit_waiting);
+        let deadline = std::time::Instant::now()+Duration::from_secs(2);
+        while desktop.session_loading && std::time::Instant::now()<deadline { desktop.poll_session_io(); std::thread::yield_now(); }
+        assert!(!desktop.session_loading); assert_eq!(std::fs::read(path).unwrap(),before);
+        assert!(desktop.saved_session.is_some()); assert!(desktop.window_order.is_empty()); app.run();
+    }
+    #[test]
+    fn workspaces_preserve_hidden_state_and_move_without_restarting_windows() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new();
+        let mut desktop = MyDesktop::new(vec![],Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"").app_bar().timers_count(32).build().unwrap();
+        DesktopEvents::on_start(&mut desktop);
+        desktop.open_game(GameKind::Snake); let snake = desktop.game_windows[&GameKind::Snake];
+        desktop.open_game(GameKind::Puzzle2048); let puzzle = desktop.game_windows[&GameKind::Puzzle2048];
+        desktop.hide_window(WindowTarget::Game(puzzle)); desktop.switch_workspace(1);
+        assert!(!desktop.windowt(snake).unwrap().is_visible());
+        desktop.open_game(GameKind::Minesweeper); let mines = desktop.game_windows[&GameKind::Minesweeper];
+        desktop.switch_workspace(0);
+        assert!(desktop.windowt(snake).unwrap().is_visible());
+        assert!(!desktop.windowt(puzzle).unwrap().is_visible()); assert!(!desktop.windowt(mines).unwrap().is_visible());
+        desktop.move_to_workspace(WindowTarget::Game(snake),2);
+        assert!(!desktop.windowt(snake).unwrap().is_visible());
+        desktop.focus_window(WindowTarget::Game(snake));
+        assert_eq!(desktop.active_workspace,2); assert!(desktop.windowt(snake).unwrap().is_visible());
+        let visibility = desktop.hide_for_terminal_lock(); desktop.restore_after_terminal_unlock(visibility);
+        assert!(desktop.windowt(snake).unwrap().is_visible()); assert!(!desktop.windowt(puzzle).unwrap().is_visible());
+        let session = desktop.session_snapshot(); assert_eq!(session.windows.len(),3);
+        assert!(session.windows.iter().any(|window| window.workspace == 0 && window.hidden));
+        assert!(session.windows.iter().any(|window| window.workspace == 2 && !window.hidden));
+        MenuEvents::on_command(&mut desktop,Handle::None,Handle::None,Commands::Exit); app.run();
+    }
+    #[test]
+    fn new_terminals_and_catalog_reload_keep_running_instances_and_stable_identity() {
+        let _lock = UI_LOCK.lock().unwrap(); let runtime = tokio::runtime::Runtime::new().unwrap(); let _entered = runtime.enter();
+        let dir = TestDir::new(); let mut shortcut = catalog::with_starters(vec![]).remove(0);
+        shortcut.command = "/bin/sh".into(); shortcut.args = vec!["-c".into(),"printf T; read answer".into()];
+        shortcut.id = Some("stable-terminal".into());
+        let mut desktop = MyDesktop::new(vec![shortcut.clone()],Preferences::default(),dir.path().join("settings.toml"),None,Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"").app_bar().timers_count(32).build().unwrap(); DesktopEvents::on_start(&mut desktop);
+        desktop.launch_application(AppId::External(0)); let original = desktop.app_windows[&0]; pump_until(desktop.window_mut(original).unwrap(),'T');
+        desktop.new_terminal(); desktop.new_terminal(); let independent = desktop.document_windows.clone(); assert_eq!(independent.len(),2);
+        for handle in &independent { pump_until(desktop.window_mut(*handle).unwrap(),'T'); }
+        let transient = independent[0];
+        let window = desktop.window_mut(transient).unwrap();
+        window.terminal_action(TerminalAction::CopyMode); TimerEvents::on_update(window,0);
+        assert!(window.title().contains("Copy"));
+        assert_eq!(desktop.window_info(WindowTarget::Terminal(transient)).unwrap().caption,"Terminal",
+            "transient terminal status must not change palette/window identity");
+        shortcut.name = "Renamed shell".into(); shortcut.command = "/missing/new-command".into();
+        desktop.reload_launchers(vec![shortcut]);
+        assert_eq!(desktop.app_windows[&0],original); assert!(!desktop.windowt(original).unwrap().is_closing());
+        assert_eq!(desktop.shortcuts[0].name,"Renamed shell");
+        desktop.reload_launchers(vec![]);
+        assert!(!desktop.launcher_enabled[0]); assert!(!desktop.windowt(original).unwrap().is_closing());
+        assert!(!desktop.application_commands.iter().any(|(_,id)| *id == AppId::External(0)));
+        assert_eq!(desktop.session_snapshot().windows.len(),3);
+        MenuEvents::on_command(&mut desktop,Handle::None,Handle::None,Commands::Exit); app.run(); runtime.block_on(crate::runtime::processes::finish_shutdown());
+    }
+    #[test]
+    fn saved_file_associations_route_files_and_survive_settings_round_trip() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new(); let path = dir.path().join("picture.BIN");
+        ::image::RgbaImage::from_pixel(2,2,::image::Rgba([1,2,3,255])).save_with_format(&path,::image::ImageFormat::Png).unwrap();
+        let settings = dir.path().join("settings.toml");
+        let mut desktop = MyDesktop::new(vec![],Preferences::default(),settings.clone(),None,Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"").app_bar().timers_count(32).build().unwrap(); DesktopEvents::on_start(&mut desktop);
+        desktop.remember_association(&path,AppId::ImageViewer);
+        assert_eq!(Preferences::load(&settings).0.workflow.file_associations.get("bin").map(String::as_str),Some("native:image"));
+        assert_eq!(desktop.file_association(&path),Some(AppId::ImageViewer));
+        desktop.open_file(path); assert!(desktop.windowt(desktop.image_window).is_some()); assert!(desktop.document_windows.is_empty());
+        MenuEvents::on_command(&mut desktop,Handle::None,Handle::None,Commands::Exit); app.run();
+    }
     #[test]
     fn browser_launches_bind_paths_set_child_directory_and_track_independent_windows() {
         use std::os::unix::ffi::{OsStrExt,OsStringExt};
@@ -1598,9 +1852,11 @@ mod tests {
         }
         // Launch three quiet windows and verify grouping, status space, and
         // restoration across wide/narrow/wide terminal sizes.
-        for (enabled, wide, narrow) in [
-            (false, 0x5831026DC2ABAA4Bu64, 0x3BC120EFAF880B16u64),
-            (true, 0xF1D933FAA1821C65u64, 0x7208F3EA06BF6EB0u64),
+        // On shrink, windows now fit completely inside the PTY. Growing keeps
+        // that valid geometry while restoring the full taskbar entries.
+        for (enabled, wide, narrow, restored) in [
+            (false, 0x5831026DC2ABAA4Bu64, 0xB56DFF8BEC42D920u64, 0x3A67E0AF22C13549u64),
+            (true, 0xF1D933FAA1821C65u64, 0x99BA8092B4ADADF6u64, 0x4D46D84DC7E63417u64),
         ] {
             let mut shortcuts = Vec::new();
             for name in [
@@ -1643,7 +1899,7 @@ mod tests {
             let overflow_actions = if std::env::var_os("DESKTOP_TUI_OVERFLOW_ACTIONS").is_some() {
                 "Mouse.Click(35,0,left)\nKey.Pressed(Home)\nKey.Pressed(Enter)\nPaint('taskbar-actions')\nKey.Pressed(Escape)\nMouse.Click(15,0,left)\nKey.Pressed(Home)\nKey.Pressed(Down)\nKey.Pressed(Down)\nKey.Pressed(Right)\nKey.Pressed(Home)\nKey.Pressed(Down)\nKey.Pressed(Down)\nKey.Pressed(Enter)\n"
             } else { "" };
-            let script = format!("{launch}Paint.Enable(true)\nPaint('initial')\nCheckHash({wide:#X})\nResize(80,24)\nPaint('narrow')\nCheckHash({narrow:#X})\n{overflow_actions}Resize(200,24)\nPaint('wide restored')\nCheckHash({wide:#X})");
+            let script = format!("{launch}Paint.Enable(true)\nPaint('initial')\nCheckHash({wide:#X})\nResize(80,24)\nPaint('narrow')\nCheckHash({narrow:#X})\n{overflow_actions}Resize(200,24)\nPaint('wide restored')\nCheckHash({restored:#X})");
             let app = App::debug(200, 24, &script)
                 .desktop(desktop)
                 .app_bar()

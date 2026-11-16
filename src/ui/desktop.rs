@@ -6,3 +6,5 @@ mod view;
 pub(crate) use view::MyDesktop;
 
 mod open_with;
+mod palette;
+mod launchers;

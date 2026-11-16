@@ -33,7 +33,9 @@ cargo run --locked -- --help
 The executables are `target/debug/desktop-tui` and `target/release/desktop-tui`.
 Release settings in [.cargo/config.toml](.cargo/config.toml) favor binary size.
 `--help` exits before initializing the terminal and is safe to check without
-starting the desktop. Add `--offline` only when dependencies are cached; a
+starting the desktop. `--doctor` is also noninteractive and checks configuration
+and tools without launching commands or creating configuration directories.
+Add `--offline` only when dependencies are cached; a
 dependency-fetch failure is not fixed by dropping `--locked`.
 
 ## Select a shortcut directory
@@ -75,6 +77,80 @@ Carboxyl is included in the portable Linux package; source/Cargo installations
 can use a separately installed copy.
 Music Player and ASCII Paint are native and compiled into the desktop binary.
 Snake, 2048, and Minesweeper are built in under Application > Games.
+
+## Run over SSH or another PTY
+
+Use a terminal allocation when starting a remote desktop:
+
+```sh
+ssh -t user@host 'desktop-tui /path/to/shortcuts'
+```
+
+Desktop-TUI, its commands, file paths and saved state belong to the remote host.
+No X11 forwarding or graphical session is required. A display-free local launch
+can use:
+
+```sh
+env -u DISPLAY -u WAYLAND_DISPLAY ./target/release/desktop-tui ./shortcuts
+```
+
+The internal clipboard works between terminal windows and native text controls.
+Use terminal Copy mode and the Paste palette action for a child shell; native
+text controls use Ctrl+C/Ctrl+V. Your terminal client's normal paste also reaches
+the focused control. Copying to the client operating system's clipboard depends
+on the client terminal; the internal clipboard does not claim to update it.
+Optional X11/Wayland helpers are only used when the server advertises a graphical
+session. Missing display variables and clipboard helpers are normal over SSH.
+
+The input thread checks the actual PTY size at most 100 ms apart, including while
+output is quiet. This also handles relays that do not deliver a usable resize
+notification. The selected tiling layout follows outer resizing; ordinary
+windows are kept within the available desktop when it shrinks. If the client
+intercepts Ctrl+Space, use the Desktop menu and save another shortcut.
+
+## Use desktop commands and workspaces
+
+**Ctrl+Space** opens the searchable command palette while an app has focus.
+Use **Desktop > Command palette...** if the host terminal or input method takes
+that key. Type words, move with arrows/PageUp/PageDown, and press Enter; Escape
+cancels. **Desktop > Desktop shortcut...** saves another modified key/function
+key. Press the configured prefix again in the open palette to forward it to the
+originating terminal; the default Ctrl+Space twice sends literal Ctrl+Space.
+Menus, modal dialogs and Terminal Lock keep their own input.
+
+**Desktop > New terminal**, also a palette action, creates an independent
+configured Terminal. Normal application launchers restore their existing window.
+Ctrl+C sends a normal child interrupt; a window's Close action requests explicit
+shutdown. Shift+PageUp/PageDown scroll terminal history. With the terminal
+focused, use palette actions **Terminal: Copy mode**, **Search history**, **Paste**
+and **Return to live**. Copy mode uses arrows, Space to anchor, Enter to copy or
+mouse dragging; Search uses literal text, Enter/Shift+Enter and Escape. Title
+status reports mode and clipboard results. Optional `wl-copy`/`wl-paste`, `xclip`
+or `xsel` provide optional graphical copying/pasting for terminal windows.
+Native controls share the terminal worker's internal clipboard; graphical
+provider failures leave that clipboard usable.
+See [README](README.md#keyboard-control-and-terminal-history) for limits.
+
+Choose **Desktop > Workspaces > Workspace 1–4** or search **Switch to workspace N**
+in the palette. **Move current window to workspace N** moves the window focused
+before opening the palette. Switching keeps apps alive and preserves hidden
+state; focusing a window on another workspace switches there. Tiling affects the
+current workspace's visible windows.
+
+Desktop Exit saves a session and then cleans up managed processes. A later start
+offers **Restore** before relaunching saved apps; Cancel leaves them closed.
+**Desktop > Restore saved workspace...** offers it again. Missing launchers/files
+are reported individually. The snapshot records layout, workspace/hidden state,
+launch identities, working directories and saved paths; it does not preserve
+terminal output, process memory, unsaved buffers or game boards.
+
+Configuration and state are separate. `preferences.toml` stores settings,
+palette rebinding and saved Open with defaults in the configuration directory.
+`session.toml` and `state/browser.toml` live under the application state directory,
+normally `$XDG_STATE_HOME/desktop-tui` or `~/.local/state/desktop-tui` on Linux.
+A custom shortcut directory redirects none of these. Browser state remembers
+location, view, filter, hidden toggle and favorites. Use **Open with > Always use
+for .extension** to save a default; use Open with again to choose another.
 
 ## Use the bundled Carboxyl browser
 
@@ -162,14 +238,16 @@ Select **Application > User > Smoke test**. This explicitly runs Unix `sh` with 
 `printf` command, waits briefly using `sleep`, then exits; its window closes on
 child exit. In TOML, `\n` becomes a newline within the shell's quoted string.
 The desktop itself remains open. For an interactive shell instead, edit the
-shortcut to `args = []`, restart the desktop, and select its Application launcher again.
+shortcut to `args = []`, use **Desktop > Launchers... > Reload**, and select its
+Application launcher again.
 Remove the temporary directory after finishing.
 
 Shortcuts are menu entries, not startup jobs. Open windows appear after **Tilling |**.
 Use a window button’s **Hide (run in background)** or **Close** command. Restore
 hidden instances through **Application > Background windows**. Use **Tilling**
-for arrangement and **Desktop > Exit** to leave. With the child control focused, Ctrl+C requests child termination and
-closes its window; it does not follow ordinary shell interrupt semantics.
+for arrangement and **Desktop > Exit** to save the workspace snapshot and leave.
+With the child control focused, Ctrl+C is a normal interrupt delivered to the
+child; Close is the explicit shutdown action. A child that exits closes its window.
 Escape on the desktop keeps the application open, including when a terminal
 delivers it separately as the prefix of an Alt key sequence.
 
@@ -184,11 +262,40 @@ stays one argument. See [README.md](README.md) for the fuller shortcut example.
 selection dialogs before launch. Cancellation prevents that launch. Additional
 commands in a shortcut's menu use their own executable and argument array.
 
+Use **Desktop > Launchers...** to select/Edit or New, Save, then Reload. Existing
+running windows stay open across reload. Optional `id` preserves identity across
+renames; without it, name is the identity. Duplicate names or IDs are errors.
+Optional `working_directory` is absolute or relative to its TOML file's parent;
+File Browser's explicit folder/file context takes precedence. Save keeps an
+existing launcher's source file, refuses stale edits and validates drafts before
+atomic replacement. Exact lowercase `.toml` files are discovered recursively;
+traversal/read/parse errors report the path instead of being silently skipped.
+
+From the repository root, run the read-only report:
+
+```sh
+cargo run --locked -- --doctor ./shortcuts
+```
+
+An installed binary accepts the same flag and optional directory from any
+working directory; pass an absolute shortcut path when needed. Without a
+directory it inspects the default configuration location. Unlike normal startup,
+doctor does not create a missing directory; that is a configuration error. It
+checks preferences, launchers/cwd, executable resolution (including bundled
+Carboxyl), Poppler, graphical-session variables and clipboard tools. Configuration
+or Terminal executable errors return nonzero; missing optional tools warn.
+Configured commands are never executed. **Desktop > Diagnostics...** displays the
+same report asynchronously. Availability checks do not prove a graphical
+clipboard connection or browser site compatibility.
+
 | Symptom | Check |
 | --- | --- |
-| Custom launcher missing | Check Application > User or the configured category. Confirm the folder and TOML files exist; traversal errors can be skipped. Names are deduplicated. |
+| Custom launcher missing | Check Application > User or the configured category. Confirm the selected folder and exact .toml files exist; check reported traversal/parse errors and duplicate names/IDs. Reload saved edits through Desktop > Launchers. |
 | Startup reports a TOML error | Compare the file with the complete example: `name`, `command`, all three tables, and the three window booleans are required. |
-| A command fails to start | Check that its executable is installed and available on `PATH`, or give its path. `--help` does not validate shortcut executables. |
+| A command fails to start | Check that its executable is installed and available on `PATH`, or give its path. Use --doctor for read-only executable/cwd checks; --help only validates CLI syntax. |
+| Saved app default unavailable | Open with lets you replace a missing saved extension association. Save the choice with Always use for .extension. |
+| Clipboard uses internal fallback | This is normal over SSH and needs no repair. Optional graphical integration uses DISPLAY/WAYLAND_DISPLAY and wl-copy/wl-paste, xclip or xsel; --doctor checks availability only. |
+| Restore skips a window | Check the stable launcher ID and saved file/cwd path. Restoring launches a new process; missing entries are reported without stopping other restores. |
 | Output or resizing looks wrong | Reproduce with a controlled command and record terminal size. Record the exact UTF-8/escape stream. The vendored emulator handles incremental UTF-8, graphemes, alternate screens and terminal modes; image protocols are disabled. Resize synchronization also runs while output is quiet. |
 | Build cannot fetch dependencies | Restore registry access, or use `--offline` with a populated cache. Record the actual error. |
 

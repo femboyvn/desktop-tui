@@ -115,7 +115,12 @@ menu item to launch it. Check only the matrix rows relevant to the patch.
 | Area | Exercise and record |
 | --- | --- |
 | Startup and menus | Launch with the explicit directory, start a known command, hide/show, close, and reopen it. Confirm responsiveness and arrangement if affected. |
-| Keyboard and focus | On an empty desktop, press Alt combinations and Escape; confirm the app stays open and Desktop > Exit still works. Type into the focused child; check affected arrows, navigation, modifiers, or function keys. Move focus and confirm input goes to the intended control. Check Ctrl+C termination separately. |
+| Keyboard and focus | On an empty desktop, press Alt combinations and Escape; confirm the app stays open and Desktop > Exit still works. Type into the focused child; check affected arrows, navigation, modifiers, or function keys. Move focus and confirm input goes to the intended control. Check that Ctrl+C interrupts the child normally and explicit Close still shuts it down. |
+| Command palette and binding | With a terminal/native window focused, open Ctrl+Space; search Launch/Focus/Hide/Close, cancel, and use New terminal twice. Confirm ordinary launchers restore instead. Use Desktop menu fallback, rebind and restart, then press the configured prefix twice and verify literal bytes reach the originating child. Menus, modal dialogs, Terminal Lock and Ctrl+C must retain their own behavior. |
+| History, selection and clipboard | Generate bounded multilingual/soft-wrapped output; Shift+PageUp/Down, new output while paused, Return to live, keyboard/mouse Copy mode, complete combining/CJK/emoji selection, hard versus soft breaks, and literal Search with next/previous/wrap. Resize, alternate screen, eviction and limits must clear/clamp modes safely. In a display-free PTY verify internal copying between native controls and terminals, title status, oversized paste refusal, client paste and child mouse/paste outside Copy/Search. Optional graphical integration checks Wayland/X11, missing/failing providers, close during clipboard I/O and no helper survivors. |
+| File operations and state | In isolated folders, create/rename/copy/move/trash via menus and keys, cancel dialogs/work, confirm/refuse replacement and changed destinations, and check source/backup paths after errors. Cover unreadable files, symlinks/dangling links, special-file refusal, destination directories, same/cross-filesystem moves and cross-filesystem trash refusal. Check progress, narrow layouts, favorites/destination favorites, filename filter, remembered state after restart, corrupt state preservation, hide/lock during work and Exit while saving state. Never use valuable files as fixtures. |
+| Launcher editing and diagnostics | New/Edit/Save/Reload custom and starter launchers, invalid/stale drafts, duplicate names/IDs, explicit IDs across rename, source-relative cwd and file-context precedence. Existing visible/hidden windows remain alive and selectable after change/removal. Check Diagnostics scrolling/cancel and --doctor exit codes/no config creation, missing Terminal versus optional helpers, bundled Carboxyl and no configured-command execution. |
+| Workspaces and restoration | Switch among four workspaces via menu/palette, move the originating window, focus across workspaces and preserve deliberate Hide state. Tile visible current-workspace windows, hide/lock/resize with terminals/native/docs, then Exit and check cleanup. Restart with an offered Restore; Cancel must launch nothing. Restore available entries with geometry/cwd/hidden state, report missing apps/files individually, and verify saved child output/unsaved buffers are not claimed as restored. |
 | ANSI and rendering | Use controlled text/color/cursor output. Check the affected sequences, chunk boundaries, non-ASCII text, and surface edges against the intended result. Record existing emulator limits separately. |
 | ASCII desktop background | Open Preference > Background (Alt+5), Browse to backgrounds/cat.asc, inspect the preview, and Save. Restart to check persistence, then move/close windows over the art, resize the outer terminal down to tiny sizes and back, and change the palette. Check spaces/blank lines, CRLF and tab expansion, filenames with spaces/Unicode, invalid/non-ASCII/ANSI/oversized files, picker cancellation, Clear art with Save versus Escape, and cancellation during loading. Failed imports must preserve the previous art; presets/reset must preserve the draft. |
 | Window movement and colors | Open Help and a terminal with bold/plain colored text. Drag each window repeatedly over the desktop and other windows, then close or hide it. Check that exposed cells and text retain their colors with active and quiet terminal output. |
@@ -131,10 +136,10 @@ menu item to launch it. Check only the matrix rows relevant to the patch.
 | Mixed window lifecycle | Tile native and terminal/document windows together; change theme and Terminal Lock with some hidden. Restore the original visibility. Close and reopen native windows, close individual documents, then Exit and check for leftover child processes. |
 | Child lifecycle | Exercise normal exit, a missing executable, menu Close, Ctrl+C, and Desktop Exit. Observe errors and responsiveness, and use the host's process tools to check for leftover children. |
 
-Ctrl+C with the child control focused requests termination and closes its window;
-it is not forwarded as an ordinary shell interrupt. A finite command's window
-closes when the child exits. For resize and input checks, use an interactive or
-longer-running controlled child rather than relying on a short-lived print.
+Ctrl+C with the child control focused sends byte 0x03 as a normal interrupt.
+A shell may interrupt its foreground job and remain open; a child that exits
+closes its window. Test explicit Close separately for managed process cleanup.
+For resize and input checks, use an interactive or longer-running controlled child rather than relying on a short-lived print.
 Unicode preservation and cell width are implemented; the outer terminal still controls fonts and shaping. Browser site support belongs to Carboxyl.
 
 ## Review and report evidence
@@ -222,6 +227,59 @@ In a real terminal, open File information from each view and check all fields,
 scroll full paths, Tab between text and Close, resize the dialog, close with both
 the button and Escape, and confirm the browser selection and files are unchanged.
 Change a file externally, Refresh, and reopen the dialog to check updated metadata.
+
+## Workflow regression coverage
+
+Run the focused owning-module tests, then the full Rust gates above:
+
+```sh
+cargo test --locked terminal:: -- --test-threads=1
+cargo test --locked runtime::clipboard::tests -- --test-threads=1
+cargo test --locked runtime::files::
+cargo test --locked browser
+cargo test --locked config::shortcuts::tests
+cargo test --locked config::workflow::tests
+cargo test --locked config::session::tests
+cargo test --locked ui::desktop::launchers::tests
+cargo test --locked ui::desktop::palette::tests
+cargo test --locked ui::desktop::view::tests
+cargo test --locked platform::diagnostics::tests
+cargo test --locked args::tests
+cargo run --locked -- --doctor ./shortcuts
+```
+
+History tests exercise grapheme-preserving selection, soft-wrap literal search,
+work budgets, eviction, large wrapped history and resize anchors. Clipboard tests
+use controlled helper processes for failures, bounds, timeout, ownership and
+cleanup; actual graphical-session interoperability remains a manual check.
+Filesystem tests use isolated trees/state and cover cancellation, publication,
+replacement snapshots, symlinks, permissions, special files and supported
+cross-device behavior. Launcher tests cover backwards compatibility, deterministic
+loading, validation, relative cwd and atomic/stale-save preservation. Debug-backend
+tests cover modal cancellation, palette routing and session identities/visibility.
+No headless success establishes terminal appearance or physical keyboard routing.
+
+For CLI diagnostics, additionally use an isolated XDG_CONFIG_HOME and missing
+selected directory: expect nonzero and verify no directories were created. Test
+invalid TOML, an unavailable configured Terminal, optional-tool warnings, and a
+spaced executable with source-relative cwd from outside the repository. A harmless
+fixture executable that would create a marker must not run under --doctor.
+
+Attended CrossTerm PTY checks at 80×24 covered the palette, rebinding, independent
+shells, interrupts, history/search, exact Unicode copy/paste through the internal
+clipboard, file create/rename/copy/trash/filter/path navigation, launcher save and
+reload, Diagnostics, workspace membership/hidden state, explicit restoration,
+tiling and temporary Terminal Lock/unlock. A separate stable 120×36 PTY session
+confirmed tiling to a 118×33 child terminal, hide/focus preserving its PID, and
+Close/New replacing it while retaining the correct size. See the dated
+[milestone verification record](docs/milestones/2026-11-01.md#implementation-and-verification-record).
+PTY/SSH is the primary acceptance target. Run the relevant matrix without
+DISPLAY/WAYLAND_DISPLAY, resize a quiet terminal through 80×24, 120×36, 40×12
+and back, and verify child dimensions without reselecting the tiling option.
+Check native Ctrl+C/Ctrl+V and terminal Copy/Paste in both directions. These
+display-free relay checks were performed; see the milestone record. An actual
+network SSH server was not exercised. X11/Wayland clipboard exchange is an
+optional additional check and does not block PTY acceptance.
 
 ## Carboxyl and Unicode terminal regressions
 

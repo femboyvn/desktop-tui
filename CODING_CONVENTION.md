@@ -62,8 +62,9 @@ the current code's structure while setting expectations for new changes.
   events left unhandled, including keys on an unfocused keyboard control.
 - Keep shortcut indices, menu vectors, and window handles consistent. Check that
   optional/stale handles resolve before using them in new lifecycle code.
-- Treat child termination, channel closure, menu Close, Ctrl+C, and desktop Exit
-  as related paths. New behavior must release the resources it owns.
+- Keep normal Ctrl+C child interruption separate from explicit window shutdown.
+  Actual child exit, channel closure, menu Close and desktop Exit have related
+  cleanup paths; new behavior must release the resources it owns.
 - Validate geometry before casts: padding is signed, dimensions are unsigned,
   and some canvas calls use `u16`. Cover small/zero sizes, bounds, and overflow
   where the changed code can receive them. Keep parser, canvas, and PTY sizes

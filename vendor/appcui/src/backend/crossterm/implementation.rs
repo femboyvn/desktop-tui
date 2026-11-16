@@ -18,11 +18,6 @@ use crate::prelude::Character;
 #[cfg(target_os = "windows")]
 use crate::backend::utils::win32;
 
-#[cfg(target_family = "unix")]
-use copypasta::ClipboardContext;
-#[cfg(target_family = "unix")]
-use copypasta::ClipboardProvider;
-
 pub(crate) struct CrossTerm {
     size: Size,
     use_color_schema: bool,
@@ -86,7 +81,7 @@ impl CrossTerm {
             )
         })?;
 
-        Input::new().start(sender);
+        Input::new().with_size(width,height).start(sender);
 
         Ok(term)
     }
@@ -277,8 +272,7 @@ impl Backend for CrossTerm {
 
         #[cfg(target_family = "unix")]
         {
-            let mut ctx: ClipboardContext = ClipboardContext::new().ok()?;
-            ctx.get_contents().ok()
+            crate::system::Clipboard::internal_text()
         }
     }
 
@@ -290,8 +284,9 @@ impl Backend for CrossTerm {
 
         #[cfg(target_family = "unix")]
         {
-            let mut ctx: ClipboardContext = ClipboardContext::new().unwrap();
-            ctx.set_contents(text.to_owned()).unwrap();
+            // Native controls must remain usable over a PTY without X11/Wayland.
+            // Graphical clipboard helpers belong in the application's I/O worker.
+            crate::system::Clipboard::set_internal_text(text);
         }
     }
 
@@ -302,8 +297,7 @@ impl Backend for CrossTerm {
         }
         #[cfg(target_family = "unix")]
         {
-            let mut ctx: ClipboardContext = ClipboardContext::new().unwrap();
-            ctx.get_contents().is_ok()
+            crate::system::Clipboard::internal_text().is_some()
         }
     }
     fn is_single_threaded(&self) -> bool {

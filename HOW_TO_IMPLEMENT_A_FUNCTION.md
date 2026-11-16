@@ -25,7 +25,7 @@ Use [HOW_TO_RUN.md](HOW_TO_RUN.md) for a controlled launch environment and
 | Behavior | Start here | Useful verification |
 | --- | --- | --- |
 | CLI argument | `src/args.rs`, then `src/main.rs` | Clap parsing tests; `--help` without launching the UI. |
-| Shortcut schema or loading | `src/config/shortcuts.rs` | TOML parsing/default/error tests; directory-loading tests for traversal/order/deduplication. |
+| Shortcut schema or loading | `src/config/shortcuts.rs` | TOML parsing/default/error tests; directory-loading tests for traversal/order/duplicate rejection. |
 | Key encoding | `src/ui/terminal/keyboard.rs` | Exact byte assertions for key/modifier combinations; focus/Ctrl+C manual checks. |
 | ANSI, colors, cursor, or text | `src/runtime/terminal.rs` | Controlled byte inputs and surface/state assertions, including affected boundary cases. |
 | Child command, canvas, resize, dialogs | `src/ui/terminal/window.rs` | Test extracted pure logic where useful; manually exercise the lifecycle/UI paths. |
@@ -117,8 +117,8 @@ patch and record outcomes:
   close it, and reopen it. Confirm that the UI stays responsive.
 - Resize the window and the outer terminal; check the canvas, child dimensions,
   colors, and cursor. Exercise arrangement options if desktop layout changed.
-- For input changes, check the affected keys/modifiers and verify Ctrl+C still
-  follows the intended termination behavior. On an empty desktop, check Alt
+- For input changes, check the affected keys/modifiers and verify Ctrl+C is
+  delivered as a normal child interrupt without explicitly closing the window. On an empty desktop, check Alt
   combinations and Escape, then confirm Desktop > Exit still closes the app.
 - For lifecycle changes, check normal child exit, a missing executable, menu
   Close, Ctrl+C, and Desktop Exit. Check for leftover children using the process

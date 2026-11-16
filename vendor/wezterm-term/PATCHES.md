@@ -14,7 +14,8 @@ marker and independent package lockfile are omitted. The application lockfile
 pins the full dependency resolution. The application keeps `virtual-terminal`
 for its Unix PTY implementation.
 
-Local changes are confined to the integration boundary and print performer:
+Local changes are confined to the integration boundary, print performer, and
+bounded scrollback:
 
 - Retain the last printed grapheme and its original line/cursor across byte-feed
   calls. If the next printable run extends it, restore that line and reprint the
@@ -37,13 +38,22 @@ Local changes are confined to the integration boundary and print performer:
 - Expose the application-cursor mode and cursor-visibility type for the facade.
   A terminal-name hook makes XTGETTCAP TN agree with `TERM=xterm-256color`, while
   identifying the host application as Desktop-TUI.
+- Add `Screen::enforce_scrollback_limits` and a terminal-state wrapper that
+  immediately prune the oldest complete primary-screen history rows to the
+  configured row and text-byte limits. Resizing can otherwise leave reflowed
+  history above its capacity until another scroll. Pruning preserves live rows,
+  cursor state, and stable row offsets, including while the alternate screen
+  is active.
 
 The facade in `src/runtime/terminal.rs` owns preferences palette projection,
 complete grapheme payloads, width/continuation cells, bounded protocol replies,
 mode-aware paste and mouse encoding. Explicit RGB colors retain their value;
 default and indexed ANSI colors follow preference changes. Unicode width uses
-version 14 with narrow ambiguous characters. Scrollback is disabled for this
-embedded viewport. Kitty keyboard/graphics stay disabled. Style projection
+version 14 with narrow ambiguous characters. History is bounded to 2,000 rows,
+200,000 retained cells, and 8 MiB of retained text, with a stable desktop
+viewport, grapheme-aware selection, and incremental literal search. The
+application enforces the limits after output and quiet resize. Kitty
+keyboard/graphics stay disabled. Style projection
 supports bold, italic, underline variants, strikethrough, reverse and invisible;
 AppCUI has no dim or blinking-cell attribute.
 

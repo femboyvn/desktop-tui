@@ -759,6 +759,32 @@ impl Screen {
         }
     }
 
+    /// Drop only the oldest retained rows, preserving the visible screen and
+    /// the stable coordinates of rows that remain. The caller supplies both
+    /// count and text budgets so reflow cannot leave oversized quiet history.
+    pub(crate) fn enforce_scrollback_limits(&mut self, max_rows: usize, max_text_bytes: usize) {
+        let max_rows = if self.allow_scrollback { max_rows } else { 0 };
+        let capacity = self.physical_rows.saturating_add(max_rows);
+        let mut removed = 0usize;
+        while self.lines.len() > capacity {
+            self.lines.pop_front();
+            removed += 1;
+        }
+        let text_bytes = |line: &Line| line.visible_cells().fold(0usize, |bytes, cell| bytes.saturating_add(cell.str().len()));
+        let history_rows = self.lines.len().saturating_sub(self.physical_rows);
+        let mut retained = self.lines.iter().take(history_rows).fold(0usize, |bytes, line| bytes.saturating_add(text_bytes(line)));
+        while retained > max_text_bytes && self.lines.len() > self.physical_rows {
+            if let Some(line) = self.lines.pop_front() {
+                retained = retained.saturating_sub(text_bytes(&line));
+                removed += 1;
+            }
+        }
+        if self.allow_scrollback { self.stable_row_index_offset += removed; }
+        if removed > 0 && self.lines.capacity() > capacity.saturating_mul(2) {
+            self.lines.shrink_to_fit();
+        }
+    }
+
     pub fn erase_scrollback(&mut self) {
         let len = self.lines.len();
         let to_clear = len - self.physical_rows;

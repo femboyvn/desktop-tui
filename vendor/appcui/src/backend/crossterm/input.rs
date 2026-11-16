@@ -9,12 +9,14 @@ use crossterm::event::{self, Event, KeyEvent, KeyEventKind, MouseButton as Cross
 #[derive(Clone, Copy)]
 struct Click { x: i32, y: i32, button: MouseButton, time: Instant }
 const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(500);
+const SIZE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 pub(crate) struct Input {
     last_modifiers: KeyModifier,
     pending_event: Option<SystemEvent>,
     pressed_click: Option<Click>,
     completed_click: Option<Click>,
+    observed_size: Option<(u16,u16)>,
 }
 
 impl Input {
@@ -24,17 +26,34 @@ impl Input {
             pending_event: None,
             pressed_click: None,
             completed_click: None,
+            observed_size: None,
         }
+    }
+    pub(super) fn with_size(mut self, width: u16, height: u16) -> Self {
+        self.observed_size = Some((width,height));
+        self
+    }
+    fn observe_size(&mut self, size: Option<(u16,u16)>) -> Option<SystemEvent> {
+        let (width,height) = size?;
+        if width == 0 || height == 0 || self.observed_size == size { return None; }
+        self.observed_size = size;
+        self.clear_clicks();
+        Some(SystemEvent::Resize(crate::graphics::Size::new(width as u32,height as u32)))
     }
 }
 
 impl SystemEventReader for Input {
     fn read(&mut self) -> Option<SystemEvent> {
         if let Some(event) = self.pending_event.take() { return Some(event); }
+        // SSH/PTY relays can update the kernel size without a usable resize
+        // notification. Keep checking authoritative dimensions while idle.
+        let size = crossterm::terminal::window_size().ok().map(|size| (size.columns,size.rows));
+        if let Some(event) = self.observe_size(size) { return Some(event); }
+        if !event::poll(SIZE_POLL_INTERVAL).ok()? { return None; }
         match event::read() {
             Ok(Event::Key(key_event)) => self.handle_key_event(key_event),
             Ok(Event::Mouse(mouse_event)) => self.handle_mouse_event(mouse_event),
-            Ok(Event::Resize(width, height)) => { self.clear_clicks(); Some(SystemEvent::Resize(crate::graphics::Size::new(width as u32, height as u32))) },
+            Ok(Event::Resize(width, height)) => self.observe_size(Some((width,height))),
             Ok(Event::FocusGained) => None,
             Ok(Event::FocusLost) => { self.clear_clicks(); None },
             Ok(Event::Paste(text)) => { self.clear_clicks(); Some(SystemEvent::Paste(text)) },
@@ -278,6 +297,21 @@ mod double_click_tests {
 mod routing_tests {
     use super::*;
     use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn observed_pty_size_changes_emit_resize_once_and_preserve_pending_keys() {
+        let mut input = Input::new().with_size(80,24);
+        let modified = KeyEvent::new(CrosstermKeyCode::Left,KeyModifiers::CONTROL);
+        assert!(matches!(input.handle_key_event(modified),Some(SystemEvent::KeyPressed(_))));
+        assert!(input.pending_event.is_some());
+        assert_eq!(input.observe_size(Some((80,24))),None);
+        assert_eq!(input.observe_size(None),None);
+        assert_eq!(input.observe_size(Some((0,0))),None);
+        assert!(matches!(input.observe_size(Some((120,36))),Some(SystemEvent::Resize(size)) if size == crate::graphics::Size::new(120,36)));
+        assert!(input.pending_event.is_some(),"dimension observations must not discard modifier/key notifications");
+        assert_eq!(input.observe_size(Some((120,36))),None);
+        assert!(matches!(input.observe_size(Some((40,12))),Some(SystemEvent::Resize(size)) if size == crate::graphics::Size::new(40,12)));
+    }
 
     #[test]
     fn first_modified_special_key_is_not_replaced_by_modifier_change() {

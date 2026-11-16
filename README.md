@@ -14,6 +14,17 @@ Verify the destination and its independence before pushing, as described in
 
 A desktop environment without graphics (tmux-like).
 
+Linux PTYs and SSH are the primary runtime. A graphical session, X11 forwarding,
+`DISPLAY`, and Wayland are not required. Allocate a terminal when connecting:
+
+```sh
+ssh -t user@host 'desktop-tui /path/to/shortcuts'
+```
+
+Commands and file operations run on that host. Copy/paste within Desktop-TUI
+uses an internal clipboard; your SSH client's normal paste reaches the focused
+control through terminal paste events. Graphical clipboard providers are optional.
+
 Features:
 - [x] Parse shortcut files containing apps
   - [x] Custom additional commands
@@ -25,6 +36,11 @@ Features:
 - [x] Change tilling options
 - [x] Can let the user select a file or a folder to use its path as a command argument
 - [x] Categorized Application menu with starter launchers
+- [x] Searchable command palette, independent terminals, and normal child Ctrl+C
+- [x] Bounded terminal history, Unicode selection/search, and clipboard fallback
+- [x] Background file operations, favorites, and saved Open with choices
+- [x] Launcher editing/reload, working directories, and noninteractive diagnostics
+- [x] Four workspaces with an offered restore after restart
 - [x] Managed Carboxyl browser launcher and grapheme-aware Unicode terminals
 - [x] Native File Browser, Image Viewer, PDF Reader, Music Player, and ASCII Paint
 - [x] Built-in Snake, 2048, and Minesweeper
@@ -70,8 +86,8 @@ If no path is provided, Desktop-TUI reads shortcuts from `~/.config/desktop-tui`
 The binary uses technical layers, with functional groups inside each layer:
 
 - `src/ui/`: desktop and panel views, preferences dialogs, terminal windows and keyboard input, locking screens, and theme construction.
-- `src/config/`: preferences models, storage, palette presets and editing drafts, plus shortcut definitions and discovery.
-- `src/runtime/`: terminal emulation and password credentials.
+- `src/config/`: preferences models, storage, palette presets and editing drafts, plus shortcut definitions, discovery, workflow settings, and saved-session records.
+- `src/runtime/`: terminal emulation/history, clipboard, file/media workers, and password credentials.
 - `src/platform/linux/`: status readings, resource usage, and system actions.
 - `vendor/appcui/`: local AppCUI dependency with Unicode rendering and input support; see [patch notes](vendor/README.md).
 
@@ -82,6 +98,8 @@ Groups use a named entry file alongside their child folder (for example, `ui/des
 Example `helix.toml` shortcut file:
 
 ```toml
+# Optional stable identity; keep it when renaming the launcher
+id = "personal.editor"
 # Window name
 name = "Text editor"
 # Optional; omitted categories appear under User
@@ -91,6 +109,8 @@ category = "Utility"
 command = "hx"
 # Each command argument
 args = []
+# Optional; relative to this TOML file, not the desktop process
+# working_directory = "../project"
 
 [taskbar]
 # Shortcut ordering within Application categories
@@ -124,6 +144,106 @@ padding = [0, 0]
 # Optional
 background_color = { r = 30, g = 30, b = 30 }
 ```
+
+## Launcher management and diagnostics
+
+Open **Desktop > Launchers...** to create or edit launcher TOML. Select an entry
+and **Edit**, or choose **New**; keep `command` as one executable and `args` as
+an array of separate arguments. **Save** validates and atomically writes the
+source; **Reload** applies saved changes without restarting or stopping existing
+windows. Editing a starter creates an override. Unsaved drafts can be discarded
+or kept; invalid drafts leave the source intact.
+
+Optional `id` preserves identity across name changes; otherwise the name is the
+identity. Names and explicit/fallback IDs must be unique, including starters.
+Discovery reads exact lowercase `.toml` extensions recursively in sorted path
+order, then orders by taskbar position. Read, traversal and TOML errors identify
+the failing path. Relative `working_directory` values use the containing TOML's
+parent. An explicit folder/file context from File Browser overrides that default.
+
+**Desktop > Diagnostics...** checks configuration and executable availability in
+the background. The same report is available without opening a terminal UI:
+
+```sh
+cargo run --locked -- --doctor ./shortcuts
+```
+
+It checks selected/default configuration, external executables, bundled Carboxyl
+resolution, Poppler helpers, graphical-session variables and clipboard providers.
+It launches no configured command and creates no configuration directories.
+Configuration errors and an unavailable Terminal executable return nonzero;
+missing optional tools produce warnings. Availability does not guarantee a
+clipboard provider can connect to the current session.
+
+## Keyboard control and terminal history
+
+Press **Ctrl+Space** to open the searchable command palette, or use
+**Desktop > Command palette...** if the outer terminal/input method intercepts
+that key. Type words to filter, use arrows or PageUp/PageDown to choose, and
+Enter to run; Escape cancels. The palette launches apps, focuses visible or
+hidden windows, and offers Hide/Close and terminal actions. **New terminal**
+creates an independent instance of the configured Terminal; an ordinary
+application launcher restores its existing window.
+
+**Desktop > Desktop shortcut...** saves another modified key or function key;
+Ctrl+C stays available to the child. Press the configured shortcut again while
+the palette is open to forward that key to the terminal that opened it. With
+the default binding, **Ctrl+Space twice** sends a literal Ctrl+Space.
+Menus, modal dialogs and Terminal Lock retain their own input.
+
+**Ctrl+C** is a normal child interrupt. Use a window's **Close** action or close
+button to shut it down explicitly; a child that exits also closes its window.
+
+| Terminal action | Controls |
+| --- | --- |
+| Scroll retained output | Shift+PageUp / Shift+PageDown |
+| Start selection | Palette: Terminal: Copy mode |
+| Select with keyboard | Arrows move; Space marks the anchor; arrows extend; Enter copies |
+| Select with mouse | In Copy mode, press/drag/release; wheel scrolls |
+| Search retained text | Palette: Terminal: Search history; type a literal query, Enter / Shift+Enter for next / previous |
+| Leave Copy/Search | Escape; use Terminal: Return to live to resume following output |
+| Paste clipboard | Palette: Terminal: Paste, outside Copy/Search mode |
+
+History stays at the retained text while new output arrives; reaching the bottom
+by scrolling does not itself resume live output. Selection copies whole Unicode
+graphemes, joins soft wraps and retains hard line breaks. Resize cancels
+selection/search and tries to keep the same visible text; eviction clamps the
+view and clears an evicted selection. The alternate screen has no retained history.
+
+History retains at most 2,000 rows, further bounded by 200,000 cells and an 8 MiB
+history-text budget. Search accepts 256 Unicode scalars and stores up to 4,096
+matches; it scans the retained output present when the query is entered. Change
+the query or re-enter Search to include later output. Clipboard/selection text
+is limited to 256 KiB. Title status distinguishes system clipboard success,
+internal fallback and errors. Wayland uses `wl-copy`/`wl-paste`; X11 uses `xclip`
+or `xsel`. Native controls and terminal windows share a bounded in-memory
+clipboard; this is normal PTY/SSH operation when graphical providers are absent.
+Native text controls use that internal clipboard without connecting to a display.
+No clipboard text is saved to disk. Child mouse reporting and bracketed paste
+continue outside desktop selection/search modes.
+
+## Workspaces and restoration
+
+Use **Desktop > Workspaces > Workspace 1–4**, or the palette's **Switch to
+workspace N**. With a window focused, the palette's **Move current window to
+workspace N** moves it without terminating it. Switching preserves deliberately
+hidden windows. Focusing a window through the palette or its launcher switches
+to its workspace. Tiling applies to visible windows in the current workspace.
+
+**Desktop > Exit** saves workspace membership, layout, hidden state, launcher
+identity, working directories and saved document paths before cleaning up
+managed applications. On the next start, **Restore** is offered before any
+saved external application is relaunched. Cancel leaves the desktop available;
+**Desktop > Restore saved workspace...** offers it again. Missing apps/files
+are reported individually. Restoration recreates windows from saved launch
+information; terminal output, child process memory, unsaved editor/artwork
+buffers and game progress are not restored.
+
+Session data is separate from shortcut discovery: `session.toml` in the
+application state directory, normally `$XDG_STATE_HOME/desktop-tui` or
+`~/.local/state/desktop-tui` on Linux. At most 256 windows and a 1 MiB session
+file are accepted. This is an exit snapshot; it does not attach to surviving
+processes or provide crash recovery.
 
 ## Applications and files
 
@@ -187,7 +307,7 @@ Terminal windows preserve complete Unicode graphemes, including decomposed
 Vietnamese, CJK, flags, skin tones, and joined emoji, with width-aware placement.
 Fonts and shaping depend on the outer terminal. UTF-8 keyboard input, modified
 navigation, child-requested mouse reporting, and paste are forwarded; bracketed
-paste follows the child's mode. Ctrl+C retains Desktop-TUI's close behavior.
+paste follows the child's mode. Ctrl+C is forwarded as a normal child interrupt.
 The focused, visible terminal alone displays its child cursor. Default and ANSI
 colors follow Terminal preferences; explicit RGB colors keep their values.
 Graphics protocols are not passed through: Carboxyl uses quadrant characters.
@@ -294,10 +414,10 @@ The optional [mp3blaster shortcut](shortcuts/mp3blaster.toml)
 launches the separate external player if you prefer its interface; it is independent
 of the native Music Player and still needs mp3blaster installed on PATH.
 
-**File Browser** starts in your home directory. Enter an absolute or relative
-path in the path field and press Enter, or open a directory in the listing.
+**File Browser** starts in your remembered folder, using your home directory
+initially. Enter an absolute or relative path in the path field and press Enter, or open a directory in the listing.
 Use **Up** (Alt+U), **Refresh** (Alt+R), and **Hidden** (Alt+H). Directories appear
-first, then entries sorted by name. New browser windows use an icon grid;
+first, then entries sorted by name. The initial view is an icon grid;
 **View** (Alt+V) switches to Details with name, type, byte size, and local
 modification time. Switching views keeps the selection visible. Arrow keys,
 Home/End, PageUp/PageDown, and the mouse wheel navigate the listing; click to
@@ -308,9 +428,9 @@ non-UTF-8 bytes appear as replacement characters only in labels.
 
 Right-click an entry, or press **Shift+F10** for the selected entry's menu.
 Regular files offer **Open**, **Open with…**, and **Open in terminal**;
-folders offer Open and Open in terminal. Special entries offer only Open in
-terminal at their parent. Right-click empty space for **Open terminal here**
-in the current folder. Every menu includes Refresh, Hidden, Grid, and Details;
+folders offer Open and Open in terminal. Special entries can open a terminal
+at their parent but cannot be opened as documents. Right-click empty space for
+**Open terminal here** in the current folder. Every menu includes Refresh, Hidden, Grid, and Details;
 Escape dismisses it. Right-click selects an entry without opening it.
 
 Choose **File information…** in an entry's menu, or select it and press
@@ -320,18 +440,47 @@ text and Close button. Close or Escape dismisses the dialog. Information uses
 the most recent directory listing; Refresh updates it. Folder/special-entry
 sizes display as unavailable.
 
+File/entry menus also offer **New file / Ctrl+N**, **New folder / Ctrl+Shift+N**,
+**Rename / F2**, **Copy to / F5**, **Move to / F6**, and **Move to trash / Delete**
+while the listing is focused. Copy/Move dialogs have separate destination-folder
+and filename fields; unchanged opaque names keep their original bytes. Existing
+files/symlinks require replacement confirmation; existing destination folders
+are rejected rather than merged. Operations run in the background with progress
+and **Cancel operation**; already published work remains after cancellation.
+Failed transfers preserve the source; incomplete cleanup reports any retained
+source/backup path. Recursive copies reject special files, preserve symlinks
+without following them, and are limited to 100,000 entries and depth 128. Basic
+permissions are retained; ownership, ACLs, extended attributes, timestamps and
+hardlink relationships are not copied.
+
+Trash requires confirmation and uses the user's FreeDesktop Trash with restore
+metadata; it never falls back to permanent deletion. Trash across filesystems
+is unsupported and leaves the source intact. Use system trash tools to restore.
+
+**Add/remove favorite** adds/removes the current folder; **Favorites** chooses
+a saved folder, including in destination dialogs. The browser Favorites chooser
+also removes entries, including missing folders. Enter a filename substring in **Filter**
+and press Enter; matching is case-insensitive. Location, Grid/Details, hidden
+files, filter and up to 64 favorites persist in `state/browser.toml` under the
+application state directory, outside shortcut discovery. The filter is limited
+to 512 bytes. State errors appear in the browser; malformed state is preserved.
+
 **Open with…** lists compatible native viewers and all configured Desktop-TUI
 shortcuts, labeled as native or shortcut. Choose with Enter or double-click;
-Escape cancels. External choices create independent windows and bind
+Escape cancels. Check **Always use for .extension** to save the selected app as
+that extension's default in preferences. A missing saved launcher reports an
+error; choose another with Open with. External choices create independent
+windows and bind
 `<FILE_PATH>` to the selected file and `<FOLDER_PATH>` to its parent, without
 selection dialogs. If the configured executable/arguments have no `<FILE_PATH>`,
 the file is appended once as a separate argument. The child's working directory
 is the file's parent. **Open in terminal** creates a fresh window using the
 configured Terminal shortcut, with the selected folder (or a file's parent) as
 its working directory and `<FOLDER_PATH>` binding. Existing windows stay open.
-View changes last only for that browser window; there is no graphical-app discovery.
+There is no graphical-app discovery.
 
-Files open in their default Desktop-TUI app. Extensions are case-insensitive:
+Saved Open with associations take precedence. Otherwise files use these default
+Desktop-TUI apps; extensions are case-insensitive:
 
 | File extensions | Default app |
 | --- | --- |
@@ -401,7 +550,11 @@ The MIT license for this project can be seen [here](./LICENSE)
 
 ## Desktop menu and preferences
 
-Linux is the supported target. Open **Desktop** for **Help**, **Preference**, **Terminal Lock**, **Screen Lock**, **Shutdown**, **Restart**, and **Exit**. Help opens a resizable offline guide with categories on the left and scrollable details on the right; its contents are also available in [HELP.md](HELP.md).
+Linux is the supported target. **Desktop** contains Help, the command palette,
+New terminal, Preference, Desktop shortcut, Launchers, Diagnostics, Workspaces,
+Restore saved workspace, Terminal Lock, Screen Lock, Shutdown, Restart, and Exit.
+Help opens a resizable offline guide with categories on the left and scrollable
+details on the right; its contents are also available in [HELP.md](HELP.md).
 
 **Preference** has **Desktop**, **Terminal**, **Security**, **Panel**, and **Background** tabs. Choose from **Femboy**, **Transgender**, **Asexual**, **Nonbinary**, and **Monochrome** presets, then click **Apply** to update the color draft across the Desktop and Terminal tabs. Browsing presets keeps existing edits until Apply is clicked. Monochrome uses neutral grays. Custom identifies individually edited palettes. Select a color role, enter a `#RRGGBB` color, and inspect the swatch. Desktop roles include the background, surfaces, text, muted text, borders, accents, and selection. Terminal roles include default foreground/background and all 16 normal and bright ANSI colors.
 
@@ -473,4 +626,11 @@ Only one system request runs at a time, off the UI thread. Helpers have a 15-sec
 cargo test --locked --offline
 ```
 
-Tests use fake system runners to cover command selection, cancellation, duplicate requests, permission errors, unavailable commands, and timeouts. Harmless helper processes check timeout cleanup, and terminal processes check live recoloring of visible and hidden windows. UI interaction checks run at 80×24. Verify real screen locking in a graphical desktop and actual power actions only in a disposable VM.
+Tests use fake system runners to cover command selection, cancellation, duplicate requests, permission errors, unavailable commands, and timeouts. Harmless helper processes check timeout cleanup, and terminal processes check live recoloring of visible and hidden windows.
+Debug-backend tests and attended PTY sessions cover the workflow controls at
+80×24 and 120×36, including operation without graphical-session variables.
+Live PTY resize is checked from 80×24 to 120×36, down to 40×12 and back.
+Physical terminal fonts and individual SSH clients may differ; no network SSH
+server was required for these PTY checks. Graphical clipboard interoperability
+is optional. Verify real screen locking in a graphical desktop and actual power
+actions only in a disposable VM.

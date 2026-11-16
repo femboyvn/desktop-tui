@@ -401,6 +401,11 @@ impl RuntimeManager {
         self.set_event_processors(handle.cast(), handle.cast());
         // all good --> the window has been registered
         if let Some(win) = controls.get_mut(handle.cast()) {
+            let timer = win.base().timer_handle;
+            if !timer.is_none() {
+                self.timers_manager.update_control_handle(timer, handle.cast());
+                self.request_timer_threads_update();
+            }
             win.control_mut().on_registered();
         }
         // add to modal stack
@@ -1445,6 +1450,27 @@ impl KeyboardMethods for RuntimeManager {
             // 1.2. if appbar is opened (e.g. the current menu is part of the app bar )
             if let Some(appbar) = self.appbar.as_mut() {
                 if appbar.is_opened() && appbar.on_key_event(event.key, true) == EventProcessStatus::Processed {
+                    self.repaint = true;
+                    return;
+                }
+            }
+        }
+        // Desktop commands must be reachable even when a PTY consumes all focused keys.
+        // Do not intercept input owned by a menu or a modal (including the lock screen).
+        if self.modal_windows.is_empty() && self.opened_menu_handle.is_none() {
+            let controls = unsafe { &mut *self.controls };
+            if let Some(desktop) = controls.get_mut(self.desktop_handle) {
+                if DesktopEvents::on_preview_key_pressed(desktop.control_mut(), event.key, event.character) == EventProcessStatus::Processed {
+                    self.repaint = true;
+                    return;
+                }
+            }
+        }
+        if !self.modal_windows.is_empty() && self.opened_menu_handle.is_none() {
+            let root = self.get_root_control_handle();
+            let controls = unsafe { &mut *self.controls };
+            if let Some(window) = controls.get_mut(root) {
+                if WindowEvents::on_preview_key_pressed(window.control_mut(), event.key, event.character) == EventProcessStatus::Processed {
                     self.repaint = true;
                     return;
                 }

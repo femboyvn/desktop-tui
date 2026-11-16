@@ -13,6 +13,10 @@ use crate::{graphics::Rect, prelude::ActionRequest, system::Handle, ui::common::
 // Window events always go to the same window that triggers them --> we don't need a handle as
 // we already have &mut self
 pub trait WindowEvents {
+    /// Preview a key owned by this modal before dispatch to its focused child.
+    fn on_preview_key_pressed(&mut self, _key: crate::input::Key, _character: char) -> EventProcessStatus {
+        EventProcessStatus::Ignored
+    }
     // don't need to change anything --> since layout has been change, repaint wil be force automatically
     fn on_layout_changed(&mut self, _old_layout: Rect, _new_layout: Rect) {}
     

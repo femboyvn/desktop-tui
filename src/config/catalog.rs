@@ -37,7 +37,7 @@ pub(crate) fn with_starters(mut shortcuts: Vec<Shortcut>) -> Vec<Shortcut> {
     ] {
         if !shortcuts.iter().any(|shortcut| shortcut.name == name) {
             shortcuts.push(Shortcut {
-                name: name.into(), category: Some(category.into()), command: command.into(),
+                name: name.into(), id: None, working_directory: None, source_path: None, category: Some(category.into()), command: command.into(),
                 args: match name {
                     "System Performance" => vec!["--theme".into(), "default-light".into()],
                     "Web Browser" => vec!["--graphics".into(), "quadrant".into(), "--fps".into(), "20".into()],

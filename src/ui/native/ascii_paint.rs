@@ -219,6 +219,7 @@ pub(crate) struct PaintWindow {
     pending: Option<Pending>, guard_result: Option<bool>, closing: bool, updating: bool,
 }
 impl PaintWindow {
+    pub fn document_path(&self) -> Option<PathBuf> { self.path.clone() }
     pub fn new(path: Option<PathBuf>) -> anyhow::Result<Self> {
         let mut window = Self { base: Window::new("ASCII Paint",layout!("a:c,w:92,h:34"),window::Flags::Sizeable),
             canvas: Handle::None, worker: PaintWorker::new(), path: None, saving_path: None,

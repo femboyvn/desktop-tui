@@ -22,17 +22,26 @@ fn choices(path: &Path, shortcuts: &[Shortcut]) -> Vec<OpenChoice> {
     }));
     result
 }
-#[ModalWindow(response = AppId, events = ListViewEvents<OpenChoice>+ButtonEvents)]
-pub(super) struct OpenWithDialog { listing: Handle<ListView<OpenChoice>>, cancel: Handle<Button> }
+#[derive(Debug, PartialEq)]
+pub(super) struct OpenSelection { pub id: AppId, pub remember: bool }
+#[ModalWindow(response = OpenSelection, events = ListViewEvents<OpenChoice>+ButtonEvents)]
+pub(super) struct OpenWithDialog { listing: Handle<ListView<OpenChoice>>, cancel: Handle<Button>, remember: Handle<CheckBox> }
 impl OpenWithDialog {
     pub fn new(path: &Path, shortcuts: &[Shortcut]) -> Self {
+        Self::with_enabled(path,shortcuts,&vec![true;shortcuts.len()])
+    }
+    pub fn with_enabled(path: &Path, shortcuts: &[Shortcut], enabled: &[bool]) -> Self {
         let mut dialog = Self {
             base: ModalWindow::new("Open with — select an application",layout!("a:c,w:74,h:20"),window::Flags::Sizeable),
-            listing: Handle::None, cancel: Handle::None,
+            listing: Handle::None, cancel: Handle::None, remember: Handle::None,
         };
         dialog.add(Label::new(&path.file_name().unwrap_or(path.as_os_str()).to_string_lossy(),layout!("l:1,r:1,t:0,h:1")));
-        let mut listing = ListView::new(layout!("l:1,r:1,t:2,b:3"),listview::Flags::ScrollBars);
-        listing.add_items(choices(path,shortcuts));
+        let extension = path.extension().and_then(|extension| extension.to_str()).unwrap_or("");
+        let mut remember = CheckBox::new(&format!("Always use for .{extension}"),layout!("l:1,r:1,t:1,h:1"),false);
+        remember.set_enabled(!extension.is_empty());
+        dialog.remember = dialog.add(remember);
+        let mut listing = ListView::new(layout!("l:1,r:1,t:3,b:3"),listview::Flags::ScrollBars);
+        listing.add_items(choices(path,shortcuts).into_iter().filter(|choice| match choice.id { AppId::External(index) => enabled.get(index).copied().unwrap_or(false), _ => true }).collect());
         dialog.listing = dialog.add(listing);
         dialog.cancel = dialog.add(Button::new("&Cancel",layout!("a:b,w:14")));
         dialog.base.request_focus_for_control(dialog.listing);
@@ -41,7 +50,10 @@ impl OpenWithDialog {
 }
 impl ListViewEvents<OpenChoice> for OpenWithDialog {
     fn on_item_action(&mut self, handle: Handle<ListView<OpenChoice>>, index: usize) -> EventProcessStatus {
-        if let Some(id) = self.control(handle).and_then(|list| list.item(index)).map(|choice| choice.id) { self.exit_with(id); }
+        if let Some(id) = self.control(handle).and_then(|list| list.item(index)).map(|choice| choice.id) {
+            let remember = self.control(self.remember).is_some_and(CheckBox::is_checked);
+            self.exit_with(OpenSelection { id,remember });
+        }
         EventProcessStatus::Processed
     }
 }
@@ -76,7 +88,7 @@ mod tests {
         let prototype = shortcuts[0].clone();
         shortcuts.extend((0..60).map(|i| { let mut s = prototype.clone(); s.name = format!("App {i}"); s }));
         let app = App::debug(80,24,"Key.Pressed(End)\nKey.Pressed(Enter)").build().unwrap();
-        assert_eq!(OpenWithDialog::new(Path::new("file.txt"),&shortcuts).show(),Some(AppId::External(shortcuts.len()-1)));
+        assert_eq!(OpenWithDialog::new(Path::new("file.txt"),&shortcuts).show(),Some(OpenSelection { id: AppId::External(shortcuts.len()-1),remember: false }));
         app.run();
         let app = App::debug(80,24,"Key.Pressed(Escape)").build().unwrap();
         assert_eq!(OpenWithDialog::new(Path::new("file.txt"),&shortcuts).show(),None);

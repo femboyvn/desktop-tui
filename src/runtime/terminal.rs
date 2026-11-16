@@ -1,8 +1,9 @@
 use crate::config::preferences::TerminalPalette;
 use appcui::prelude::{CharAttribute, CharFlags, Character, Color, Surface};
 use std::io::{self, Write};
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tattoy_wezterm_term::{
     CellAttributes, CursorVisibility, Intensity, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind, Terminal, TerminalConfiguration, TerminalSize, Underline, UnicodeVersion,
@@ -11,6 +12,11 @@ use tattoy_wezterm_term::color::{ColorAttribute, ColorPalette, RgbColor};
 
 // Replies are small protocol messages. Bound unsolicited child-query traffic
 // independently of the PTY's bounded output and input queues.
+const MAX_HISTORY_ROWS: usize = 2000;
+const MAX_HISTORY_CELLS: usize = 200_000;
+const MAX_HISTORY_TEXT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_COPY_BYTES: usize = 256 * 1024;
+const MAX_SEARCH_MATCHES: usize = 4096;
 const MAX_REPLY_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_TERMINAL_DIMENSION: u32 = 10000;
 
@@ -30,10 +36,11 @@ impl Write for ReplyWriter {
 #[derive(Debug)]
 struct EmulatorConfiguration {
     palette: ColorPalette,
+    history: Arc<AtomicUsize>,
 }
 impl TerminalConfiguration for EmulatorConfiguration {
     fn color_palette(&self) -> ColorPalette { self.palette.clone() }
-    fn scrollback_size(&self) -> usize { 0 }
+    fn scrollback_size(&self) -> usize { self.history.load(Ordering::Relaxed) }
     fn use_threaded_writer(&self) -> bool { false }
     fn enable_images(&self) -> bool { false }
     fn terminfo_name(&self) -> Option<&str> { Some("xterm-256color") }
@@ -49,6 +56,45 @@ pub(crate) enum TerminalMouseButton { Left, Middle, Right, WheelUp, WheelDown, W
 
 /// Stateful emulator facade. Advancing bytes preserves partial UTF-8 and escape
 /// sequences; projecting is separate so a UI tick paints once after a PTY batch.
+#[derive(Clone)]
+struct Selection { anchor: (isize, usize), caret: (isize, usize), marked: bool }
+impl Selection {
+    fn range(&self) -> ((isize, usize), (isize, usize)) { (self.anchor.min(self.caret), self.anchor.max(self.caret)) }
+}
+struct HistorySearch {
+    query: String, next: isize, end: isize, cell: usize, byte: usize,
+    prefix: Vec<usize>, matched: usize, positions: VecDeque<(isize, usize)>,
+    matches: Vec<((isize, usize), (isize, usize))>, current: Option<usize>,
+}
+impl HistorySearch {
+    fn new(next: isize, end: isize) -> Self {
+        Self { query: String::new(), next, end, cell: 0, byte: 0, prefix: Vec::new(), matched: 0,
+            positions: VecDeque::new(), matches: Vec::new(), current: None }
+    }
+    fn reset_partial(&mut self) { self.matched = 0; self.positions.clear(); }
+    fn feed(&mut self, byte: u8, point: (isize, usize)) -> Option<((isize, usize), (isize, usize))> {
+        if self.query.is_empty() { return None; }
+        self.positions.push_back(point);
+        if self.positions.len() > self.query.len() { self.positions.pop_front(); }
+        while self.matched > 0 && byte != self.query.as_bytes()[self.matched] { self.matched = self.prefix[self.matched - 1]; }
+        if byte == self.query.as_bytes()[self.matched] { self.matched += 1; }
+        if self.matched == self.query.len() {
+            self.matched = self.prefix[self.matched - 1];
+            return self.positions.front().map(|begin| (*begin, point));
+        }
+        None
+    }
+    fn set_query(&mut self, query: String) {
+        self.query = query.chars().take(256).collect();
+        self.prefix = vec![0; self.query.len()];
+        for i in 1..self.query.len() {
+            let mut matched = self.prefix[i - 1];
+            while matched > 0 && self.query.as_bytes()[i] != self.query.as_bytes()[matched] { matched = self.prefix[matched - 1]; }
+            if self.query.as_bytes()[i] == self.query.as_bytes()[matched] { matched += 1; }
+            self.prefix[i] = matched;
+        }
+    }
+}
 pub struct TerminalParser {
     width: u32,
     height: u32,
@@ -57,6 +103,11 @@ pub struct TerminalParser {
     reply_overflow: Arc<AtomicBool>,
     palette: TerminalPalette,
     background_override: Option<Color>,
+    history_limit: usize,
+    history_capacity: Arc<AtomicUsize>,
+    viewport: Option<isize>,
+    selection: Option<Selection>,
+    search: Option<HistorySearch>,
 }
 impl TerminalParser {
     pub fn with_palette(width: u32, height: u32, palette: &TerminalPalette, background_override: Option<Color>) -> Self {
@@ -64,13 +115,14 @@ impl TerminalParser {
         let height = height.clamp(1, MAX_TERMINAL_DIMENSION);
         let replies = Arc::new(Mutex::new(Vec::new()));
         let reply_overflow = Arc::new(AtomicBool::new(false));
+        let history_capacity = Arc::new(AtomicUsize::new(MAX_HISTORY_ROWS.min(MAX_HISTORY_CELLS / width as usize)));
         let terminal = Terminal::new(
             terminal_size(width, height),
-            Arc::new(EmulatorConfiguration { palette: emulator_palette(palette, background_override) }),
+            Arc::new(EmulatorConfiguration { palette: emulator_palette(palette, background_override), history: history_capacity.clone() }),
             "Desktop-TUI", env!("CARGO_PKG_VERSION"),
             Box::new(ReplyWriter { bytes: replies.clone(), overflow: reply_overflow.clone() }),
         );
-        Self { width, height, terminal, replies, reply_overflow, palette: palette.clone(), background_override }
+        Self { width, height, terminal, replies, reply_overflow, palette: palette.clone(), background_override, history_limit: MAX_HISTORY_ROWS, history_capacity, viewport: None, selection: None, search: None }
     }
     pub fn new_surface(&self) -> Surface {
         let mut surface = Surface::new(self.width, self.height);
@@ -81,18 +133,42 @@ impl TerminalParser {
     pub fn apply_palette(&mut self, palette: &TerminalPalette, surface: &mut Surface) {
         self.palette = palette.clone();
         let colors = emulator_palette(palette, self.background_override);
-        self.terminal.set_config(Arc::new(EmulatorConfiguration { palette: colors.clone() }));
+        self.history_capacity.store(self.history_capacity(), Ordering::Relaxed);
+        let history = self.history_capacity.clone();
+        self.terminal.set_config(Arc::new(EmulatorConfiguration { palette: colors.clone(), history }));
         *self.terminal.palette_mut() = colors;
         self.project(surface);
     }
     pub fn resize_surface(&mut self, width: u32, height: u32, surface: &mut Surface) {
+        // Keep a small content anchor through the core's width reflow, whose
+        // physical stable row numbers can change when rows merge or split.
+        let anchor = self.viewport.map(|_| self.viewport_anchor());
         self.width = width.clamp(1, MAX_TERMINAL_DIMENSION);
         self.height = height.clamp(1, MAX_TERMINAL_DIMENSION);
+        self.update_config();
         self.terminal.resize(terminal_size(self.width, self.height));
+        self.enforce_history_budget();
+        if let Some(anchor) = anchor { self.reveal_resize_anchor(&anchor); }
+        self.clamp_view();
+        self.selection = None;
+        self.search = None;
         *surface = self.new_surface();
         self.project(surface);
     }
-    pub fn advance_bytes(&mut self, bytes: &[u8]) { self.terminal.advance_bytes(bytes); }
+    pub fn advance_bytes(&mut self, bytes: &[u8]) {
+        let alternate = self.terminal.is_alt_screen_active();
+        let previous_live = self.live_start();
+        self.terminal.advance_bytes(bytes);
+        if alternate != self.terminal.is_alt_screen_active() { self.live(); }
+        if previous_live != self.live_start() { self.enforce_history_budget(); }
+        self.clamp_view();
+    }
+    fn enforce_history_budget(&mut self) {
+        let rows = self.history_capacity();
+        // Apply to primary history even when the child currently displays its
+        // alternate screen; discard oldest rows intact, preserving recent text.
+        self.terminal.enforce_scrollback_limits(rows, MAX_HISTORY_TEXT_BYTES);
+    }
     pub fn parse(&mut self, bytes: &[u8], surface: &mut Surface) {
         self.advance_bytes(bytes);
         self.project(surface);
@@ -108,13 +184,21 @@ impl TerminalParser {
         let palette = self.terminal.palette();
         surface.clear(Character::new(' ', color(palette.foreground), self.background_override.unwrap_or(color(palette.background)), CharFlags::None));
         let screen = self.terminal.screen();
-        let start = screen.phys_row(0);
+        let start = screen.stable_row_to_phys(self.view_start()).unwrap_or_else(|| screen.phys_row(0));
         let lines = screen.lines_in_phys_range(start..start + self.height as usize);
         for (y, line) in lines.iter().enumerate() {
             for cell in line.visible_cells() {
                 let x = cell.cell_index();
                 if x >= self.width as usize { break; }
-                let attr = cell_attributes(cell.attrs(), &palette, self.background_override, self.terminal.get_reverse_video());
+                let mut attr = cell_attributes(cell.attrs(), &palette, self.background_override, self.terminal.get_reverse_video());
+                let point = (screen.phys_to_stable_row_index(start + y), x);
+                let selected = self.selection.as_ref().is_some_and(|selection| {
+                    let (a, b) = selection.range();
+                    point >= a && point <= b || (point.0 == a.0 && x < a.1 && x + cell.width() > a.1)
+                });
+                let matched = self.search.as_ref().and_then(|search| search.current.and_then(|i| search.matches.get(i)))
+                    .is_some_and(|(a,b)| point >= *a && point <= *b);
+                if selected || matched { std::mem::swap(&mut attr.foreground, &mut attr.background); }
                 let text = if cell.attrs().invisible() { if cell.width() == 2 { "  " } else { " " } } else { cell.str() };
                 surface.write_grapheme(x as i32, y as i32, text, cell.width(), attr);
             }
@@ -123,9 +207,216 @@ impl TerminalParser {
         if let Some((x, y)) = self.cursor() { surface.set_cursor(x as i32, y as i32); }
     }
     pub fn cursor(&self) -> Option<(u32, u32)> {
+        if let Some(selection) = &self.selection {
+            let y = selection.caret.0 - self.view_start();
+            return (y >= 0 && y < self.height as isize).then_some((selection.caret.1 as u32, y as u32));
+        }
+        if self.viewport.is_some() || self.search.is_some() { return None; }
         let cursor = self.terminal.cursor_pos();
         if cursor.visibility == CursorVisibility::Hidden || cursor.y < 0 { return None; }
         Some(((cursor.x as u32).min(self.width - 1), (cursor.y as u32).min(self.height - 1)))
+    }
+    fn viewport_anchor(&self) -> String {
+        let screen = self.terminal.screen();
+        let start = screen.stable_row_to_phys(self.view_start()).unwrap_or(0);
+        let mut text = String::new();
+        screen.for_each_phys_line(|index, line| {
+            if index != start { return; }
+            for cell in line.visible_cells() {
+                if text.len() + cell.str().len() > 128 { break; }
+                text.push_str(cell.str());
+            }
+        });
+        text.truncate(text.trim_end_matches(' ').len()); text
+    }
+    fn reveal_resize_anchor(&mut self, anchor: &str) {
+        if anchor.is_empty() { return; }
+        let mut search = HistorySearch::new(self.first_row(), self.terminal.screen().phys_to_stable_row_index(self.terminal.screen().scrollback_rows()));
+        search.set_query(anchor.into());
+        // Reflow is already a bounded synchronous core operation. Inspect only
+        // retained text, without cloning the full history or allocating a snapshot.
+        let screen = self.terminal.screen();
+        let old = self.viewport.unwrap_or_else(|| self.live_start());
+        let mut nearest: Option<isize> = None;
+        let mut budget = MAX_HISTORY_TEXT_BYTES;
+        screen.for_each_phys_line(|index, line| {
+            let row = screen.phys_to_stable_row_index(index);
+            for cell in line.visible_cells() {
+                for byte in cell.str().as_bytes() {
+                    if budget == 0 { return; } budget -= 1;
+                    if let Some((begin, _)) = search.feed(*byte, (row, cell.cell_index()))
+                        && nearest.is_none_or(|previous| begin.0.abs_diff(old) < previous.abs_diff(old)) { nearest = Some(begin.0); }
+                }
+            }
+            if !line.last_cell_was_wrapped() { search.reset_partial(); }
+        });
+        if let Some(row) = nearest { self.viewport = Some(row); }
+    }
+    fn history_capacity(&self) -> usize { self.history_limit.min(MAX_HISTORY_CELLS / self.width as usize) }
+    fn update_config(&mut self) {
+        self.history_capacity.store(self.history_capacity(), Ordering::Relaxed);
+        let history = self.history_capacity.clone();
+        self.terminal.set_config(Arc::new(EmulatorConfiguration {
+            palette: emulator_palette(&self.palette, self.background_override), history,
+        }));
+    }
+    #[cfg(test)]
+    fn set_history_limit(&mut self, lines: usize) {
+        self.history_limit = lines.min(MAX_HISTORY_ROWS);
+        self.update_config();
+        // The core applies reduced capacity on its next scroll. Reclaim old
+        // history immediately when reducing a populated buffer.
+        if self.history_rows() > self.history_capacity() { self.terminal.screen_mut().erase_scrollback(); }
+        self.clamp_view();
+    }
+    pub(crate) fn history_rows(&self) -> usize { self.terminal.screen().phys_row(0) }
+    fn first_row(&self) -> isize { self.terminal.screen().phys_to_stable_row_index(0) }
+    pub(crate) fn live_start(&self) -> isize { self.terminal.screen().phys_to_stable_row_index(self.history_rows()) }
+    pub(crate) fn view_start(&self) -> isize { self.viewport.unwrap_or_else(|| self.live_start()).clamp(self.first_row(), self.live_start()) }
+    fn clamp_view(&mut self) {
+        if self.viewport.is_some() { self.viewport = Some(self.view_start()); }
+        let first = self.first_row();
+        if self.selection.as_ref().is_some_and(|selection| selection.anchor.0 < first || selection.caret.0 < first) {
+            self.selection = None;
+        }
+        if let Some(search) = &mut self.search {
+            let selected = search.current.and_then(|index| search.matches.get(index).copied());
+            search.matches.retain(|(start, _)| start.0 >= first);
+            search.current = selected.and_then(|selected| search.matches.iter().position(|range| *range == selected));
+        }
+    }
+    pub(crate) fn scroll(&mut self, rows: isize) {
+        self.viewport = Some(self.view_start().saturating_sub(rows).clamp(self.first_row(), self.live_start()));
+    }
+    pub(crate) fn live(&mut self) { self.viewport = None; self.selection = None; self.search = None; }
+    pub(crate) fn copy_mode(&self) -> bool { self.selection.is_some() }
+    pub(crate) fn start_copy(&mut self) {
+        self.search = None;
+        let point = (self.view_start(), 0);
+        self.viewport = Some(self.view_start());
+        self.selection = Some(Selection { anchor: point, caret: point, marked: false });
+    }
+    pub(crate) fn exit_mode(&mut self) { self.selection = None; self.search = None; }
+    pub(crate) fn select_at(&mut self, x: usize, y: usize, anchor: bool) {
+        let point = (self.view_start() + y.min(self.height as usize - 1) as isize, x.min(self.width as usize - 1));
+        if let Some(selection) = &mut self.selection {
+            selection.caret = point;
+            if anchor { selection.anchor = point; selection.marked = true; }
+        }
+    }
+    pub(crate) fn mark_selection(&mut self) {
+        if let Some(selection) = &mut self.selection { selection.anchor = selection.caret; selection.marked = true; }
+    }
+    pub(crate) fn move_caret(&mut self, dx: isize, dy: isize) {
+        let last = self.terminal.screen().phys_to_stable_row_index(self.terminal.screen().scrollback_rows() - 1);
+        let first = self.first_row();
+        let Some(selection) = &mut self.selection else { return; };
+        selection.caret.0 = (selection.caret.0 + dy).clamp(first, last);
+        selection.caret.1 = selection.caret.1.saturating_add_signed(dx).min(self.width as usize - 1);
+        if !selection.marked { selection.anchor = selection.caret; }
+        let row = selection.caret.0;
+        let start = self.view_start();
+        if row < start { self.viewport = Some(row); }
+        else if row >= start + self.height as isize { self.viewport = Some(row - self.height as isize + 1); }
+    }
+    pub(crate) fn selected_text(&self) -> Result<String, &'static str> {
+        let Some(selection) = &self.selection else { return Err("Enter Copy mode first"); };
+        let (start, end) = selection.range();
+        let screen = self.terminal.screen();
+        let (Some(first), Some(last)) = (screen.stable_row_to_phys(start.0), screen.stable_row_to_phys(end.0)) else {
+            return Err("Selection was evicted from history");
+        };
+        let mut result = String::new();
+        let mut overflow = false;
+        screen.for_each_phys_line(|physical, line| {
+            if physical < first || physical > last || overflow { return; }
+            let index = physical - first;
+            let mut row = String::new();
+            for cell in line.visible_cells() {
+                let x = cell.cell_index();
+                if index == 0 && x + cell.width().max(1) <= start.1 { continue; }
+                if index == last - first && x > end.1 { break; }
+                if result.len() + row.len() + cell.str().len() > MAX_COPY_BYTES { overflow = true; return; }
+                row.push_str(cell.str());
+            }
+            // A partial final endpoint explicitly includes its space cells.
+            // At a physical line boundary, omit trailing visual padding.
+            let partial_endpoint = index == last - first && end.1 < self.width as usize - 1;
+            if !line.last_cell_was_wrapped() && !partial_endpoint { row.truncate(row.trim_end_matches(' ').len()); }
+            result.push_str(&row);
+            if index < last - first && !line.last_cell_was_wrapped() {
+                if result.len() == MAX_COPY_BYTES { overflow = true; return; }
+                result.push('\n');
+            }
+        });
+        if overflow { Err("Selection exceeds 256 KiB; select less text") } else { Ok(result) }
+    }
+    pub(crate) fn search_mode(&self) -> bool { self.search.is_some() }
+    pub(crate) fn start_search(&mut self) {
+        self.selection = None;
+        self.viewport = Some(self.view_start());
+        self.search = Some(HistorySearch::new(self.first_row(), self.terminal.screen().phys_to_stable_row_index(self.terminal.screen().scrollback_rows())));
+    }
+    pub(crate) fn search_query(&self) -> &str { self.search.as_ref().map_or("", |search| search.query.as_str()) }
+    pub(crate) fn set_search_query(&mut self, query: String) {
+        self.start_search();
+        if let Some(search) = &mut self.search { search.set_query(query); }
+    }
+    pub(crate) fn search_pending(&self) -> bool { self.search.as_ref().is_some_and(|search| !search.query.is_empty() && search.next < search.end) }
+    pub(crate) fn search_match_count(&self) -> usize { self.search.as_ref().map_or(0, |search| search.matches.len()) }
+    /// Scan at most 16 rows / 128 KiB each tick. KMP keeps byte work linear,
+    /// supports overlapping literals and matches inside complete graphemes.
+    pub(crate) fn search_step(&mut self) -> bool {
+        if !self.search_pending() { return false; }
+        let screen = self.terminal.screen();
+        let Some(search) = &mut self.search else { return false; };
+        let mut budget = 128 * 1024;
+        for _ in 0..16 {
+            if search.next >= search.end || budget == 0 { break; }
+            let stable = search.next;
+            let Some(physical) = screen.stable_row_to_phys(stable) else {
+                search.next += 1; search.cell = 0; search.byte = 0; search.reset_partial(); continue;
+            };
+            let mut completed = true;
+            screen.for_each_phys_line(|index, line| {
+                if index != physical { return; }
+                for (index, cell) in line.visible_cells().enumerate() {
+                    if index < search.cell { continue; }
+                    let text = cell.str().as_bytes();
+                    let from = if index == search.cell { search.byte } else { 0 };
+                    for (offset, byte) in text.iter().enumerate().skip(from) {
+                        if budget == 0 {
+                            search.cell = index; search.byte = offset; completed = false; return;
+                        }
+                        budget -= 1;
+                        if let Some(range) = search.feed(*byte, (stable, cell.cell_index()))
+                            && search.matches.len() < MAX_SEARCH_MATCHES { search.matches.push(range); }
+                    }
+                }
+                if !line.last_cell_was_wrapped() { search.reset_partial(); }
+            });
+            if completed { search.next += 1; search.cell = 0; search.byte = 0; }
+        }
+        if search.current.is_none() && !search.matches.is_empty() { self.search_next(false); }
+        true
+    }
+    pub(crate) fn search_next(&mut self, previous: bool) {
+        let Some(search) = &mut self.search else { return; };
+        if search.matches.is_empty() { return; }
+        let len = search.matches.len();
+        let index = match search.current { None => if previous { len - 1 } else { 0 },
+            Some(index) => if previous { (index + len - 1) % len } else { (index + 1) % len } };
+        search.current = Some(index);
+        self.viewport = Some(search.matches[index].0.0);
+        self.clamp_view();
+    }
+    pub(crate) fn status(&self) -> String {
+        if let Some(search) = &self.search {
+            format!("Search: {} | {} matches{} | Enter next, Shift+Enter previous, Esc exit", search.query,
+                self.search_match_count(), if self.search_match_count() == MAX_SEARCH_MATCHES { "+ (limit)" } else if self.search_pending() { " (searching)" } else { "" })
+        } else if self.copy_mode() { "Copy | arrows move, Space marks, Enter copies, Esc exits".into() }
+        else if self.viewport.is_some() { format!("History: {} rows back | Shift+PageDown or Live", self.live_start() - self.view_start()) }
+        else { String::new() }
     }
     pub fn take_replies(&mut self) -> Vec<u8> {
         std::mem::take(&mut *self.replies.lock().unwrap_or_else(|error| error.into_inner()))
@@ -225,6 +516,173 @@ fn cell_attributes(attributes: &CellAttributes, palette: &ColorPalette, backgrou
 mod tests {
     use super::*;
     use crate::config::preferences::{Preferences, Rgb};
+    #[test]
+    fn review_pruning_preserves_visible_rows_cursor_and_stable_ids() {
+        let mut parser = parser(100,2);
+        parser.advance_bytes(&vec![b'x';190_000]);
+        parser.terminal.resize(terminal_size(10,2));
+        let before_cursor = parser.terminal.cursor_pos();
+        let before_start = parser.terminal.screen().visible_row_to_stable_row(0);
+        let before_rows: Vec<String> = parser.terminal.screen().lines_in_phys_range(parser.history_rows()..parser.history_rows()+2).iter().map(|line| line.as_str().into_owned()).collect();
+        parser.terminal.enforce_scrollback_limits(MAX_HISTORY_ROWS,MAX_HISTORY_TEXT_BYTES);
+        assert_eq!(parser.history_rows(),MAX_HISTORY_ROWS);
+        assert_eq!(parser.terminal.cursor_pos(),before_cursor);
+        assert_eq!(parser.terminal.screen().visible_row_to_stable_row(0),before_start);
+        let after_rows: Vec<String> = parser.terminal.screen().lines_in_phys_range(parser.history_rows()..parser.history_rows()+2).iter().map(|line| line.as_str().into_owned()).collect();
+        assert_eq!(after_rows,before_rows);
+    }
+    #[test]
+    fn review_text_budget_prunes_oldest_rows_under_alternate_screen() {
+        let mut parser = parser(10,2);
+        let oversized = format!("a{}","\u{301}".repeat(16));
+        let seqno = parser.terminal.current_seqno();
+        parser.terminal.screen_mut().set_cell_grapheme(0,0,&oversized,1,CellAttributes::default(),seqno);
+        parser.terminal.advance_bytes(b"\r\nkeep\r\nlast\r\nlive\x1b[?1049hALT");
+        parser.terminal.resize(terminal_size(20,2));
+        // Scale the public helper's byte budget instead of constructing a
+        // multi-megabyte grapheme; the facade supplies its 8 MiB production cap.
+        parser.terminal.enforce_scrollback_limits(MAX_HISTORY_ROWS,32);
+        parser.terminal.advance_bytes(b"\x1b[?1049l");
+        assert_eq!(parser.history_rows(),1,"drop oversized oldest row, retain recent history");
+        assert_eq!(parser.terminal.screen().lines_in_phys_range(0..1)[0].as_str(),"keep");
+    }
+    #[test]
+    fn review_quiet_reflow_enforces_row_and_cell_limits() {
+        let mut parser = parser(100,2);
+        parser.advance_bytes(&vec![b'x';190_000]);
+        let mut surface = parser.new_surface();
+        parser.resize_surface(10,2,&mut surface);
+        assert!(parser.history_rows() <= MAX_HISTORY_ROWS,"quiet narrow: {} rows",parser.history_rows());
+        assert!(parser.history_rows() * 10 <= MAX_HISTORY_CELLS);
+
+        let mut parser = self::parser(10,2);
+        for index in 0..1500 { parser.advance_bytes(format!("{index:04}\r\n").as_bytes()); }
+        parser.scroll(isize::MAX);
+        let mut surface = parser.new_surface();
+        parser.resize_surface(500,2,&mut surface);
+        assert!(parser.history_rows() <= MAX_HISTORY_CELLS / 500,"quiet widen: {} rows",parser.history_rows());
+        assert_eq!(parser.view_start(),parser.first_row(),"evicted anchor must clamp to retained history");
+        assert!(parser.history_rows() > 0,"keep the most recent history");
+    }
+    #[test]
+    fn review_alternate_screen_resize_limits_inactive_primary_history() {
+        let mut parser = parser(100,2);
+        parser.advance_bytes(&vec![b'x';190_000]);
+        parser.advance_bytes(b"\x1b[?1049hALT");
+        let mut surface = parser.new_surface();
+        parser.resize_surface(10,2,&mut surface);
+        assert_eq!(parser.history_rows(),0);
+        // Bypass the facade's next-output accounting: the resize itself must
+        // already have bounded the inactive primary screen.
+        parser.terminal.advance_bytes(b"\x1b[?1049l");
+        assert!(parser.history_rows() <= MAX_HISTORY_ROWS,"inactive primary: {} rows",parser.history_rows());
+        assert!(parser.history_rows() > 0);
+    }
+    #[test]
+    fn review_copy_preserves_explicit_space_endpoints() {
+        let mut parser = parser(10,3);
+        parser.advance_bytes("a b\r\n中 x".as_bytes()); parser.start_copy();
+        parser.select_at(0,0,true); parser.select_at(1,0,false);
+        assert_eq!(parser.selected_text().unwrap(),"a ");
+        parser.select_at(1,0,true); parser.select_at(1,0,false);
+        assert_eq!(parser.selected_text().unwrap()," ");
+        parser.select_at(0,0,true); parser.select_at(2,1,false);
+        assert_eq!(parser.selected_text().unwrap(),"a b\n中 ");
+        let mut parser = self::parser(10,2);
+        parser.advance_bytes(b"a "); parser.start_copy();
+        parser.select_at(0,0,true); parser.select_at(1,0,false);
+        assert_eq!(parser.selected_text().unwrap(),"a ");
+        parser.select_at(9,0,false);
+        assert_eq!(parser.selected_text().unwrap(),"a","full physical-line selection trims visual trailing padding");
+    }
+    #[test]
+    fn history_limits_bound_rows_cells_and_evicted_selection() {
+        let mut parser = parser(500,2);
+        parser.set_history_limit(usize::MAX);
+        for _ in 0..600 { parser.advance_bytes(b"line\r\n"); }
+        assert_eq!(parser.history_rows(),MAX_HISTORY_CELLS / 500);
+        parser.scroll(isize::MAX);
+        parser.start_copy(); parser.select_at(0,0,true);
+        parser.advance_bytes(b"new\r\n");
+        assert!(!parser.copy_mode(),"eviction must invalidate the old selection");
+        assert_eq!(parser.view_start(),parser.first_row());
+        parser.set_history_limit(1);
+        assert!(parser.history_rows() <= 1);
+    }
+    #[test]
+    fn history_search_yields_and_resumes_inside_a_long_unicode_row() {
+        let mut parser = parser(3000,2);
+        let text = format!("a{}", "\u{301}".repeat(30)).repeat(3000);
+        parser.advance_bytes(text.as_bytes());
+        parser.set_search_query("a".into());
+        parser.search_step();
+        assert!(parser.search_pending(),"one tick must not scan more than 128 KiB");
+        while parser.search_pending() { parser.search_step(); }
+        assert_eq!(parser.search_match_count(),3000);
+    }
+    #[test]
+    fn paused_viewport_reveals_the_same_content_after_reflow() {
+        let mut parser = parser(4, 2);
+        parser.advance_bytes(b"abcdefgh\r\nijkl\r\nmnop\r\nqrst");
+        parser.scroll(2);
+        let mut surface = parser.new_surface(); parser.project(&mut surface);
+        assert_eq!(surface.cell_text(0,0).unwrap(), "e");
+        parser.resize_surface(8,2,&mut surface);
+        let row: String = (0..8).map(|x| surface.cell_text(x,0).unwrap().into_owned()).collect();
+        assert!(row.contains("efgh"), "resizing lost the anchored content: {row:?}");
+        assert!(parser.viewport.is_some());
+    }
+    #[test]
+    fn literal_search_finds_subgraphemes_soft_wraps_and_navigates_both_directions() {
+        let mut parser = parser(4,3);
+        parser.advance_bytes("e\u{301}abce\u{301}\r\nlast".as_bytes());
+        parser.start_search(); parser.set_search_query("e".into());
+        while parser.search_pending() { parser.search_step(); }
+        assert_eq!(parser.search_match_count(),2);
+        let first = parser.search.as_ref().unwrap().current;
+        parser.search_next(false); assert_ne!(parser.search.as_ref().unwrap().current,first);
+        parser.search_next(true); assert_eq!(parser.search.as_ref().unwrap().current,first);
+        parser.set_search_query("ce\u{301}".into());
+        while parser.search_pending() { parser.search_step(); }
+        assert_eq!(parser.search_match_count(),1);
+    }
+    #[test]
+    fn history_anchor_eviction_unicode_selection_and_search() {
+        let mut parser = parser(8, 2);
+        parser.set_history_limit(3);
+        parser.advance_bytes("one\r\ntwo\r\n中e\u{301}😀\r\nfour\r\nfive".as_bytes());
+        assert!(parser.history_rows() > 0);
+        parser.scroll(2);
+        let anchor = parser.view_start();
+        parser.advance_bytes(b"\r\nsix");
+        assert_eq!(parser.view_start(), anchor);
+        assert!(parser.history_rows() <= 3);
+        parser.scroll(-1);
+        parser.start_copy();
+        parser.select_at(0, 0, true);
+        parser.select_at(4, 0, false);
+        assert_eq!(parser.selected_text().unwrap(), "中e\u{301}😀");
+        parser.start_search();
+        parser.set_search_query("four".into());
+        while parser.search_pending() { parser.search_step(); }
+        assert_eq!(parser.search_match_count(), 1);
+        parser.live();
+        assert_eq!(parser.view_start(), parser.live_start());
+    }
+    #[test]
+    fn selection_joins_soft_wraps_but_keeps_hard_newlines_and_alt_screen_separate() {
+        let mut parser = parser(4, 3);
+        parser.advance_bytes(b"abcdef\r\nxy");
+        parser.start_copy();
+        parser.select_at(0, 0, true);
+        parser.select_at(1, 2, false);
+        assert_eq!(parser.selected_text().unwrap(), "abcdef\nxy");
+        parser.advance_bytes(b"\x1b[?1049hALT");
+        assert_eq!(parser.history_rows(), 0);
+        assert!(!parser.copy_mode());
+        parser.advance_bytes(b"\x1b[?1049l");
+        assert_eq!(parser.history_rows(), 0);
+    }
     #[test]
     fn recolors_default_standard_bright_and_indexed_colors_without_rgb_collisions() {
         let old = Preferences::default().terminal;

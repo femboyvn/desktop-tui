@@ -25,6 +25,28 @@ fn renderer(size: Size) -> CrossTerm {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn native_clipboard_round_trips_without_a_graphical_session() {
+    use crate::backend::Backend;
+    const TEST: &str = "backend::crossterm::implementation::regression_tests::native_clipboard_round_trips_without_a_graphical_session";
+    if std::env::var_os("DESKTOP_TUI_TEST_PTY_CLIPBOARD").is_none() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact",TEST,"--nocapture"])
+            .env("DESKTOP_TUI_TEST_PTY_CLIPBOARD","1").env_remove("DISPLAY").env_remove("WAYLAND_DISPLAY")
+            .output().unwrap();
+        assert!(output.status.success(),"{}\n{}",String::from_utf8_lossy(&output.stdout),String::from_utf8_lossy(&output.stderr));
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed;"));
+        return;
+    }
+    let mut backend = renderer(Size::new(10,4));
+    backend.set_clipboard_text("Tiếng Việt 中e\u{301}👩🏽‍💻");
+    assert!(backend.has_clipboard_text());
+    assert_eq!(backend.clipboard_text().as_deref(),Some("Tiếng Việt 中e\u{301}👩🏽‍💻"));
+    backend.set_clipboard_text("");
+    assert_eq!(backend.clipboard_text().as_deref(),Some(""));
+}
+
 #[test]
 fn terminal_input_modes_capture_paste_and_restore_outer_terminal() {
     let mut bytes = Vec::new();

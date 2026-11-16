@@ -151,6 +151,7 @@ impl OnMouseEvent for ImageCanvas {
 #[Window(events = [TimerEvents, WindowEvents])]
 pub(crate) struct ImageWindow { image: Handle<ImageCanvas>, closing: bool }
 impl ImageWindow {
+    pub fn document_path(&self) -> Option<PathBuf> { self.control(self.image).map(|image| image.path.clone()) }
     pub fn new(path: PathBuf, background: Rgb) -> anyhow::Result<Self> {
         let image = ImageCanvas::new(path, background)?;
         let mut window = Self { base: Window::new("Image Viewer — Ctrl+O Open | F Fit | 1 Actual | +/- Zoom | Arrows/drag Pan", layout!("a:c,w:70%,h:75%"), window::Flags::Sizeable), image: Handle::None, closing: false };
