@@ -1379,6 +1379,12 @@ impl PaintMethods for RuntimeManager {
     }
 }
 impl RuntimeManager {
+    pub(crate) fn window_can_receive_input(&self, window: Handle<()>) -> bool {
+        self.opened_menu_handle.is_none()
+            && !self.appbar.as_ref().is_some_and(|bar| bar.is_opened())
+            && (self.modal_windows.is_empty() || self.get_root_control_handle() == window)
+    }
+
     fn focused_input_control(&self) -> Handle<()> {
         self.get_focused_control_for_parent(self.get_root_control_handle()).unwrap_or(Handle::None)
     }

@@ -418,6 +418,18 @@ writes the original source; Reload applies saved changes without stopping
 running windows. Editing a starter creates an override. Invalid drafts do
 not replace source files. Unsaved changes prompt before discard.
 
+## Background activity
+
+Open Desktop > Activity or search for Activity in the command palette.
+The latest 64 File Browser and AI Chat results are kept for this session.
+Results appear even when the source is hidden or on another workspace.
+A file batch reports its final result and completed-item count.
+
+The top bar shows unread activity when space permits. Open Activity to
+acknowledge it. New results appear in the open view, and Clear empties the
+history. AI request details stay in AI Chat. File Browser prompts wait
+until you return to its window. Activity is hidden during Terminal Lock.
+
 ## Diagnostics
 
 Desktop > Diagnostics runs configuration/tool checks in the background.

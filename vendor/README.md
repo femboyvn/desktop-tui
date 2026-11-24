@@ -60,6 +60,10 @@ Modified packaged sources:
   ignore input, preserving existing controls; Terminal Lock excludes desktop
   shortcut handling at the application layer.
 
+- `Window::has_input_focus` in `src/ui/window/window.rs` and
+  `src/system/runtime_manager.rs` includes menu and modal ownership. The File
+  Browser uses it before presenting asynchronous results or focus requests.
+
 - `src/system/runtime_manager.rs`: connect timers allocated before a modal is
   registered to its final control handle and schedule their threads, matching
   ordinary child registration. Launcher Manager and Diagnostics need this to

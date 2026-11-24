@@ -42,6 +42,7 @@ Features:
 - [x] File multi-select, recursive filename search, and Trash restore
 - [x] Launcher editing/reload, working directories, and noninteractive diagnostics
 - [x] Four workspaces with an offered restore after restart
+- [x] Desktop activity for File Browser and AI Chat results
 - [x] Managed Carboxyl browser launcher and grapheme-aware Unicode terminals
 - [x] Native File Browser, Image Viewer, PDF Reader, Music Player, and ASCII Paint
 - [x] Built-in Snake, 2048, and Minesweeper
@@ -661,10 +662,25 @@ partial output. If saving fails, Retry / Discard / Cancel protects unsaved work
 before Close, Exit, Shutdown, or Restart. Restoring a saved workspace opens the
 chat window without resuming an old network request.
 
+## Background activity
+
+Open **Desktop > Activity...** or search for **Activity** in the command
+palette. The view shows the last 64 results from the File Browser and AI Chat,
+newest first, including work that finishes in another workspace. A batch reports
+one result with its completed-item count. Terminal Lock hides the activity view
+and indicator while background work continues.
+
+The top bar shows the unread count as **Activity 2**, or **A2** in a narrower
+terminal. Opening Activity acknowledges the visible history. New results
+appear while it is open, and **Clear** empties this session's history.
+Select an entry to read its details below the list.
+AI Chat activity shows a brief outcome. Details are available in the chat.
+When a file replacement needs confirmation, return to the File Browser.
+
 ## Desktop menu and preferences
 
 Linux is the supported target. **Desktop** contains Help, the command palette,
-New terminal, Preference, Desktop shortcut, Launchers, Diagnostics, Workspaces,
+New terminal, Preference, Desktop shortcut, Launchers, Diagnostics, Activity, Workspaces,
 Restore saved workspace, Terminal Lock, Screen Lock, Shutdown, Restart, and Exit.
 Help opens a resizable offline guide with categories on the left and scrollable
 details on the right; its contents are also available in [HELP.md](HELP.md).

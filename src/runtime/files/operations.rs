@@ -23,13 +23,22 @@ pub(crate) enum Operation {
     Restore(TrashItem),
 }
 #[derive(Debug)]
-pub(crate) enum Outcome { Complete(String), Warning(String), Confirm(Operation), Failed(String) }
+pub(crate) enum Outcome { Complete(String), Warning(String), Confirm(Operation), Failed(String), Canceled(String) }
 #[derive(Default)]
 struct Control { cancel: AtomicBool, closed: AtomicBool, bytes: AtomicU64, entries: AtomicU64 }
 type Workers = Mutex<Vec<(std::sync::Weak<Control>,std::thread::JoinHandle<()>)>>;
 static WORKERS: std::sync::OnceLock<Workers> = std::sync::OnceLock::new();
+#[derive(Debug)]
+struct OperationCanceled;
+impl std::fmt::Display for OperationCanceled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { f.write_str("Operation canceled; source preserved") }
+}
+impl std::error::Error for OperationCanceled {}
 impl Control {
-    fn check(&self) -> anyhow::Result<()> { ensure!(!self.cancel.load(Ordering::Acquire),"Operation canceled; source preserved"); Ok(()) }
+    fn check(&self) -> anyhow::Result<()> {
+        if self.cancel.load(Ordering::Acquire) { return Err(OperationCanceled.into()); }
+        Ok(())
+    }
 }
 /// A single accepted mutation and one bounded result; no replaceable mutation queue.
 /// Closing cancels before publication and never waits for filesystem I/O on the UI thread.
@@ -378,7 +387,10 @@ fn execute(operation: Operation, control: &Control) -> Outcome {
             Operation::Restore(item) => trash::restore(item,control),
         }
     })();
-    result.unwrap_or_else(|error| Outcome::Failed(format!("{error:#}")))
+    result.unwrap_or_else(|error| {
+        if error.is::<OperationCanceled>() { Outcome::Canceled(format!("{error:#}")) }
+        else { Outcome::Failed(format!("{error:#}")) }
+    })
 }
 #[cfg(test)]
 mod tests {
@@ -428,7 +440,7 @@ mod tests {
                 worker.cancel(); let mut live = if dropped { drop(worker); None } else { Some(worker) };
                 crate::runtime::files::finish_shutdown();
                 if let Some(worker) = &mut live {
-                    assert!(matches!(worker.poll(),Some(Outcome::Failed(error)) if error.contains("canceled")),"shutdown must join the canceled live owner's mutation");
+                    assert!(matches!(worker.poll(),Some(Outcome::Canceled(_))),"shutdown must join the canceled live owner's mutation");
                     assert!(worker.submit(Operation::Create { path: folder.join("after-shutdown"),directory: false }).is_err(),"closed worker must reject new mutations");
                 }
                 assert_eq!(std::fs::metadata(&source).unwrap().len(),64*1024*1024);
@@ -644,7 +656,7 @@ mod tests {
         let dir = TestDir::new(); let source = dir.path().join("from"); let destination = dir.path().join("to");
         std::fs::write(&source,b"new").unwrap(); std::fs::write(&destination,b"old").unwrap();
         let control = Control::default(); control.cancel.store(true,Ordering::Release);
-        assert!(matches!(execute(transfer(source.clone(),destination.clone(),true),&control),Outcome::Failed(_)));
+        assert!(matches!(execute(transfer(source.clone(),destination.clone(),true),&control),Outcome::Canceled(_)));
         assert_eq!(std::fs::read(source).unwrap(),b"new"); assert_eq!(std::fs::read(destination).unwrap(),b"old");
     }
     #[test]

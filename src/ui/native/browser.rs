@@ -1,6 +1,7 @@
 use super::image_viewer::home_directory;
 use crate::runtime::files::{self, Entry, FileKind, Listing};
 use crate::runtime::latest::LatestWorker;
+use crate::runtime::activity::{ActivityLog, Source as ActivitySource, Status as ActivityStatus};
 use appcui::prelude::*;
 use std::path::{Path, PathBuf};
 use std::collections::{BTreeSet, HashMap, VecDeque};
@@ -508,6 +509,8 @@ struct Batch {
     total: usize,
 }
 
+struct OperationNotice { message: String, dialog: Option<&'static str>, refresh: bool }
+
 #[Window(events = TimerEvents+WindowEvents+TextFieldEvents+ButtonEvents)]
 pub(crate) struct BrowserWindow {
     path: PathBuf,
@@ -519,12 +522,15 @@ pub(crate) struct BrowserWindow {
     mode_button: Handle<Button>,
     hidden: bool,
     closing: bool,
+    close_pending: bool,
     filter_field: Handle<TextField>, favorite_button: Handle<Button>, favorites_button: Handle<Button>, cancel_operation: Handle<Button>, status: Handle<Label>,
     find: Handle<Button>, trash: Handle<Button>, page_label: Handle<Label>,
     saved: files::BrowserState, state_worker: Option<files::StateWorker>, state_ready: bool, restore_location: bool,
     operation: files::OperationWorker,
     batch: Option<Batch>,
     deferred_outcome: Option<files::Outcome>,
+    notice: Option<OperationNotice>,
+    activity: ActivityLog,
     worker: LatestWorker<ListingRequest, Result<BrowserListing, String>>,
     page: BrowserPage, pending_listing: Option<(PathBuf,BrowserPage)>, announce_listing: bool, cancel_listing: Arc<AtomicBool>,
     trash_root: Option<PathBuf>, trash_items: HashMap<PathBuf,files::TrashItem>,
@@ -532,14 +538,15 @@ pub(crate) struct BrowserWindow {
     pending_entries: VecDeque<Entry>,
 }
 impl BrowserWindow {
-    pub fn new() -> anyhow::Result<Self> { Self::with_user_state(home_directory(),true) }
+    pub fn new(activity: ActivityLog) -> anyhow::Result<Self> { Self::with_user_state(home_directory(),true,activity) }
     /// Open an explicit location while loading saved view/filter/favorites in the background.
-    pub fn new_at(path: PathBuf) -> anyhow::Result<Self> { Self::with_user_state(path,false) }
-    pub fn current_path(&self) -> Option<PathBuf> { (!self.closing).then(|| self.path.clone()) }
-    fn with_user_state(path: PathBuf, restore: bool) -> anyhow::Result<Self> {
+    pub fn new_at(path: PathBuf, activity: ActivityLog) -> anyhow::Result<Self> { Self::with_user_state(path,false,activity) }
+    pub fn current_path(&self) -> Option<PathBuf> { (!self.is_closing()).then(|| self.path.clone()) }
+    fn with_user_state(path: PathBuf, restore: bool, activity: ActivityLog) -> anyhow::Result<Self> {
         // Headless tests must never write host user state; persistence tests inject isolated paths.
         let state_path = if cfg!(test) { Ok(None) } else { files::default_state_path().map(Some) };
         let mut window = Self::with_state(path,state_path.as_ref().ok().cloned().flatten(),restore)?;
+        window.activity = activity;
         if let Err(error) = state_path { window.set_status(&format!("Browser state unavailable: {error:#}")); }
         Ok(window)
     }
@@ -554,10 +561,11 @@ impl BrowserWindow {
         let mut window = Self {
             base: Window::new("File Browser — Enter Open | Alt+U Parent | Alt+R Refresh | Alt+H Hidden", layout!("a:c,w:90%,h:80%"), window::Flags::Sizeable),
             path, path_field: Handle::None, listing: Handle::None, up: Handle::None, refresh: Handle::None, hidden_button: Handle::None, mode_button: Handle::None,
-            hidden: false, closing: false, worker, action: None, pending_entries: VecDeque::new(),
+            hidden: false, closing: false, close_pending: false, worker, action: None, pending_entries: VecDeque::new(),
             filter_field: Handle::None, favorite_button: Handle::None, favorites_button: Handle::None, cancel_operation: Handle::None, status: Handle::None,
             saved: files::BrowserState::default(), state_worker, state_ready, restore_location, operation: files::OperationWorker::new()?,
             find: Handle::None, trash: Handle::None, page_label: Handle::None, batch: None, deferred_outcome: None,
+            notice: None, activity: ActivityLog::default(),
             page: BrowserPage::Folder, pending_listing: None, announce_listing: true, cancel_listing: Arc::new(AtomicBool::new(false)),
             trash_root: None, trash_items: HashMap::new(),
         };
@@ -612,7 +620,7 @@ impl BrowserWindow {
     fn refresh(&mut self) { self.reload(true); }
     fn refresh_after_operation(&mut self) { self.reload(self.pending_listing.is_some() && self.announce_listing); }
     pub(crate) fn find_shortcut(&mut self) -> EventProcessStatus {
-        if self.page == BrowserPage::Trash || self.closing { return EventProcessStatus::Ignored; }
+        if self.page == BrowserPage::Trash || self.is_closing() { return EventProcessStatus::Ignored; }
         self.show_search();
         EventProcessStatus::Processed
     }
@@ -640,14 +648,14 @@ impl BrowserWindow {
         if let Some(list) = self.control_mut(handle) { list.hidden = hidden; }
         self.save_view(); self.refresh();
     }
-    pub fn take_action(&mut self) -> Option<BrowserAction> { if self.is_visible() && !self.closing { self.action.take() } else { None } }
-    pub fn is_closing(&self) -> bool { self.closing }
+    pub fn take_action(&mut self) -> Option<BrowserAction> { if self.is_visible() && !self.is_closing() { self.action.take() } else { None } }
+    pub fn is_closing(&self) -> bool { self.closing || self.close_pending }
     pub fn shutdown(&mut self) { self.cleanup(); self.close(); }
     fn cleanup(&mut self) {
         self.operation.cancel();
         self.cancel_listing.store(true,Ordering::Relaxed);
-        self.batch = None; self.deferred_outcome = None;
-        self.closing = true; self.worker.close(); self.action = None; self.pending_entries.clear();
+        self.batch = None; self.deferred_outcome = None; self.notice = None;
+        self.closing = true; self.close_pending = false; self.worker.close(); self.action = None; self.pending_entries.clear();
         let handle = self.listing;
         if let Some(list) = self.control_mut(handle) { list.invalidate(); }
     }
@@ -718,7 +726,10 @@ impl BrowserWindow {
         }
     }
     fn start_operation(&mut self, operation: files::Operation) {
-        match self.operation.submit(operation) { Ok(()) => self.set_status("Working… Cancel operation stops before publication"), Err(error) => self.set_status(&format!("{error:#}")) }
+        match self.operation.submit(operation) {
+            Ok(()) => self.set_status("Working… Cancel operation stops before publication"),
+            Err(error) => self.operation_notice(ActivityStatus::Failed,format!("{error:#}"),None,false),
+        }
     }
     fn begin_batch(&mut self, operations: VecDeque<files::Operation>) {
         if operations.is_empty() { return; }
@@ -731,19 +742,36 @@ impl BrowserWindow {
             Some(operation) => {
                 if let Err(error) = self.operation.submit(operation) { self.deferred_outcome = Some(files::Outcome::Failed(format!("{error:#}"))); }
             }
-            None => self.finish_batch(None),
+            None => self.finish_batch(ActivityStatus::Completed,None),
         }
     }
-    fn operation_busy(&self) -> bool { self.batch.is_some() || self.operation.busy() }
-    fn finish_batch(&mut self, reason: Option<&str>) {
+    fn operation_busy(&self) -> bool {
+        self.waiting_for_operation() || self.notice.is_some()
+    }
+    fn waiting_for_operation(&self) -> bool {
+        self.batch.is_some() || self.operation.busy() || self.deferred_outcome.is_some()
+    }
+    fn finish_batch(&mut self, status: ActivityStatus, reason: Option<&str>) {
         let Some(batch) = self.batch.take() else { return; };
         let summary = format!("{} of {} items completed",batch.finished,batch.total);
-        self.refresh_after_operation();
-        if let Some(reason) = reason {
-            let message = format!("{summary}. {reason}");
-            self.set_status(&message);
-            dialogs::error("Batch stopped",&message);
-        } else { self.set_status(&summary); }
+        let message = reason.map_or_else(|| summary.clone(),|reason| format!("{summary}. {reason}"));
+        self.operation_notice(status,message,reason.map(|_| "Batch stopped"),true);
+    }
+    fn operation_notice(&mut self, status: ActivityStatus, message: String, dialog: Option<&'static str>, refresh: bool) {
+        self.activity.record(ActivitySource::Files,status,&message);
+        self.notice = Some(OperationNotice { message,dialog,refresh });
+        self.present_operation_notice();
+    }
+    fn present_operation_notice(&mut self) -> bool {
+        if !self.can_present() { return false; }
+        let Some(notice) = self.notice.take() else { return false; };
+        if notice.refresh { self.refresh_after_operation(); }
+        self.set_status(&notice.message);
+        if let Some(title) = notice.dialog { dialogs::error(title,&notice.message); }
+        true
+    }
+    fn can_present(&self) -> bool {
+        !self.is_closing() && self.is_visible() && (self.handle().is_none() || self.has_input_focus())
     }
     fn mutate_batch(&mut self, mutation: Mutation, entries: Vec<Entry>) {
         if self.operation_busy() { self.set_status("Another file operation is running; cancel it or wait"); return; }
@@ -784,51 +812,44 @@ impl BrowserWindow {
     }
     fn poll_operation(&mut self) -> bool {
         use files::Outcome;
+        if self.present_operation_notice() { return true; }
+        let canceled = self.operation.is_canceled();
+        if !canceled && !self.can_present() && matches!(self.deferred_outcome,Some(Outcome::Confirm(_))) { return false; }
         if let Some(outcome) = self.deferred_outcome.take().or_else(|| self.operation.poll()) {
-            let canceled = self.operation.is_canceled();
             match outcome {
                 Outcome::Complete(message) => {
                     if let Some(batch) = &mut self.batch {
                         batch.finished += 1;
-                        if canceled && !batch.pending.is_empty() { self.finish_batch(Some("Canceled. Published work was retained.")); }
+                        if canceled && !batch.pending.is_empty() { self.finish_batch(ActivityStatus::Canceled,Some("Canceled. Published work was retained.")); }
                         else { self.start_next_operation(); }
-                    } else { self.set_status(&message); self.refresh_after_operation(); }
+                    } else { self.operation_notice(ActivityStatus::Completed,message,None,true); }
                 }
                 Outcome::Confirm(operation) => {
+                    if !canceled && !self.can_present() { self.deferred_outcome = Some(Outcome::Confirm(operation)); return false; }
                     let destination = match &operation { files::Operation::Transfer { destination, .. } => destination.display().to_string(), _ => String::new() };
                     if !canceled && dialogs::validate("Replace existing file?",&format!("Replace {destination}? The source and destination will be checked again before publication.")) {
-                        if let Err(error) = self.operation.submit(operation) { self.report_operation_issue(&format!("{error:#}"),false); }
-                    } else if self.batch.is_some() { self.finish_batch(Some("Replacement canceled. Published work was retained.")); }
-                    else { self.set_status("Replacement canceled; source and destination preserved"); }
+                        if let Err(error) = self.operation.submit(operation) { self.report_operation_issue(ActivityStatus::Failed,format!("{error:#}")); }
+                    } else if self.batch.is_some() { self.finish_batch(ActivityStatus::Canceled,Some("Replacement canceled. Published work was retained.")); }
+                    else { self.operation_notice(ActivityStatus::Canceled,"Replacement canceled; source and destination preserved".into(),None,false); }
                 }
-                Outcome::Warning(message) => self.report_operation_issue(&message,true),
-                Outcome::Failed(message) => self.report_operation_issue(&message,false),
+                Outcome::Warning(message) => self.report_operation_issue(ActivityStatus::Attention,message),
+                Outcome::Failed(message) => self.report_operation_issue(ActivityStatus::Failed,message),
+                Outcome::Canceled(message) => self.report_operation_issue(ActivityStatus::Canceled,message),
             }
             return true;
         }
-        if !self.operation.busy() { return false; }
+        if !self.is_visible() || !self.operation.busy() { return false; }
         let (entries,bytes) = self.operation.progress();
         let progress = self.batch.as_ref().map(|batch| format!("Item {}/{} | ",batch.finished+1,batch.total)).unwrap_or_default();
         self.set_status(&format!("{progress}Working: {entries} entries, {bytes} bytes | Cancel operation to stop"));
         true
     }
-    fn poll_hidden_batch(&mut self) {
-        let Some(batch) = &mut self.batch else { return; };
-        if self.deferred_outcome.is_some() { return; }
-        match self.operation.poll() {
-            Some(files::Outcome::Complete(_)) if !batch.pending.is_empty() && !self.operation.is_canceled() => {
-                batch.finished += 1;
-                self.start_next_operation();
-            }
-            outcome => self.deferred_outcome = outcome,
-        }
-    }
-    fn report_operation_issue(&mut self, message: &str, published: bool) {
-        if self.batch.is_some() { self.finish_batch(Some(message)); }
+    fn report_operation_issue(&mut self, status: ActivityStatus, message: String) {
+        if self.batch.is_some() { self.finish_batch(status,Some(&message)); }
         else {
-            if published { self.refresh_after_operation(); }
-            self.set_status(message);
-            dialogs::error(if published { "File operation needs attention" } else { "File operation stopped" },message);
+            let published = status == ActivityStatus::Attention;
+            let title = if published { "File operation needs attention" } else { "File operation stopped" };
+            self.operation_notice(status,message,Some(title),published);
         }
     }
     fn mutate(&mut self, mutation: Mutation, entry: Option<Entry>) {
@@ -890,12 +911,13 @@ impl BrowserWindow {
             if let Some(button) = self.control_mut(button) { button.set_enabled(!trash); }
         }
         let handle = self.listing;
+        let focus = self.can_present();
         if let Some(list) = self.control_mut(handle) {
             list.clear();
             list.loading = !listing.entries.is_empty();
             list.trash = trash;
             list.search = !trash && !folder;
-            list.request_focus();
+            if focus { list.request_focus(); }
         }
         self.pending_entries = listing.entries.into();
         if self.announce_listing && !self.operation_busy() {
@@ -942,7 +964,11 @@ impl ButtonEvents for BrowserWindow {
 impl TimerEvents for BrowserWindow {
     fn on_update(&mut self, _: u64) -> EventProcessStatus {
         if self.closing { return EventProcessStatus::Ignored; }
-        if !self.is_visible() { self.poll_hidden_batch(); return EventProcessStatus::Ignored; }
+        if self.close_pending || !self.is_visible() {
+            self.poll_operation();
+            if self.close_pending && !self.waiting_for_operation() { self.shutdown(); }
+            return EventProcessStatus::Ignored;
+        }
         let mut changed = self.poll_request();
         if let Some(result) = self.state_worker.as_mut().and_then(|worker| worker.poll()) {
             match result {
@@ -978,7 +1004,7 @@ impl TimerEvents for BrowserWindow {
                 let handle = self.listing;
                 if let Some(list) = self.control_mut(handle) { list.loading = false; }
                 self.set_status(&error);
-                dialogs::error(title,&format!("{error}\nUse the path field, Up, or Refresh to try again."));
+                if self.can_present() { dialogs::error(title,&format!("{error}\nUse the path field, Up, or Refresh to try again.")); }
                 changed = true;
             }
             None => {}
@@ -996,7 +1022,17 @@ impl TimerEvents for BrowserWindow {
     }
 }
 impl WindowEvents for BrowserWindow {
-    fn on_cancel(&mut self) -> ActionRequest { self.cleanup(); ActionRequest::Allow }
+    fn on_cancel(&mut self) -> ActionRequest {
+        if self.closing { return ActionRequest::Allow; }
+        if self.waiting_for_operation() {
+            self.close_pending = true;
+            self.set_visible(false);
+            self.operation.cancel();
+            return ActionRequest::Deny;
+        }
+        self.cleanup();
+        ActionRequest::Allow
+    }
 }
 
 #[cfg(test)]
@@ -1010,6 +1046,87 @@ mod tests {
             assert!(std::time::Instant::now() < deadline, "directory result did not arrive");
             std::thread::sleep(Duration::from_millis(2));
         }
+    }
+    #[test]
+    fn hidden_browser_observes_single_transfer_completion() {
+        let _lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let app = App::debug(80,24,"Paint.Enable(false)\nKey.Pressed(Enter)").build().unwrap();
+        let source = dir.path().join("source");
+        let destination = dir.path().join("copy");
+        std::fs::write(&source,b"copy me").unwrap();
+        let mut window = BrowserWindow::at(dir.path().to_owned()).unwrap();
+        window.set_visible(false);
+        window.start_operation(files::Operation::Transfer {
+            source,destination: destination.clone(),moving: false,approval: None,expected_source: None,
+        });
+        pump_until(&mut window,|w| w.activity.unread() == 1);
+        assert!(window.notice.is_some());
+        assert_eq!(std::fs::read(destination).unwrap(),b"copy me");
+        let (revision,entries) = window.activity.read_since(None).unwrap();
+        assert_eq!(entries[0].status,ActivityStatus::Completed);
+        window.set_visible(true);
+        window.poll_operation();
+        assert!(window.activity.read_since(Some(revision)).is_none(),"revealing an outcome must not record it twice");
+
+        window.set_visible(false);
+        window.start_operation(files::Operation::Transfer {
+            source: dir.path().join("missing"),destination: dir.path().join("target"),moving: false,approval: None,expected_source: None,
+        });
+        pump_until(&mut window,|w| w.activity.unread() == 1);
+        let entries = window.activity.read_since(None).unwrap().1;
+        assert_eq!(entries.len(),2);
+        assert_eq!(entries[0].status,ActivityStatus::Failed);
+        assert!(window.notice.as_ref().unwrap().dialog.is_some());
+        window.shutdown(); app.run();
+    }
+    #[test]
+    fn closing_browser_records_a_published_transfer_and_preserves_the_copy() {
+        let _lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let app = App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let source = dir.path().join("source");
+        let destination = dir.path().join("copy");
+        std::fs::write(&source,b"keep").unwrap();
+        let mut window = BrowserWindow::at(dir.path().to_owned()).unwrap();
+        window.start_operation(files::Operation::Transfer {
+            source,destination: destination.clone(),moving: false,approval: None,expected_source: None,
+        });
+        let deadline = std::time::Instant::now()+Duration::from_secs(3);
+        while !destination.exists() {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        assert!(WindowEvents::on_cancel(&mut window) == ActionRequest::Deny);
+        assert!(window.is_closing() && !window.is_visible());
+        pump_until(&mut window,|w| w.closing);
+        let entries = window.activity.read_since(None).unwrap().1;
+        assert_eq!(entries.len(),1);
+        assert_eq!(entries[0].status,ActivityStatus::Completed);
+        assert_eq!(std::fs::read(destination).unwrap(),b"keep");
+        app.run();
+    }
+    #[test]
+    fn canceled_replacement_is_recorded_without_refocusing_the_browser() {
+        let _lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let app = App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let source = dir.path().join("source");
+        let destination = dir.path().join("copy");
+        std::fs::write(&source,b"new").unwrap();
+        std::fs::write(&destination,b"keep").unwrap();
+        let mut window = BrowserWindow::at(dir.path().to_owned()).unwrap();
+        window.set_visible(false);
+        window.start_operation(files::Operation::Transfer {
+            source,destination: destination.clone(),moving: true,approval: None,expected_source: None,
+        });
+        pump_until(&mut window,|w| w.deferred_outcome.is_some());
+        assert_eq!(window.activity.unread(),0);
+        window.operation.cancel();
+        pump_until(&mut window,|w| w.activity.unread() == 1);
+        assert_eq!(window.activity.read_since(None).unwrap().1[0].status,ActivityStatus::Canceled);
+        assert_eq!(std::fs::read(destination).unwrap(),b"keep");
+        window.shutdown(); app.run();
     }
     #[test]
     fn stale_favorite_can_be_removed_without_navigation_and_releases_a_full_favorite_list() {
@@ -1201,7 +1318,10 @@ mod tests {
         window.poll_request();
         assert!(window.operation.busy(),"batch trash was not accepted");
         window.set_visible(false);
-        pump_until(&mut window,|w| w.deferred_outcome.is_some() && !a.exists() && !b.exists());
+        pump_until(&mut window,|w| w.notice.is_some() && !a.exists() && !b.exists());
+        let entries = window.activity.read_since(None).unwrap().1;
+        assert_eq!(entries.len(),1,"a batch should publish one result");
+        assert_eq!(entries[0].detail,"2 of 2 items completed");
         window.set_visible(true);
         pump_until(&mut window,|w| w.batch.is_none() && w.pending_listing.is_none() && w.control(listing).unwrap().entries.is_empty());
         assert!(!a.exists() && !b.exists());

@@ -240,7 +240,8 @@ impl MyDesktop {
             }
             SavedLaunch::Native { app,.. } => match app.as_str() {
                 "files" => {
-                    let window = if let Some(path) = path { BrowserWindow::new_at(path)? } else { BrowserWindow::new()? };
+                    let activity = self.activity.clone();
+                    let window = if let Some(path) = path { BrowserWindow::new_at(path,activity)? } else { BrowserWindow::new(activity)? };
                     if self.windowt(self.browser_window).is_some() { return Err(anyhow::anyhow!("File Browser is already open")); }
                     self.browser_window = self.add_window(window); let target = WindowTarget::Browser(self.browser_window); self.track_window(target); target
                 }

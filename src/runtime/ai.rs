@@ -4,6 +4,7 @@ mod sse;
 mod store;
 
 use crate::config::ai::{AiPreferences, AiProvider};
+use super::activity::{ActivityLog, Source as ActivitySource, Status as ActivityStatus};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicBool, AtomicU64, Ordering}};
@@ -50,14 +51,14 @@ struct Shared { configuration: Mutex<Option<AiPreferences>>, snapshot: Mutex<Cha
 pub struct ChatService { tx: mpsc::Sender<ChatCommand>, shared: Arc<Shared>, polled: AtomicU64 }
 static WORKERS: OnceLock<Mutex<Vec<std::thread::JoinHandle<()>>>> = OnceLock::new();
 impl ChatService {
-    pub fn open() -> anyhow::Result<Self> {
+    pub fn open(activity: ActivityLog) -> anyhow::Result<Self> {
         let dirs = directories::ProjectDirs::from("com", "Julien-cpsn", "desktop-tui").ok_or_else(|| anyhow::anyhow!("Cannot locate AI state directory"))?;
-        Self::start(dirs.state_dir().unwrap_or(dirs.data_local_dir()).join("ai"),AiPreferences::default(),Some(crate::config::ai::AiSettingsStore::new()?))
+        Self::start(dirs.state_dir().unwrap_or(dirs.data_local_dir()).join("ai"),AiPreferences::default(),Some(crate::config::ai::AiSettingsStore::new()?),activity)
     }
     /// `directory` is the AI state root; transcripts live in its `chats` child.
     #[cfg(test)]
-    pub fn new_at(directory: PathBuf, preferences: AiPreferences) -> anyhow::Result<Self> { Self::start(directory,preferences,None) }
-    fn start(directory: PathBuf, preferences: AiPreferences, settings: Option<crate::config::ai::AiSettingsStore>) -> anyhow::Result<Self> {
+    pub fn new_at(directory: PathBuf, preferences: AiPreferences) -> anyhow::Result<Self> { Self::start(directory,preferences,None,ActivityLog::default()) }
+    fn start(directory: PathBuf, preferences: AiPreferences, settings: Option<crate::config::ai::AiSettingsStore>, activity: ActivityLog) -> anyhow::Result<Self> {
         let shared = Arc::new(Shared { configuration: Mutex::new(None), snapshot: Mutex::new(ChatSnapshot { model_defaults: std::array::from_fn(|_| String::new()), navigation_revision: 0, revision: 1, flush_revision: 0, request_revision: 0, chats: Vec::new(), current: None, busy: true, loading: true, error: None, dirty: false, writable: false, status: "Loading chats".into() }), shutdown: AtomicBool::new(false), wake: Notify::new() });
         let (tx, rx) = mpsc::channel(64);
         let worker_shared = Arc::clone(&shared);
@@ -67,7 +68,7 @@ impl ChatService {
                 Ok(runtime) => {
                     let (preferences,error) = match settings { Some(store) => match store.load() { Ok(ai) => (ai,None),Err(error) => (preferences,Some(format!("AI Chat settings unavailable: {error:#}"))) },None => (preferences,None) };
                     if let Some(error) = error && let Ok(mut snapshot) = worker_shared.snapshot.lock() { snapshot.error = Some(error); }
-                    runtime.block_on(Actor::run(directory, preferences, worker_shared, rx));
+                    runtime.block_on(Actor::run(directory, preferences, worker_shared, rx, activity));
                 },
                 Err(_) => if let Ok(mut snapshot) = worker_shared.snapshot.lock() { snapshot.loading = false; snapshot.busy = false; snapshot.error = Some("Cannot start AI worker".into()); snapshot.revision += 1; },
             }
@@ -116,11 +117,12 @@ struct Actor {
     store: Option<store::Store>, preferences: AiPreferences, snapshot: ChatSnapshot,
     loaded: std::collections::BTreeMap<String, Conversation>, unsaved: std::collections::BTreeSet<String>,
     active: Option<Active>, generation: u64, last_save: Instant, discarded: bool, io_busy: bool,
+    activity: ActivityLog,
 }
 impl Actor {
-    async fn run(directory: PathBuf, preferences: AiPreferences, shared: Arc<Shared>, mut commands: mpsc::Receiver<ChatCommand>) {
+    async fn run(directory: PathBuf, preferences: AiPreferences, shared: Arc<Shared>, mut commands: mpsc::Receiver<ChatCommand>, activity: ActivityLog) {
         let initial = shared.snapshot.lock().map(|snapshot| snapshot.clone()).unwrap_or(ChatSnapshot { model_defaults: std::array::from_fn(|_| String::new()), navigation_revision: 0, revision: 1, flush_revision: 0, request_revision: 0, chats: Vec::new(), current: None, busy: true, loading: true, error: None, dirty: false, writable: false, status: "Loading chats".into() });
-        let mut actor = Self { store: None, preferences, snapshot: initial, loaded: Default::default(), unsaved: Default::default(), active: None, generation: 0, last_save: Instant::now(), discarded: false, io_busy: false };
+        let mut actor = Self { store: None, preferences, snapshot: initial, loaded: Default::default(), unsaved: Default::default(), active: None, generation: 0, last_save: Instant::now(), discarded: false, io_busy: false, activity };
         match store::Store::open(directory) {
             Ok(store) => {
                 actor.snapshot.writable = store.writable;
@@ -296,6 +298,13 @@ impl Actor {
         }
     }
     fn send(&mut self, id: &str, retry: bool, events: &mpsc::Sender<NetworkEvent>) {
+        let before = self.generation;
+        self.start_request(id,retry,events);
+        if self.generation == before && self.snapshot.error.is_some() {
+            self.activity.record(ActivitySource::AiChat,ActivityStatus::Failed,"Could not start the request. See AI Chat for details.");
+        }
+    }
+    fn start_request(&mut self, id: &str, retry: bool, events: &mpsc::Sender<NetworkEvent>) {
         if self.active.is_some() { self.snapshot.error = Some("Only one AI request can run at a time".into()); return; }
         // All outstanding edits must reach disk before constructing another user turn.
         self.snapshot.error = None; self.persist();
@@ -337,28 +346,46 @@ impl Actor {
         self.active = Some(Active { chat: id.into(), generation, task });
     }
     fn stop(&mut self) {
+        self.stop_request(ActivityStatus::Canceled,"Response stopped.");
+    }
+    fn stop_request(&mut self, status: ActivityStatus, detail: &str) {
         let Some(active) = self.active.take() else { return; };
         active.task.abort();
         if let Some(message) = self.loaded.get_mut(&active.chat).and_then(|chat| chat.messages.last_mut()) && message.status == MessageStatus::Streaming { message.status = MessageStatus::Stopped; }
         self.changed(&active.chat);
+        self.activity.record(ActivitySource::AiChat,status,detail);
     }
     fn network(&mut self, event: NetworkEvent) {
         if !self.active.as_ref().is_some_and(|active| active.chat == event.chat && active.generation == event.generation) { return; }
         let Some(message) = self.loaded.get_mut(&event.chat).and_then(|chat| chat.messages.last_mut()) else { return; };
-        let terminal = !matches!(event.event, provider::Update::Text(_));
-        match event.event {
+        let outcome = match event.event {
             provider::Update::Text(text) => {
-                if message.text.len().saturating_add(text.len()) > MAX_RESPONSE { message.status = MessageStatus::Interrupted; self.snapshot.error = Some("AI response exceeds 1 MiB".into()); if let Some(active) = self.active.take() { active.task.abort(); } }
-                else { message.text.push_str(&text); }
+                if message.text.len().saturating_add(text.len()) > MAX_RESPONSE {
+                    message.status = MessageStatus::Interrupted;
+                    self.snapshot.error = Some("AI response exceeds 1 MiB".into());
+                    if let Some(active) = self.active.take() { active.task.abort(); }
+                    Some(ActivityStatus::Failed)
+                } else { message.text.push_str(&text); None }
             }
-            provider::Update::Complete => message.status = MessageStatus::Complete,
-            provider::Update::Failed(error) => { message.status = MessageStatus::Failed; self.snapshot.error = Some(error); }
-            provider::Update::Interrupted(error) => { message.status = MessageStatus::Interrupted; self.snapshot.error = Some(error); }
-        }
+            provider::Update::Complete => { message.status = MessageStatus::Complete; Some(ActivityStatus::Completed) }
+            provider::Update::Failed(error) => { message.status = MessageStatus::Failed; self.snapshot.error = Some(error); Some(ActivityStatus::Failed) }
+            provider::Update::Interrupted(error) => { message.status = MessageStatus::Interrupted; self.snapshot.error = Some(error); Some(ActivityStatus::Failed) }
+        };
         self.changed(&event.chat);
-        if terminal { self.active = None; self.persist(); }
+        if let Some(status) = outcome {
+            self.active = None;
+            self.persist();
+            let (status,detail) = match status {
+                ActivityStatus::Completed if self.unsaved.contains(&event.chat) => (ActivityStatus::Attention,"Response completed. Saving it needs attention in AI Chat."),
+                ActivityStatus::Completed => (status,"Response completed."),
+                _ => (status,"Response failed or was interrupted. See AI Chat for details."),
+            };
+            self.activity.record(ActivitySource::AiChat,status,detail);
+        }
         else if self.last_save.elapsed() >= Duration::from_secs(1) { self.persist(); }
-        if !self.unsaved.is_empty() && self.snapshot.error.as_ref().is_some_and(|error| error.starts_with("Cannot save AI chat")) { self.stop(); }
+        if !self.unsaved.is_empty() && self.snapshot.error.as_ref().is_some_and(|error| error.starts_with("Cannot save AI chat")) {
+            self.stop_request(ActivityStatus::Failed,"Response stopped because it could not be saved. See AI Chat for details.");
+        }
     }
 }
 
@@ -366,7 +393,7 @@ impl Actor {
 mod tests {
     use super::*;
     fn actor(directory: PathBuf) -> Actor {
-        Actor { store: Some(store::Store::open(directory).unwrap()), preferences: AiPreferences::default(), snapshot: ChatSnapshot { model_defaults: std::array::from_fn(|_| String::new()), navigation_revision: 0, revision: 1, flush_revision: 0, request_revision: 0, chats: Vec::new(), current: None, busy: false, loading: false, error: None, dirty: false, writable: true, status: String::new() }, loaded: Default::default(), unsaved: Default::default(), active: None, generation: 0, last_save: Instant::now(), discarded: false, io_busy: false }
+        Actor { store: Some(store::Store::open(directory).unwrap()), preferences: AiPreferences::default(), snapshot: ChatSnapshot { model_defaults: std::array::from_fn(|_| String::new()), navigation_revision: 0, revision: 1, flush_revision: 0, request_revision: 0, chats: Vec::new(), current: None, busy: false, loading: false, error: None, dirty: false, writable: true, status: String::new() }, loaded: Default::default(), unsaved: Default::default(), active: None, generation: 0, last_save: Instant::now(), discarded: false, io_busy: false, activity: ActivityLog::default() }
     }
     #[test]
     fn bootstrap_uses_ai_configuration_without_reading_system_preferences() {
@@ -374,7 +401,7 @@ mod tests {
         let store = crate::config::ai::AiSettingsStore::at(temp.path().join("ai.toml"),legacy.clone());
         let mut settings = AiPreferences { default_provider: AiProvider::Claude,..AiPreferences::default() };
         settings.claude.model = "separate-model".into(); store.save(&settings,&AiPreferences::default()).unwrap(); std::fs::write(&legacy,"broken system settings").unwrap();
-        let service = ChatService::start(temp.path().join("state"),AiPreferences::default(),Some(store)).unwrap();
+        let service = ChatService::start(temp.path().join("state"),AiPreferences::default(),Some(store),ActivityLog::default()).unwrap();
         let until = Instant::now()+Duration::from_secs(4);
         loop {
             if let Some(snapshot) = service.poll() && !snapshot.loading {
@@ -394,6 +421,7 @@ mod tests {
         let (tx, _) = mpsc::channel(8);
         actor.send(&id, false, &tx);
         assert!(actor.snapshot.error.as_ref().unwrap().contains("API key"));
+        assert_eq!(actor.activity.read_since(None).unwrap().1[0].status,ActivityStatus::Failed);
         assert_eq!(actor.loaded[&id].draft, "hello"); assert!(actor.loaded[&id].messages.is_empty());
         actor.preferences.openai.api_key = crate::config::ai::ApiKey::new("offline-fake").unwrap();
         actor.loaded.get_mut(&id).unwrap().model = "manual-model".into();
@@ -419,6 +447,28 @@ mod tests {
         assert!(actor.snapshot.error.as_ref().unwrap().contains("changed"));
         actor.command(ChatCommand::Scoped { chat: new.clone(), command: Box::new(ChatCommand::Draft("correct editor".into())) }, &tx);
         assert_eq!(actor.loaded[&new].draft, "correct editor");
+    }
+    #[tokio::test(flavor = "current_thread")]
+    async fn background_request_records_terminal_outcomes_once_without_private_text() {
+        let temp = crate::test_support::TestDir::new();
+        let mut actor = actor(temp.path().join("ai")); actor.new_chat(); actor.persist();
+        let original = actor.current_id().unwrap();
+        actor.loaded.get_mut(&original).unwrap().messages.push(ChatMessage {
+            role: Role::Assistant,text: "private transcript".into(),provider: AiProvider::OpenAi,model: "manual".into(),status: MessageStatus::Streaming,
+        });
+        actor.new_chat();
+        actor.active = Some(Active { chat: original.clone(),generation: 5,task: tokio::spawn(std::future::pending()) });
+        actor.network(NetworkEvent { chat: original.clone(),generation: 4,event: provider::Update::Complete });
+        actor.network(NetworkEvent { chat: original.clone(),generation: 5,event: provider::Update::Text(" extra private text".into()) });
+        assert_eq!(actor.activity.unread(),0);
+        actor.network(NetworkEvent { chat: original.clone(),generation: 5,event: provider::Update::Complete });
+        actor.network(NetworkEvent { chat: original.clone(),generation: 5,event: provider::Update::Complete });
+        assert_eq!(actor.activity.unread(),1);
+        actor.active = Some(Active { chat: original.clone(),generation: 6,task: tokio::spawn(std::future::pending()) });
+        actor.network(NetworkEvent { chat: original,generation: 6,event: provider::Update::Interrupted("private provider body".into()) });
+        let entries = actor.activity.read_since(None).unwrap().1;
+        assert_eq!(entries.iter().map(|entry| entry.status).collect::<Vec<_>>(),[ActivityStatus::Failed,ActivityStatus::Completed]);
+        assert!(entries.iter().all(|entry| entry.source == ActivitySource::AiChat && !entry.detail.contains("private")));
     }
     #[tokio::test(flavor = "current_thread")]
     async fn switching_selection_keeps_origin_and_stop_ignores_late_events() {

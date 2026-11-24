@@ -95,7 +95,9 @@ pub(crate) struct AiChatWindow {
     closing: bool, updating: bool, held: bool, route_edited: bool, pending: Option<Pending>, guard_result: Option<bool>, flush_wait: bool, flush_after: u64,
 }
 impl AiChatWindow {
-    pub fn new() -> anyhow::Result<Self> { Self::with_service(ChatService::open()?,AiPreferences::default()) }
+    pub fn new(activity: crate::runtime::activity::ActivityLog) -> anyhow::Result<Self> {
+        Self::with_service(ChatService::open(activity)?,AiPreferences::default())
+    }
     pub(crate) fn with_service(service: ChatService,preferences: AiPreferences) -> anyhow::Result<Self> {
         let mut window = Self { base: Window::new("AI Chat",layout!("a:c,w:92%,h:90%"),window::Flags::Sizeable),service,snapshot: None,preferences,local_configuration: false,
             transcript: Handle::None,composer: Handle::None,provider: Handle::None,model: Handle::None,sidebar: Handle::None,status: Handle::None,small: Handle::None,

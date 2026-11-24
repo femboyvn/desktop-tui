@@ -4,7 +4,7 @@ use crate::ui::desktop::launchers::{LauncherManager, DiagnosticsDialog};
 
 enum PaletteAction {
     Launch(AppId), Focus(WindowTarget), Hide(WindowTarget), Close(WindowTarget),
-    NewTerminal, Preference, Help, Shortcut, Launchers, Diagnostics, Terminal(TerminalAction),
+    NewTerminal, Preference, Help, Shortcut, Launchers, Diagnostics, Activity, Terminal(TerminalAction),
     Workspace(u8), Move(WindowTarget,u8), Restore,
 }
 
@@ -96,6 +96,9 @@ impl MyDesktop {
         push("Preferences".into(),PaletteAction::Preference); push("Help".into(),PaletteAction::Help);
         push(format!("Configure desktop shortcut ({})",self.preferences.workflow.palette_shortcut.label()),PaletteAction::Shortcut); push("Manage launchers".into(),PaletteAction::Launchers);
         push("Diagnostics".into(),PaletteAction::Diagnostics);
+        let unread = self.activity.unread();
+        let activity = if unread > 0 { format!("Activity ({unread} unread)") } else { "Activity".into() };
+        push(activity,PaletteAction::Activity);
         match CommandPalette::new(labels,self.preferences.workflow.palette_shortcut.key()).show() {
             Some(PaletteResult::ForwardPrefix) => if let Some(WindowTarget::Terminal(handle)) = origin {
                 let key = self.preferences.workflow.palette_shortcut.key();
@@ -115,6 +118,7 @@ impl MyDesktop {
                     PaletteAction::Shortcut => self.configure_shortcut(),
                     PaletteAction::Launchers => self.manage_launchers(),
                     PaletteAction::Diagnostics => self.show_diagnostics(),
+                    PaletteAction::Activity => self.show_activity(),
                     PaletteAction::Preference => MenuEvents::on_command(self,Handle::None,Handle::None,Commands::Preference),
                     PaletteAction::Help => MenuEvents::on_command(self,Handle::None,Handle::None,Commands::Help),
                     PaletteAction::Terminal(action) => if let Some(WindowTarget::Terminal(handle)) = origin && let Some(window) = self.window_mut(handle) { window.terminal_action(action); },
@@ -145,6 +149,11 @@ impl MyDesktop {
     pub(super) fn show_diagnostics(&self) {
         let path = self.shortcut_dir.clone().unwrap_or_else(|| self.settings_path.parent().unwrap_or(std::path::Path::new(".")).to_owned());
         DiagnosticsDialog::new(path,self.settings_path.clone()).show();
+    }
+    pub(super) fn show_activity(&mut self) {
+        if self.terminal_locked || self.pending_desktop.is_some() { return; }
+        ActivityDialog::new(self.activity.clone()).show();
+        self.refresh_panel();
     }
     pub(super) fn reload_launchers(&mut self, shortcuts: Vec<Shortcut>) {
         let incoming = catalog::with_starters(shortcuts);

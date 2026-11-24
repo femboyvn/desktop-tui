@@ -144,6 +144,12 @@ Back and check that the saved filter applies. With a temporary
 `XDG_DATA_HOME`, trash a batch of fixtures and restore it in the Trash view.
 Check the original paths, a conflicting destination, and a missing parent.
 
+For Activity, start a transfer and switch workspaces or hide the File Browser.
+Check the unread indicator and one final entry for the whole batch. Check a
+failed transfer and an AI request result, then open Activity from both the menu
+and palette. Check that opening it acknowledges the count, Clear empties the
+history, and Terminal Lock conceals the indicator while work continues.
+
 Ctrl+C with the child control focused sends byte 0x03 as a normal interrupt.
 A shell may interrupt its foreground job and remain open; a child that exits
 closes its window. Test explicit Close separately for managed process cleanup.

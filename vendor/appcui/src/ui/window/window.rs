@@ -939,6 +939,11 @@ impl Window {
         self.handle.cast()
     }
 
+    /// Returns whether this focused window currently owns input, accounting for menus and modal windows.
+    pub fn has_input_focus(&self) -> bool {
+        self.has_focus() && RuntimeManager::get().window_can_receive_input(self.handle.cast())
+    }
+
     /// Returns the background task associated with a specific handle.
     ///
     /// # Parameters

@@ -1,4 +1,5 @@
 use self::mydesktop::Commands;
+use super::activity::ActivityDialog;
 use super::confirm_system_action::ConfirmSystemAction;
 use super::help::{help_window, HelpWindow};
 use super::panel::{self, BarLayout};
@@ -28,11 +29,12 @@ mod workspaces;
 use workspaces::{WorkspaceMember, SessionJob, SessionResult};
 use crate::config::session::{self, Session, SavedLaunch};
 use crate::runtime::latest::LatestWorker;
+use crate::runtime::activity::ActivityLog;
 
 #[Desktop(
     events = [AppBarEvents, MenuEvents, DesktopEvents, TimerEvents],
     overwrite = OnPaint+OnResize,
-    commands = [Help, Preference, Palette, NewTerminal, ConfigureShortcut, LauncherManager, Diagnostics, Workspace1, Workspace2, Workspace3, Workspace4, RestoreSession, TerminalLock, ScreenLock, Shutdown, Restart, Exit, NoArrange, Cascade, Vertical, Horizontal, Grid, AppVisibilityToggle, OpenApp, CloseApp, AppCommand, SelectWindow, LaunchApplication, FocusWindow, HideWindow, CloseWindow, WindowCommands, BackgroundWindows, None]
+    commands = [Help, Preference, Palette, NewTerminal, ConfigureShortcut, LauncherManager, Diagnostics, Activity, Workspace1, Workspace2, Workspace3, Workspace4, RestoreSession, TerminalLock, ScreenLock, Shutdown, Restart, Exit, NoArrange, Cascade, Vertical, Horizontal, Grid, AppVisibilityToggle, OpenApp, CloseApp, AppCommand, SelectWindow, LaunchApplication, FocusWindow, HideWindow, CloseWindow, WindowCommands, BackgroundWindows, None]
 )]
 pub struct MyDesktop {
     pub preferences: Preferences,
@@ -57,6 +59,7 @@ pub struct MyDesktop {
     startup_warning: Option<String>,
     system_actions: SystemActions,
     terminal_locked: bool,
+    activity: ActivityLog,
     pub arrange_method: Option<desktop::ArrangeWindowsMethod>,
     pub desktop_menu: Handle<MenuButton>,
     application_menu: Handle<MenuButton>,
@@ -151,6 +154,7 @@ impl MyDesktop {
             startup_warning,
             system_actions: SystemActions::new(runner),
             terminal_locked: false,
+            activity: ActivityLog::default(),
             arrange_method: None,
             desktop_menu: Handle::None,
             separator: Handle::None,
@@ -298,7 +302,7 @@ impl MyDesktop {
         }
         match target {
             WindowTarget::Terminal(handle) => if let Some(window) = self.window_mut(handle) { window.close_command(); },
-            WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
+            WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.close(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::AiChat(handle) => if let Some(window) = self.window_mut(handle) { window.request_close(); },
@@ -379,24 +383,31 @@ impl MyDesktop {
     fn panel_caption(&self) -> (String, String, BarLayout) {
         let now = chrono::Local::now().naive_local();
         let pending = self.system_actions.is_pending();
-        let full = panel::render(
+        let status = panel::render(
             &self.preferences.panel,
             &self.status.snapshot,
             now,
             usize::MAX,
             pending,
         );
+        let unread = self.activity.unread();
+        let activity = if unread > 0 { format!("Activity {unread} ") } else { String::new() };
+        let full = if activity.is_empty() || status.is_empty() { format!("{activity}{status}") }
+            else { format!("{} | {status}",activity.trim_end()) };
         let widths = self.window_tasks.iter().filter(|task| task.info.visible)
             .map(|task| taskbar_caption(&task.info.caption).chars().count() + 2).collect::<Vec<_>>();
         let layout = panel::bar_layout(self.terminal_size().width as usize, full.len(), &widths);
-        let caption = panel::render(
+        let compact = if unread > 0 { format!("A{unread} ") } else { String::new() };
+        let indicator = if activity.len() <= layout.status_width { activity }
+            else if compact.len() <= layout.status_width { compact } else { String::new() };
+        let status = panel::render(
             &self.preferences.panel,
             &self.status.snapshot,
             now,
-            layout.status_width,
+            layout.status_width.saturating_sub(indicator.len()),
             pending,
         );
-        (caption, full, layout)
+        (format!("{indicator}{status}"), full, layout)
     }
     fn refresh_panel(&mut self) -> bool {
         if self.status_label.is_none() || self.terminal_locked {
@@ -610,7 +621,7 @@ impl MyDesktop {
         if self.pending_desktop.is_some() { return; }
         let handle = self.ai_window;
         if self.windowt(handle).is_some_and(|window| !window.is_closing()) { self.focus_window(WindowTarget::AiChat(handle)); return; }
-        match AiChatWindow::new() {
+        match AiChatWindow::new(self.activity.clone()) {
             Ok(mut window) => { window.constrain_to(self.desktop_rect().size()); let handle = self.add_window(window); self.ai_window = handle; self.track_window(WindowTarget::AiChat(handle)); },
             Err(error) => dialogs::error("Cannot open AI Chat",&format!("{error:#}")),
         }
@@ -700,7 +711,7 @@ impl MyDesktop {
             window.request_focus();
             return;
         }
-        match BrowserWindow::new() {
+        match BrowserWindow::new(self.activity.clone()) {
             Ok(window) => { self.browser_window = self.add_window(window); self.track_window(WindowTarget::Browser(self.browser_window)); }
             Err(error) => dialogs::error("Cannot open File Browser", &format!("{error:#}")),
         }
@@ -951,6 +962,7 @@ impl DesktopEvents for MyDesktop {
         desktop_menu.add(Command::new("Desktop shortcut...", Key::None, Commands::ConfigureShortcut));
         desktop_menu.add(Command::new("Launchers...", Key::None, Commands::LauncherManager));
         desktop_menu.add(Command::new("Diagnostics...", Key::None, Commands::Diagnostics));
+        desktop_menu.add(Command::new("Activity...", Key::None, Commands::Activity));
         desktop_menu.add(Command::new("Restore saved workspace...", Key::None, Commands::RestoreSession));
         let mut workspaces = Menu::new();
         for (label,command) in [("Workspace 1",Commands::Workspace1),("Workspace 2",Commands::Workspace2),("Workspace 3",Commands::Workspace3),("Workspace 4",Commands::Workspace4)] {
@@ -1150,6 +1162,7 @@ impl MenuEvents for MyDesktop {
             Commands::ConfigureShortcut => self.configure_shortcut(),
             Commands::LauncherManager => self.manage_launchers(),
             Commands::Diagnostics => self.show_diagnostics(),
+            Commands::Activity => self.show_activity(),
             Commands::RestoreSession => self.offer_restore(),
             Commands::Workspace1 => self.switch_workspace(0),
             Commands::Workspace2 => self.switch_workspace(1),

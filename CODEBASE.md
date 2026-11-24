@@ -99,6 +99,7 @@ configuration/tool availability with a meaningful exit status.
 | [src/ui/desktop/view.rs](src/ui/desktop/view.rs) | `MyDesktop`, app-bar menus, shortcut-to-window handles, launch/show/hide/close commands, arrangement, preferences/locking integration, and panel updates. |
 | [src/ui/desktop/palette.rs](src/ui/desktop/palette.rs), [src/ui/desktop/workflow.rs](src/ui/desktop/workflow.rs) | Searchable command palette, shortcut rebinding, file associations, live catalog reload and desktop actions. |
 | [src/ui/desktop/launchers.rs](src/ui/desktop/launchers.rs) | Worker-backed TOML launcher manager and read-only diagnostics modal. |
+| [src/runtime/activity.rs](src/runtime/activity.rs), [src/ui/desktop/activity.rs](src/ui/desktop/activity.rs) | Bounded session activity, unread indicator, and live Activity dialog. |
 | [src/ui/desktop/workspaces.rs](src/ui/desktop/workspaces.rs), [src/config/session.rs](src/config/session.rs) | Four-workspace membership/visibility, bounded session storage, opt-in restoration and exit snapshots. |
 | [src/config/workflow.rs](src/config/workflow.rs) | Defaulted palette binding and extension-to-stable-application associations stored with preferences. |
 | [src/runtime/clipboard.rs](src/runtime/clipboard.rs) | Bounded asynchronous system/internal clipboard service, helper ownership, cancellation and shutdown. |
@@ -504,6 +505,14 @@ arrangement, palette updates, Terminal Lock visibility snapshots, and desktop sh
 
 Native app dialogs and terminal launch errors wait until the window is visible,
 including after Terminal Lock.
+
+The desktop owns a shared in-memory activity log. File Browser polls mutation
+outcomes while hidden and records one result per operation or batch. Prompts
+and file-list refreshes wait until the browser has focus. The AI actor publishes
+brief outcomes when a request starts unsuccessfully or reaches a terminal state,
+independent of transcript polling and current chat selection. The activity log
+retains the newest 64 entries and the dialog acknowledges the entries it reads.
+Terminal Lock hides the desktop indicator and prevents opening the view.
 
 PDF Reader uses `PdfWorker` around the latest-request queue, retaining a join
 handle for shutdown after AppCUI releases its controls. Poppler's `pdfinfo` and
