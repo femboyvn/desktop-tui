@@ -6,20 +6,24 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}};
 
+mod trash;
+pub(crate) use trash::{TrashItem, list_trash};
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Fingerprint { dev: u64, ino: u64, mode: u32, size: u64, modified: (i64,i64), changed: (i64,i64) }
 impl Fingerprint {
     fn after_rename_matches(&self, other: &Self) -> bool { self.dev == other.dev && self.ino == other.ino && self.mode == other.mode && self.size == other.size && self.modified == other.modified }
-    fn of(metadata: &std::fs::Metadata) -> Self { Self { dev: metadata.dev(), ino: metadata.ino(), mode: metadata.mode(), size: metadata.len(), modified: (metadata.mtime(),metadata.mtime_nsec()), changed: (metadata.ctime(),metadata.ctime_nsec()) } }
+    pub(super) fn of(metadata: &std::fs::Metadata) -> Self { Self { dev: metadata.dev(), ino: metadata.ino(), mode: metadata.mode(), size: metadata.len(), modified: (metadata.mtime(),metadata.mtime_nsec()), changed: (metadata.ctime(),metadata.ctime_nsec()) } }
 }
 #[derive(Clone, Debug)]
 pub(crate) enum Operation {
     Create { path: PathBuf, directory: bool },
-    Transfer { source: PathBuf, destination: PathBuf, moving: bool, approval: Option<(Fingerprint,Fingerprint)> },
-    Trash { source: PathBuf, root: Option<PathBuf> },
+    Transfer { source: PathBuf, destination: PathBuf, moving: bool, approval: Option<Box<(Fingerprint,Fingerprint)>>, expected_source: Option<Fingerprint> },
+    Trash { source: PathBuf, root: Option<PathBuf>, expected_source: Option<Fingerprint> },
+    Restore(TrashItem),
 }
 #[derive(Debug)]
-pub(crate) enum Outcome { Complete(String), Confirm(Operation), Failed(String) }
+pub(crate) enum Outcome { Complete(String), Warning(String), Confirm(Operation), Failed(String) }
 #[derive(Default)]
 struct Control { cancel: AtomicBool, closed: AtomicBool, bytes: AtomicU64, entries: AtomicU64 }
 type Workers = Mutex<Vec<(std::sync::Weak<Control>,std::thread::JoinHandle<()>)>>;
@@ -67,6 +71,7 @@ impl OperationWorker {
     pub fn busy(&self) -> bool { self.busy }
     pub fn progress(&self) -> (u64,u64) { (self.control.entries.load(Ordering::Relaxed),self.control.bytes.load(Ordering::Relaxed)) }
     pub fn cancel(&self) { self.control.cancel.store(true,Ordering::Release); }
+    pub fn is_canceled(&self) -> bool { self.control.cancel.load(Ordering::Acquire) }
 }
 fn close(control: &Control) {
     control.closed.store(true,Ordering::Release); control.cancel.store(true,Ordering::Release);
@@ -148,10 +153,10 @@ fn absolute_entry(path: &Path) -> anyhow::Result<PathBuf> {
     ensure!(name != "." && name != "..","Select a named entry");
     Ok(path.parent().unwrap_or(Path::new(".")).canonicalize()?.join(name))
 }
-fn open_directory(path: &Path) -> anyhow::Result<std::fs::File> {
+pub(super) fn open_directory(path: &Path) -> anyhow::Result<std::fs::File> {
     std::fs::OpenOptions::new().read(true).custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW).open(path).with_context(|| format!("Cannot anchor directory {}",path.display()))
 }
-fn directory_path(file: &std::fs::File) -> PathBuf {
+pub(super) fn directory_path(file: &std::fs::File) -> PathBuf {
     use std::os::fd::AsRawFd;
     PathBuf::from(format!("/proc/self/fd/{}",file.as_raw_fd()))
 }
@@ -250,21 +255,23 @@ fn publish(staged: &Path, destination: &Path, expected: Option<&Fingerprint>, co
     }
     Ok(backup)
 }
-fn transfer(source: PathBuf, destination: PathBuf, moving: bool, approval: Option<(Fingerprint,Fingerprint)>, control: &Control) -> anyhow::Result<Outcome> {
+fn transfer(source: PathBuf, destination: PathBuf, moving: bool, approval: Option<Box<(Fingerprint,Fingerprint)>>, expected_source: Option<Fingerprint>, control: &Control) -> anyhow::Result<Outcome> {
     let source = absolute_entry(&source)?; let destination = absolute_entry(&destination)?;
     ensure!(source != destination && !destination.starts_with(&source),"Destination must be outside the source");
     let original_source = source.clone(); let original_destination = destination.clone();
     let source_pin = PinnedEntry::new(&source)?; let destination_pin = PinnedEntry::new(&destination)?;
     let source = source_pin.path().to_owned(); let destination = destination_pin.path().to_owned();
     let source_identity = fingerprint(&source)?; let destination_identity = maybe_fingerprint(&destination)?;
+    ensure!(expected_source.as_ref().is_none_or(|expected| *expected == source_identity),
+        "Selected source changed: {}. Refresh and select it again",original_source.display());
     if let Some(identity) = &destination_identity {
         ensure!(identity.dev != source_identity.dev || identity.ino != source_identity.ino,"Source and destination refer to the same entry");
         ensure!(identity.mode & libc::S_IFMT != libc::S_IFDIR,"Choose a new destination: existing folders are never merged or replaced");
         if approval.is_none() {
-            return Ok(Outcome::Confirm(Operation::Transfer { source: original_source, destination: original_destination, moving, approval: Some((source_identity,identity.clone())) }));
+            return Ok(Outcome::Confirm(Operation::Transfer { source: original_source, destination: original_destination, moving, approval: Some(Box::new((source_identity,identity.clone()))), expected_source }));
         }
     }
-    if let Some((expected_source,expected_destination)) = &approval {
+    if let Some((expected_source,expected_destination)) = approval.as_deref() {
         ensure!(*expected_source == source_identity && destination_identity.as_ref() == Some(expected_destination),"Source or destination changed after confirmation; transfer stopped");
     }
     source_pin.unchanged()?; destination_pin.unchanged()?;
@@ -277,11 +284,15 @@ fn transfer(source: PathBuf, destination: PathBuf, moving: bool, approval: Optio
             bail!("Source changed before move; source preserved");
         }
         let mut message = format!("Moved to {}",original_destination.display());
-        if let Some(backup) = backup && let Err(error) = std::fs::remove_file(&backup) { message.push_str(&format!(". Previous destination retained at {}: {error}",recovery_path(&backup).display())); }
+        if let Some(backup) = backup && let Err(error) = std::fs::remove_file(&backup) {
+            message.push_str(&format!(". Previous destination retained at {}: {error}",recovery_path(&backup).display()));
+            return Ok(Outcome::Warning(message));
+        }
         control.entries.store(1,Ordering::Relaxed);
         return Ok(Outcome::Complete(message));
     }
     let expected = manifest(&source,control)?;
+    ensure!(expected.get(Path::new("")) == Some(&source_identity),"Source changed before copy; source preserved");
     let stage = Stage::new(destination.parent().context("No destination parent")?)?; let staged = stage.path.join("entry");
     let backup = (|| -> anyhow::Result<Option<PathBuf>> {
         copy_tree(&source,&staged,&expected,control)?;
@@ -289,7 +300,11 @@ fn transfer(source: PathBuf, destination: PathBuf, moving: bool, approval: Optio
         publish(&staged,&destination,destination_identity.as_ref(),control)
     })().map_err(|error| stage.cleanup_error(error))?;
     let mut message = format!("Copied to {}",original_destination.display());
-    if source_identity.mode & libc::S_IFMT == libc::S_IFDIR && let Err(error) = std::fs::set_permissions(&destination,std::fs::Permissions::from_mode(source_identity.mode & 0o777)) { message.push_str(&format!(". Could not restore directory permissions: {error}")); }
+    let mut warning = false;
+    if source_identity.mode & libc::S_IFMT == libc::S_IFDIR && let Err(error) = std::fs::set_permissions(&destination,std::fs::Permissions::from_mode(source_identity.mode & 0o777)) {
+        message.push_str(&format!(". Could not restore directory permissions: {error}"));
+        warning = true;
+    }
     if moving {
         // Rename first. If the tree changed after publication, retain it intact rather than deleting changed content.
         let held = unique(source.parent().context("No source parent")?,"move-source");
@@ -305,41 +320,49 @@ fn transfer(source: PathBuf, destination: PathBuf, moving: bool, approval: Optio
             Ok(())
         }) {
             Ok(()) => message = format!("Moved to {}",original_destination.display()),
-            Err(error) => message = format!("{message}. Move incomplete: {error:#}"),
+            Err(error) => { warning = true; message.push_str(&format!(". Move incomplete: {error:#}")); }
         }
     }
     if let Some(backup) = backup {
         // Retained backups are files/symlinks only, never recursively removed.
-        if let Err(error) = std::fs::remove_file(&backup) { message.push_str(&format!(". Previous destination retained at {}: {error}",recovery_path(&backup).display())); }
+        if let Err(error) = std::fs::remove_file(&backup) { warning = true; message.push_str(&format!(". Previous destination retained at {}: {error}",recovery_path(&backup).display())); }
     }
-    if let Err(error) = stage.cleanup() { message.push_str(&format!(". Staging retained at {}: {error:#}",recovery_path(&stage.path).display())); }
-    Ok(Outcome::Complete(message))
+    if let Err(error) = stage.cleanup() { warning = true; message.push_str(&format!(". Staging retained at {}: {error:#}",recovery_path(&stage.path).display())); }
+    Ok(if warning { Outcome::Warning(message) } else { Outcome::Complete(message) })
 }
-fn trash(source: PathBuf, root: Option<PathBuf>, control: &Control) -> anyhow::Result<Outcome> {
-    use std::os::unix::fs::DirBuilderExt;
+fn trash(source: PathBuf, root: Option<PathBuf>, expected_source: Option<Fingerprint>, control: &Control) -> anyhow::Result<Outcome> {
     let original_source = absolute_entry(&source)?; let source_pin = PinnedEntry::new(&original_source)?;
     let source = source_pin.path().to_owned(); let identity = fingerprint(&source)?;
-    let root = match root { Some(root) => root, None => directories::BaseDirs::new().context("Cannot find user trash directory")?.data_local_dir().join("Trash") };
+    ensure!(expected_source.as_ref().is_none_or(|expected| *expected == identity),
+        "Selected source changed: {}. Refresh and select it again",original_source.display());
+    let root = trash::trash_root(root)?;
     ensure!(!root.starts_with(&original_source),"Cannot trash a folder containing the user trash");
-    for path in [root.clone(),root.join("files"),root.join("info")] {
-        match std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&path) { Ok(()) => {}, Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}, Err(error) => return Err(error).context("User trash is unavailable; source preserved") }
-        let metadata = std::fs::symlink_metadata(&path)?;
-        ensure!(metadata.is_dir() && metadata.uid() == unsafe { libc::geteuid() } && metadata.mode() & 0o077 == 0,"User trash must be a private directory owned by this user");
-    }
-    ensure!(std::fs::metadata(root.join("files"))?.dev() == identity.dev,"Trash is on another filesystem; source preserved. No permanent-delete fallback is used");
+    let directories = trash::TrashDirectories::open(&root,true)?;
+    let canonical_root = root.canonicalize()?;
+    ensure!(!canonical_root.starts_with(&original_source) && !original_source.starts_with(&canonical_root),
+        "Cannot trash an entry inside or containing the user Trash");
+    ensure!(directories.files.metadata()?.dev() == identity.dev,"Trash is on another filesystem; source preserved. No permanent-delete fallback is used");
     let name = format!("desktop-tui-{}-{}",std::process::id(),NEXT.fetch_add(1,Ordering::Relaxed));
-    let files_directory = open_directory(&root.join("files"))?; let info_directory = open_directory(&root.join("info"))?;
-    let info = directory_path(&info_directory).join(format!("{name}.trashinfo")); let destination = directory_path(&files_directory).join(name);
+    let info = directory_path(&directories.info).join(format!("{name}.trashinfo")); let destination = directory_path(&directories.files).join(name);
     let encoded = original_source.as_os_str().as_bytes().iter().map(|b| if b.is_ascii_alphanumeric() || b"/-_.~".contains(b) { (*b as char).to_string() } else { format!("%{b:02X}") }).collect::<String>();
     let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&info)?;
-    let result = (|| -> anyhow::Result<()> {
+    let result = (|| -> anyhow::Result<Option<String>> {
         writeln!(file,"[Trash Info]\nPath={encoded}\nDeletionDate={}",chrono::Local::now().format("%Y-%m-%dT%H:%M:%S"))?; file.sync_all()?; control.check()?;
         source_pin.unchanged()?;
         ensure!(fingerprint(&source)? == identity,"Source changed before trash; source preserved");
-        rename_new(&source,&destination).context("Cannot move to user trash; source preserved")?; Ok(())
+        rename_new(&source,&destination).context("Cannot move to user trash; source preserved")?;
+        if !fingerprint(&destination).is_ok_and(|actual| identity.after_rename_matches(&actual)) {
+            if let Err(error) = rename_new(&destination,&source) {
+                // Keep the metadata if the moved item must be recovered from Trash.
+                return Ok(Some(format!("Source changed during trash. Item retained in Trash: {error}")));
+            }
+            bail!("Source changed before trash; source preserved");
+        }
+        Ok(None)
     })();
     if result.is_err() { let _ = std::fs::remove_file(&info); }
-    result?; Ok(Outcome::Complete(format!("Moved to user trash; restoration metadata: {}",recovery_path(&info).display())))
+    if let Some(warning) = result? { return Ok(Outcome::Warning(warning)); }
+    Ok(Outcome::Complete(format!("Moved to user trash; restoration metadata: {}",recovery_path(&info).display())))
 }
 fn execute(operation: Operation, control: &Control) -> Outcome {
     let result = (|| -> anyhow::Result<Outcome> {
@@ -350,8 +373,9 @@ fn execute(operation: Operation, control: &Control) -> Outcome {
                 else { std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path).with_context(|| format!("Cannot create file {}",path.display()))?; }
                 Ok(Outcome::Complete(format!("Created {}",path.display())))
             }
-            Operation::Transfer { source, destination, moving, approval } => transfer(source,destination,moving,approval,control),
-            Operation::Trash { source, root } => trash(source,root,control),
+            Operation::Transfer { source, destination, moving, approval, expected_source } => transfer(source,destination,moving,approval,expected_source,control),
+            Operation::Trash { source, root, expected_source } => trash(source,root,expected_source,control),
+            Operation::Restore(item) => trash::restore(item,control),
         }
     })();
     result.unwrap_or_else(|error| Outcome::Failed(format!("{error:#}")))
@@ -362,10 +386,32 @@ mod tests {
     use crate::test_support::TestDir;
     use std::os::unix::ffi::OsStringExt;
     fn transfer(source: PathBuf, destination: PathBuf, moving: bool) -> Operation {
-        Operation::Transfer { source, destination, moving, approval: None }
+        Operation::Transfer { source, destination, moving, approval: None, expected_source: None }
     }
     fn run(operation: Operation) -> Outcome { execute(operation, &Control::default()) }
     fn complete(outcome: Outcome) { assert!(matches!(outcome, Outcome::Complete(_)), "{outcome:?}"); }
+    #[test]
+    fn queued_mutations_leave_a_replaced_source_in_place() {
+        let dir = TestDir::new();
+        let source = dir.path().join("selected");
+        let original = dir.path().join("original");
+        let destination = dir.path().join("destination");
+        let root = dir.path().join("Trash");
+        std::fs::write(&source,b"selected").unwrap();
+        let expected_source = Some(fingerprint(&source).unwrap());
+        let transfer = Operation::Transfer {
+            source: source.clone(),destination: destination.clone(),moving: true,approval: None,expected_source: expected_source.clone()
+        };
+        let trash = Operation::Trash { source: source.clone(),root: Some(root.clone()),expected_source };
+        std::fs::rename(&source,&original).unwrap();
+        std::fs::write(&source,b"new contents").unwrap();
+        for operation in [transfer,trash] {
+            assert!(matches!(run(operation),Outcome::Failed(message) if message.contains("Selected source changed")));
+        }
+        assert_eq!(std::fs::read(&source).unwrap(),b"new contents");
+        assert_eq!(std::fs::read(&original).unwrap(),b"selected");
+        assert!(!destination.exists() && !root.exists());
+    }
     #[test]
     fn normal_desktop_exit_waits_for_live_and_dropped_operation_cleanup_and_replacement_preservation() {
         const FIXTURE: &str = "DESKTOP_TUI_OPERATION_SHUTDOWN_FIXTURE";
@@ -473,7 +519,7 @@ mod tests {
         assert!(!source.exists()); assert_eq!(std::fs::read(destination.join("文 file")).unwrap(),b"cross-device content");
         assert_eq!(std::fs::read_link(destination.join("symlink")).unwrap(),PathBuf::from("/unavailable"));
         let trash_source = dir.path().join("keep"); std::fs::write(&trash_source,b"never delete").unwrap();
-        assert!(matches!(run(Operation::Trash { source: trash_source.clone(), root: Some(other.path.join("Trash")) }),Outcome::Failed(_)));
+        assert!(matches!(run(Operation::Trash { source: trash_source.clone(), root: Some(other.path.join("Trash")), expected_source: None }),Outcome::Failed(_)));
         assert_eq!(std::fs::read(trash_source).unwrap(),b"never delete");
     }
     #[test]
@@ -614,7 +660,7 @@ mod tests {
     fn trash_preserves_bytes_and_restoration_metadata() {
         let dir = TestDir::new(); let source = dir.path().join("space 文"); let root = dir.path().join("Trash");
         std::fs::write(&source,b"restore me").unwrap();
-        complete(run(Operation::Trash { source: source.clone(), root: Some(root.clone()) }));
+        complete(run(Operation::Trash { source: source.clone(), root: Some(root.clone()), expected_source: None }));
         assert!(!source.exists());
         let files = std::fs::read_dir(root.join("files")).unwrap().map(|e| e.unwrap().path()).collect::<Vec<_>>();
         assert_eq!(files.len(),1); assert_eq!(std::fs::read(&files[0]).unwrap(),b"restore me");
@@ -625,7 +671,7 @@ mod tests {
     fn unavailable_trash_and_special_file_copy_leave_source_intact() {
         let dir = TestDir::new(); let source = dir.path().join("from"); let root = dir.path().join("not-directory");
         std::fs::write(&source,b"keep").unwrap(); std::fs::write(&root,b"blocked").unwrap();
-        assert!(matches!(run(Operation::Trash { source: source.clone(), root: Some(root) }),Outcome::Failed(_)));
+        assert!(matches!(run(Operation::Trash { source: source.clone(), root: Some(root), expected_source: None }),Outcome::Failed(_)));
         assert_eq!(std::fs::read(source).unwrap(),b"keep");
     }
 }

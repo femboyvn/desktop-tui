@@ -136,6 +136,14 @@ menu item to launch it. Check only the matrix rows relevant to the patch.
 | Mixed window lifecycle | Tile native and terminal/document windows together; change theme and Terminal Lock with some hidden. Restore the original visibility. Close and reopen native windows, close individual documents, then Exit and check for leftover child processes. |
 | Child lifecycle | Exercise normal exit, a missing executable, menu Close, Ctrl+C, and Desktop Exit. Observe errors and responsiveness, and use the host's process tools to check for leftover children. |
 
+For the File Browser, also check keyboard and mouse multi-select in both
+views. Copy or move marked files to another folder, decline a replacement
+mid-batch, and verify the completed count and remaining sources. Use Find
+with nested names, hidden folders, and a directory symlink. Return with
+Back and check that the saved filter applies. With a temporary
+`XDG_DATA_HOME`, trash a batch of fixtures and restore it in the Trash view.
+Check the original paths, a conflicting destination, and a missing parent.
+
 Ctrl+C with the child control focused sends byte 0x03 as a normal interrupt.
 A shell may interrupt its foreground job and remain open; a child that exits
 closes its window. Test explicit Close separately for managed process cleanup.

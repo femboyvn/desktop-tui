@@ -2,27 +2,35 @@ use super::image_viewer::home_directory;
 use crate::runtime::files::{self, Entry, FileKind, Listing};
 use crate::runtime::latest::LatestWorker;
 use appcui::prelude::*;
-use std::path::PathBuf;
-use std::collections::VecDeque;
+use std::path::{Path, PathBuf};
+use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 use std::time::Duration;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum BrowserAction { Open(PathBuf), OpenWith(PathBuf), OpenTerminal(PathBuf) }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ViewMode { Grid, Details }
-enum EntryRequest { Open(Entry), OpenWith(PathBuf), Terminal(Option<Entry>), Information(Entry), Refresh, Hidden, Mutate(Mutation,Option<Entry>), Favorite, Favorites }
+enum EntryRequest {
+    Open(Entry), OpenWith(PathBuf), Terminal(Option<Entry>), Information(Entry),
+    Refresh, Hidden, Mutate(Mutation,Option<Entry>), Batch(Mutation,Vec<Entry>),
+    Favorite, Favorites, Find, TrashView, Restore(Vec<PathBuf>), TrashInfo(Entry), Notice(&'static str),
+}
+const SELECTION_LIMIT: usize = 1_000;
 
 #[CustomControl(events = MenuEvents, overwrite = OnPaint+OnKeyPressed+OnMouseEvent+OnResize,
-    commands = Open+OpenWith+Terminal+Information+Refresh+Hidden+Grid+Details+NewFile+NewFolder+Rename+Copy+Move+Trash+Favorite+Favorites)]
+    commands = Open+OpenWith+Terminal+Information+Refresh+Hidden+Grid+Details+NewFile+NewFolder+Rename+Copy+Move+Trash+Favorite+Favorites+Find+TrashView+Restore)]
 struct BrowserEntries {
     entries: Vec<Entry>, selected: Option<usize>, offset: usize, viewport: Size, mode: ViewMode,
     request: Option<EntryRequest>, menu: Handle<Menu>, menu_target: Option<Option<Entry>>, loading: bool, hidden: bool,
+    marked: BTreeSet<usize>, anchor: Option<usize>, trash: bool, search: bool,
 }
 impl BrowserEntries {
     fn new() -> Self {
         Self { base: ControlBase::new(layout!("l:0,r:0,t:5,b:1"),true), entries: Vec::new(), selected: None,
             offset: 0, viewport: Size::new(0,0), mode: ViewMode::Grid, request: None,
-            menu: Handle::None, menu_target: None, loading: false, hidden: false }
+            menu: Handle::None, menu_target: None, loading: false, hidden: false,
+            marked: BTreeSet::new(), anchor: None, trash: false, search: false }
     }
     fn columns(&self) -> usize { if self.mode == ViewMode::Grid { (self.viewport.width as usize / 16).max(1) } else { 1 } }
     fn row_height(&self) -> usize { if self.mode == ViewMode::Grid { 5 } else { 1 } }
@@ -38,13 +46,43 @@ impl BrowserEntries {
         self.clamp_scroll();
     }
     fn set_mode(&mut self, mode: ViewMode) { self.mode = mode; self.reveal(); }
-    fn clear(&mut self) { self.entries.clear(); self.selected = None; self.offset = 0; self.invalidate(); }
+    fn clear(&mut self) { self.entries.clear(); self.selected = None; self.clear_marks(); self.offset = 0; self.invalidate(); }
     fn add_items(&mut self, entries: Vec<Entry>) {
         self.entries.extend(entries);
         if self.selected.is_none() && !self.entries.is_empty() { self.selected = Some(0); }
         self.clamp_scroll();
     }
     fn selected_entry(&self) -> Option<Entry> { self.selected.and_then(|i| self.entries.get(i)).cloned() }
+    fn clear_marks(&mut self) { self.marked.clear(); self.anchor = None; }
+    fn toggle_mark(&mut self, index: usize) {
+        if !self.marked.remove(&index) {
+            if self.marked.len() == SELECTION_LIMIT { self.selection_limit(); return; }
+            self.marked.insert(index);
+        }
+        self.anchor = Some(index);
+    }
+    fn selection_limit(&mut self) {
+        self.request = Some(EntryRequest::Notice("Select up to 1000 items at a time"));
+    }
+    fn mark_range(&mut self, from: usize, to: usize) {
+        if from.abs_diff(to) >= SELECTION_LIMIT { self.selection_limit(); return; }
+        self.anchor = Some(from);
+        self.marked = (from.min(to)..=from.max(to)).collect();
+    }
+    fn targets(&self, entry: Option<Entry>) -> Vec<PathBuf> {
+        if self.marked.is_empty() { return entry.into_iter().map(|entry| entry.path).collect(); }
+        self.marked.iter().filter_map(|&index| self.entries.get(index)).map(|entry| entry.path.clone()).collect()
+    }
+    fn mutation_request(&self, mutation: Mutation, entry: Option<Entry>) -> EntryRequest {
+        if !matches!(mutation,Mutation::Copy | Mutation::Move | Mutation::Trash) || self.marked.is_empty() {
+            return EntryRequest::Mutate(mutation,entry);
+        }
+        if self.marked.len() == 1 {
+            return EntryRequest::Mutate(mutation,self.marked.first().and_then(|index| self.entries.get(*index)).cloned());
+        }
+        let marked = self.marked.iter().filter_map(|&index| self.entries.get(index)).cloned().collect();
+        EntryRequest::Batch(mutation,marked)
+    }
     fn scroll(&mut self, rows: isize) { self.offset = self.offset.saturating_add_signed(rows); self.clamp_scroll(); }
     fn point(&self, x: i32, y: i32) -> Option<usize> {
         if x < 0 || y < self.header() as i32 || x >= self.viewport.width as i32 || y >= self.viewport.height as i32 { return None; }
@@ -56,6 +94,24 @@ impl BrowserEntries {
     }
     fn input(&mut self, key: Key) -> EventProcessStatus {
         if self.loading { return EventProcessStatus::Ignored; }
+        match key.value() {
+            key!("Space") => {
+                if let Some(index) = self.selected { self.toggle_mark(index); }
+                return EventProcessStatus::Processed;
+            }
+            key!("Ctrl+A") => {
+                if !self.entries.is_empty() { self.mark_range(0,self.entries.len()-1); }
+                return EventProcessStatus::Processed;
+            }
+            key!("Escape") if !self.marked.is_empty() => {
+                self.clear_marks(); return EventProcessStatus::Processed;
+            }
+            key!("Enter") if self.trash => {
+                self.request = Some(EntryRequest::Restore(self.targets(self.selected_entry())));
+                return EventProcessStatus::Processed;
+            }
+            _ => {}
+        }
         if key.value() == key!("Shift+F10") {
             self.reveal();
             let index = self.selected.unwrap_or(0);
@@ -66,7 +122,7 @@ impl BrowserEntries {
         }
         if key.value() == key!("Alt+Enter") {
             self.release_menu();
-            self.request = self.selected_entry().map(EntryRequest::Information);
+            self.request = self.selected_entry().map(if self.trash { EntryRequest::TrashInfo } else { EntryRequest::Information });
             return if self.request.is_some() { EventProcessStatus::Processed } else { EventProcessStatus::Ignored };
         }
         let mutation = if key.value() == key!("Ctrl+N") { Some(Mutation::NewFile) }
@@ -75,8 +131,10 @@ impl BrowserEntries {
             else if key.value() == key!("F5") { Some(Mutation::Copy) }
             else if key.value() == key!("F6") { Some(Mutation::Move) }
             else if key.value() == key!("Delete") { Some(Mutation::Trash) } else { None };
-        if let Some(mutation) = mutation { self.release_menu(); self.request = Some(EntryRequest::Mutate(mutation,self.selected_entry())); return EventProcessStatus::Processed; }
-        if key.modifier != KeyModifier::None { return EventProcessStatus::Ignored; }
+        if let Some(mutation) = mutation && !self.trash {
+            self.release_menu(); self.request = Some(self.mutation_request(mutation,self.selected_entry())); return EventProcessStatus::Processed;
+        }
+        if key.modifier != KeyModifier::None && key.modifier != KeyModifier::Shift { return EventProcessStatus::Ignored; }
         let selected = self.selected.unwrap_or(0);
         let step = self.columns();
         let index = match key.code {
@@ -85,10 +143,15 @@ impl BrowserEntries {
             KeyCode::Home => 0, KeyCode::End => self.entries.len().saturating_sub(1),
             KeyCode::PageUp => selected.saturating_sub(step*self.page_rows()),
             KeyCode::PageDown => selected.saturating_add(step*self.page_rows()),
-            KeyCode::Enter => { self.request = self.selected_entry().map(EntryRequest::Open); return EventProcessStatus::Processed; }
+            KeyCode::Enter if key.modifier == KeyModifier::None => {
+                self.request = self.selected_entry().map(EntryRequest::Open); return EventProcessStatus::Processed;
+            }
             _ => return EventProcessStatus::Ignored,
         };
         self.selected = (!self.entries.is_empty()).then_some(index.min(self.entries.len().saturating_sub(1)));
+        if key.modifier == KeyModifier::Shift && let Some(index) = self.selected {
+            self.mark_range(self.anchor.unwrap_or(selected),index);
+        } else { self.anchor = self.selected; }
         self.reveal(); EventProcessStatus::Processed
     }
     fn release_menu(&mut self) {
@@ -100,7 +163,10 @@ impl BrowserEntries {
     fn context_at(&mut self, x: i32, y: i32) {
         if self.loading { return; }
         let index = self.point(x,y);
-        if let Some(index) = index { self.selected = Some(index); }
+        if let Some(index) = index {
+            if !self.marked.contains(&index) { self.clear_marks(); }
+            self.selected = Some(index);
+        }
         let target = index.and_then(|i| self.entries.get(i)).cloned();
         self.show_context(target,x,y);
     }
@@ -108,22 +174,41 @@ impl BrowserEntries {
         self.release_menu();
         let mut menu = Menu::new();
         use browserentries::Commands;
-        if let Some(entry) = &target {
-            if entry.kind != FileKind::Other { menu.add(menu::Command::new("&Open",Key::None,Commands::Open)); }
-            if entry.kind == FileKind::File { menu.add(menu::Command::new("Open &with…",Key::None,Commands::OpenWith)); }
+        if self.trash {
+            if target.is_some() || !self.marked.is_empty() {
+                let caption = if self.marked.len() > 1 { "Rest&ore marked items…" } else { "Rest&ore to original location…" };
+                menu.add(menu::Command::new(caption,Key::None,Commands::Restore));
+            }
+            if target.is_some() { menu.add(menu::Command::new("Original &location…",key!("Alt+Enter"),Commands::Information)); }
+            menu.add(menu::Command::new("Close &Trash",Key::None,Commands::TrashView));
+        } else {
+            if let Some(entry) = &target {
+                if entry.kind != FileKind::Other { menu.add(menu::Command::new("&Open",Key::None,Commands::Open)); }
+                if entry.kind == FileKind::File { menu.add(menu::Command::new("Open &with…",Key::None,Commands::OpenWith)); }
+            }
+            menu.add(menu::Command::new(if target.is_some() { "Open in &terminal" } else { "Open &terminal here" },Key::None,Commands::Terminal));
+            if target.is_some() {
+                menu.add(menu::Command::new("File &information…",key!("Alt+Enter"),Commands::Information));
+                menu.add(menu::Command::new("&Rename…",Key::None,Commands::Rename));
+            }
+            if target.is_some() || !self.marked.is_empty() {
+                let actions = if self.marked.len() > 1 {
+                    [("&Copy marked items…",Commands::Copy),("&Move marked items…",Commands::Move),("&Trash marked items…",Commands::Trash)]
+                } else { [("&Copy to…",Commands::Copy),("&Move to…",Commands::Move),("Move to &trash…",Commands::Trash)] };
+                for (caption,command) in actions {
+                    menu.add(menu::Command::new(caption,Key::None,command));
+                }
+            }
+            menu.add(menu::Command::new("New &file…",key!("Ctrl+N"),Commands::NewFile));
+            menu.add(menu::Command::new("New f&older…",key!("Ctrl+Shift+N"),Commands::NewFolder));
+            menu.add(menu::Command::new("Add/remove current f&avorite",Key::None,Commands::Favorite));
+            menu.add(menu::Command::new("Fa&vorite folders…",Key::None,Commands::Favorites));
+            menu.add(menu::Command::new("Find in &subfolders…",key!("Ctrl+F"),Commands::Find));
+            menu.add(menu::Command::new("View Tr&ash",Key::None,Commands::TrashView));
         }
-        menu.add(menu::Command::new(if target.is_some() { "Open in &terminal" } else { "Open &terminal here" },Key::None,Commands::Terminal));
-        if target.is_some() { menu.add(menu::Command::new("File &information…",key!("Alt+Enter"),Commands::Information)); }
-        if target.is_some() {
-            for (caption,command) in [("&Rename…",Commands::Rename),("&Copy to…",Commands::Copy),("&Move to…",Commands::Move),("Move to &trash…",Commands::Trash)] { menu.add(menu::Command::new(caption,Key::None,command)); }
-        }
-        menu.add(menu::Command::new("New &file…",key!("Ctrl+N"),Commands::NewFile));
-        menu.add(menu::Command::new("New f&older…",key!("Ctrl+Shift+N"),Commands::NewFolder));
-        menu.add(menu::Command::new("Add/remove current f&avorite",Key::None,Commands::Favorite));
-        menu.add(menu::Command::new("Fa&vorite folders…",Key::None,Commands::Favorites));
         menu.add(menu::Separator::new());
         menu.add(menu::Command::new("&Refresh",Key::None,Commands::Refresh));
-        menu.add(menu::Command::new(if self.hidden { "&Hidden: on" } else { "&Hidden: off" },Key::None,Commands::Hidden));
+        if !self.trash { menu.add(menu::Command::new(if self.hidden { "&Hidden: on" } else { "&Hidden: off" },Key::None,Commands::Hidden)); }
         menu.add(menu::Command::new(if self.mode == ViewMode::Grid { "&Grid (selected)" } else { "&Grid" },Key::None,Commands::Grid));
         menu.add(menu::Command::new(if self.mode == ViewMode::Details { "&Details (selected)" } else { "&Details" },Key::None,Commands::Details));
         self.menu_target = Some(target);
@@ -140,17 +225,20 @@ impl MenuEvents for BrowserEntries {
             Commands::Open => self.request = target.filter(|e| e.kind != FileKind::Other).map(EntryRequest::Open),
             Commands::OpenWith => self.request = target.filter(|e| e.kind == FileKind::File).map(|e| EntryRequest::OpenWith(e.path)),
             Commands::Terminal => self.request = Some(EntryRequest::Terminal(target)),
-            Commands::Information => self.request = target.map(EntryRequest::Information),
+            Commands::Information => self.request = target.map(if self.trash { EntryRequest::TrashInfo } else { EntryRequest::Information }),
             Commands::Refresh => self.request = Some(EntryRequest::Refresh),
             Commands::Hidden => self.request = Some(EntryRequest::Hidden),
             Commands::Grid => self.set_mode(ViewMode::Grid), Commands::Details => self.set_mode(ViewMode::Details),
             Commands::NewFile => self.request = Some(EntryRequest::Mutate(Mutation::NewFile,None)),
             Commands::NewFolder => self.request = Some(EntryRequest::Mutate(Mutation::NewFolder,None)),
             Commands::Rename => self.request = target.map(|entry| EntryRequest::Mutate(Mutation::Rename,Some(entry))),
-            Commands::Copy => self.request = target.map(|entry| EntryRequest::Mutate(Mutation::Copy,Some(entry))),
-            Commands::Move => self.request = target.map(|entry| EntryRequest::Mutate(Mutation::Move,Some(entry))),
-            Commands::Trash => self.request = target.map(|entry| EntryRequest::Mutate(Mutation::Trash,Some(entry))),
+            Commands::Copy => self.request = Some(self.mutation_request(Mutation::Copy,target)),
+            Commands::Move => self.request = Some(self.mutation_request(Mutation::Move,target)),
+            Commands::Trash => self.request = Some(self.mutation_request(Mutation::Trash,target)),
             Commands::Favorite => self.request = Some(EntryRequest::Favorite), Commands::Favorites => self.request = Some(EntryRequest::Favorites),
+            Commands::Find => self.request = Some(EntryRequest::Find),
+            Commands::TrashView => self.request = Some(EntryRequest::TrashView),
+            Commands::Restore => self.request = Some(EntryRequest::Restore(self.targets(target))),
         }
         self.release_menu();
     }
@@ -166,7 +254,10 @@ impl OnPaint for BrowserEntries {
         let columns = self.columns();
         let tile_width = (width/columns).max(1);
         if self.mode == ViewMode::Details {
-            surface.write_string(0,0,&clipped("Name                           Type       Bytes        Modified",width),theme.text.highlighted,false);
+            let header = if self.trash { "Original name / folder         Type       Bytes        Deleted" }
+                else if self.search { "Name / relative folder         Type       Bytes        Modified" }
+                else { "Name                           Type       Bytes        Modified" };
+            surface.write_string(0,0,&clipped(header,width),theme.text.highlighted,false);
         }
         let start = self.offset * columns;
         let end = self.entries.len().min(start.saturating_add(self.visible_rows()*columns));
@@ -174,6 +265,7 @@ impl OnPaint for BrowserEntries {
             let entry = &self.entries[index];
             let x = ((index % columns)*tile_width) as i32;
             let y = ((index/columns-self.offset)*self.row_height()+self.header()) as i32;
+            let marked = self.marked.contains(&index);
             let attr = if self.selected == Some(index) { if self.has_focus() { theme.list_current_item.focus } else { theme.list_current_item.normal } } else { theme.text.normal };
             for row in 0..self.row_height() { surface.fill_horizontal_line_with_size(x,y+row as i32,tile_width as u32,Character::with_attributes(' ',attr)); }
             if self.mode == ViewMode::Grid {
@@ -182,14 +274,21 @@ impl OnPaint for BrowserEntries {
                 for (row,line) in icon.iter().enumerate() { surface.write_string(x,y+row as i32,&clipped(line,tile_width),attr,false); }
                 if tile_width >= 5 { surface.write_string(x+1,y+1,label,attr,false); }
                 surface.write_string(x,y+3,&clipped(&entry.name,tile_width.saturating_sub(1)),attr,false);
+                if marked { surface.write_string(x+tile_width as i32-1,y,"*",attr,false); }
             } else {
                 let kind = match entry.kind { FileKind::Directory => "Folder", FileKind::File => "File", FileKind::Other => "Other" };
-                for (x,text,limit) in [(0,entry.name.as_str(),30),(31,kind,10),(42,entry.size.as_str(),12),(55,entry.modified.as_str(),18)] {
+                if marked { surface.write_string(0,y,"*",attr,false); }
+                let inset = if marked { 2 } else { 0 };
+                for (x,text,limit) in [(inset,entry.name.as_str(),30-inset),(31,kind,10),(42,entry.size.as_str(),12),(55,entry.modified.as_str(),20)] {
                     if x < width { surface.write_string(x as i32,y,&clipped(text,limit.min(width-x)),attr,false); }
                 }
             }
         }
-        if self.entries.is_empty() { surface.write_string(0,self.header() as i32,&clipped(if self.loading { "Loading…" } else { "Empty folder" },width),theme.text.normal,false); }
+        if self.entries.is_empty() {
+            let message = if self.loading { "Loading…" } else if self.trash { "No Trash items" }
+                else if self.search { "No filename matches" } else { "Empty folder" };
+            surface.write_string(0,self.header() as i32,&clipped(message,width),theme.text.normal,false);
+        }
     }
 }
 impl OnKeyPressed for BrowserEntries {
@@ -203,8 +302,30 @@ impl OnMouseEvent for BrowserEntries {
                 self.request_focus();
                 if data.button == MouseButton::Right { self.context_at(data.x,data.y); }
                 else if data.button == MouseButton::Left {
-                    self.release_menu(); self.selected = self.point(data.x,data.y);
-                    if matches!(event,MouseEvent::DoubleClick(_)) { self.request = self.selected_entry().map(EntryRequest::Open); }
+                    self.release_menu();
+                    let clicked = self.point(data.x,data.y);
+                    if data.modifier.contains(KeyModifier::Shift) {
+                        if let Some(index) = clicked {
+                            self.mark_range(self.anchor.or(self.selected).unwrap_or(index),index);
+                            self.selected = clicked;
+                        }
+                    } else if data.modifier.contains(KeyModifier::Ctrl) {
+                        if let Some(index) = clicked {
+                            if !matches!(event,MouseEvent::DoubleClick(_)) {
+                                if self.marked.is_empty() && let Some(previous) = self.selected && previous != index {
+                                    self.marked.insert(previous);
+                                }
+                                self.toggle_mark(index);
+                            }
+                            self.selected = clicked;
+                        }
+                    } else {
+                        self.clear_marks(); self.selected = clicked; self.anchor = clicked;
+                        if matches!(event,MouseEvent::DoubleClick(_)) {
+                            self.request = if self.trash { Some(EntryRequest::Restore(self.targets(self.selected_entry()))) }
+                                else { self.selected_entry().map(EntryRequest::Open) };
+                        }
+                    }
                 } else { return EventProcessStatus::Ignored; }
             }
             MouseEvent::Wheel(MouseWheelDirection::Up) => self.scroll(-3),
@@ -222,13 +343,16 @@ impl OnResize for BrowserEntries {
 struct FileInformationDialog { information: Handle<TextArea>, close_button: Handle<Button> }
 impl FileInformationDialog {
     fn new(entry: &Entry) -> Self {
+        Self::with_labels("File information","Full path","Modified",entry)
+    }
+    fn with_labels(title: &str, path_label: &str, date_label: &str, entry: &Entry) -> Self {
         let display = |value: &str| value.chars().map(|ch| if ch.is_control() { '�' } else { ch }).collect::<String>();
         let kind = match entry.kind { FileKind::Directory => "Folder", FileKind::File => "File", FileKind::Other => "Other" };
         let size = if entry.kind == FileKind::File && entry.size != "—" { format!("{} bytes",entry.size) } else { "—".to_owned() };
-        let text = format!("Name: {}\n\nFull path: {}\n\nType: {kind}\n\nSize: {size}\n\nModified: {}",
+        let text = format!("Name: {}\n\n{path_label}: {}\n\nType: {kind}\n\nSize: {size}\n\n{date_label}: {}",
             display(&entry.name),display(&entry.path.to_string_lossy()),display(&entry.modified));
         let mut dialog = Self {
-            base: ModalWindow::new("File information",layout!("a:c,w:74,h:18"),window::Flags::Sizeable),
+            base: ModalWindow::new(title,layout!("a:c,w:74,h:18"),window::Flags::Sizeable),
             information: Handle::None, close_button: Handle::None,
         };
         // The directory worker already collected this metadata; opening the dialog does no filesystem I/O.
@@ -298,22 +422,34 @@ impl DestinationDialog {
     fn new(title: &str, source: &std::path::Path, favorites: &[PathBuf]) -> Self {
         let original_folder = source.parent().unwrap_or(std::path::Path::new("/")).to_owned();
         let original_name = source.file_name().map(PathBuf::from).unwrap_or_default();
+        Self::build(title,original_folder,Some(original_name),favorites)
+    }
+    fn folder(title: &str, path: &Path, favorites: &[PathBuf]) -> Self {
+        Self::build(title,path.to_owned(),None,favorites)
+    }
+    fn build(title: &str, original_folder: PathBuf, name: Option<PathBuf>, favorites: &[PathBuf]) -> Self {
         let mut dialog = Self { base: ModalWindow::new(title,layout!("a:c,w:76,h:13"),window::Flags::None),
-            folder: Handle::None,name: Handle::None,original_folder,original_name,favorites: favorites.to_vec(),choose_favorite: Handle::None,apply: Handle::None,cancel: Handle::None,status: Handle::None };
+            folder: Handle::None,name: Handle::None,original_folder,original_name: name.clone().unwrap_or_default(),favorites: favorites.to_vec(),choose_favorite: Handle::None,apply: Handle::None,cancel: Handle::None,status: Handle::None };
         dialog.add(Label::new("Destination folder (absolute or relative to the browser)",layout!("l:2,r:2,t:1,h:1")));
         let text = dialog.original_folder.to_string_lossy().into_owned(); dialog.folder = dialog.add(TextField::new(&text,layout!("l:2,r:2,t:2,h:1"),textfield::Flags::None));
-        dialog.add(Label::new("Filename (unchanged names retain exact OS bytes)",layout!("l:2,r:2,t:4,h:1")));
-        let text = dialog.original_name.to_string_lossy().into_owned(); dialog.name = dialog.add(TextField::new(&text,layout!("l:2,r:2,t:5,h:1"),textfield::Flags::None));
+        if let Some(name) = name {
+            dialog.add(Label::new("Filename (unchanged names retain exact OS bytes)",layout!("l:2,r:2,t:4,h:1")));
+            dialog.name = dialog.add(TextField::new(&name.to_string_lossy(),layout!("l:2,r:2,t:5,h:1"),textfield::Flags::None));
+        } else {
+            dialog.add(Label::new("Selected items keep their original filenames.",layout!("l:2,r:2,t:4,h:1")));
+        }
         dialog.status = dialog.add(Label::new("Existing files require confirmation; folders are never merged.",layout!("l:2,r:2,t:7,h:2")));
         dialog.choose_favorite = dialog.add(Button::new("&Favorites…",layout!("l:2,b:0,w:18")));
         dialog.apply = dialog.add(Button::new("&Apply",layout!("l:28,b:0,w:18"))); dialog.cancel = dialog.add(Button::new("&Cancel",layout!("r:2,b:0,w:18")));
         dialog.base.request_focus_for_control(dialog.folder); dialog
     }
     fn destination(&self) -> anyhow::Result<PathBuf> {
-        let folder = self.control(self.folder).map(|field| field.text()).unwrap_or(""); let name = self.control(self.name).map(|field| field.text()).unwrap_or("");
+        let folder = self.control(self.folder).map(|field| field.text()).unwrap_or("");
         anyhow::ensure!(!folder.is_empty() && !folder.contains('\0'),"Choose a nonempty destination folder");
+        let folder = dialog_path(&self.original_folder,folder);
+        let Some(name) = self.control(self.name).map(|field| field.text()) else { return Ok(folder); };
         anyhow::ensure!(!name.is_empty() && name != "." && name != ".." && !name.contains('/') && !name.contains('\0'),"Enter one filename without / or NUL");
-        Ok(dialog_path(&self.original_folder,folder).join(dialog_path(&self.original_name,name)))
+        Ok(folder.join(dialog_path(&self.original_name,name)))
     }
     fn submit(&mut self) { match self.destination() { Ok(path) => self.exit_with(path), Err(error) => { let handle = self.status; if let Some(status) = self.control_mut(handle) { status.set_caption(&error.to_string()); } } } }
 }
@@ -330,6 +466,47 @@ impl ButtonEvents for DestinationDialog {
     }
 }
 
+#[derive(Clone,Default,PartialEq,Eq)]
+enum BrowserPage { #[default] Folder, Search(String), Trash }
+
+struct ListingRequest {
+    path: PathBuf,
+    page: BrowserPage,
+    hidden: bool,
+    trash_root: Option<PathBuf>,
+    canceled: Arc<AtomicBool>,
+}
+
+struct BrowserListing {
+    listing: Listing,
+    page: BrowserPage,
+    trash_items: HashMap<PathBuf,files::TrashItem>,
+    status: Option<String>,
+}
+
+fn load_listing(request: ListingRequest) -> anyhow::Result<BrowserListing> {
+    let ListingRequest { path,page,hidden,trash_root,canceled } = request;
+    let mut trash_items = HashMap::new();
+    let (listing,status) = match &page {
+        BrowserPage::Folder => (files::list_directory(&path,hidden)?,None),
+        BrowserPage::Search(query) => {
+            let (listing,status) = files::search_filenames(&path,query,hidden,&canceled)?;
+            (listing,Some(status))
+        }
+        BrowserPage::Trash => {
+            let (items,status) = files::list_trash(trash_root,&canceled)?;
+            let entries = items.into_iter().map(|(entry,item)| { trash_items.insert(entry.path.clone(),item); entry }).collect();
+            (Listing { path,entries },Some(status))
+        }
+    };
+    Ok(BrowserListing { listing,page,trash_items,status })
+}
+
+struct Batch {
+    pending: VecDeque<files::Operation>,
+    finished: usize,
+    total: usize,
+}
 
 #[Window(events = TimerEvents+WindowEvents+TextFieldEvents+ButtonEvents)]
 pub(crate) struct BrowserWindow {
@@ -343,9 +520,14 @@ pub(crate) struct BrowserWindow {
     hidden: bool,
     closing: bool,
     filter_field: Handle<TextField>, favorite_button: Handle<Button>, favorites_button: Handle<Button>, cancel_operation: Handle<Button>, status: Handle<Label>,
+    find: Handle<Button>, trash: Handle<Button>, page_label: Handle<Label>,
     saved: files::BrowserState, state_worker: Option<files::StateWorker>, state_ready: bool, restore_location: bool,
     operation: files::OperationWorker,
-    worker: LatestWorker<(PathBuf, bool), Result<Listing, String>>,
+    batch: Option<Batch>,
+    deferred_outcome: Option<files::Outcome>,
+    worker: LatestWorker<ListingRequest, Result<BrowserListing, String>>,
+    page: BrowserPage, pending_listing: Option<(PathBuf,BrowserPage)>, announce_listing: bool, cancel_listing: Arc<AtomicBool>,
+    trash_root: Option<PathBuf>, trash_items: HashMap<PathBuf,files::TrashItem>,
     action: Option<BrowserAction>,
     pending_entries: VecDeque<Entry>,
 }
@@ -368,13 +550,16 @@ impl BrowserWindow {
         let mut state_worker = state_path.map(files::StateWorker::new).transpose()?;
         if let Some(worker) = &mut state_worker { worker.submit(files::StateJob::Load); }
         let state_ready = state_worker.is_none();
-        let worker = LatestWorker::new(|(path, hidden): (PathBuf, bool)| files::list_directory(&path, hidden).map_err(|e| format!("{e:#}")))?;
+        let worker = LatestWorker::new(|request| load_listing(request).map_err(|error| format!("{error:#}")))?;
         let mut window = Self {
             base: Window::new("File Browser — Enter Open | Alt+U Parent | Alt+R Refresh | Alt+H Hidden", layout!("a:c,w:90%,h:80%"), window::Flags::Sizeable),
             path, path_field: Handle::None, listing: Handle::None, up: Handle::None, refresh: Handle::None, hidden_button: Handle::None, mode_button: Handle::None,
             hidden: false, closing: false, worker, action: None, pending_entries: VecDeque::new(),
             filter_field: Handle::None, favorite_button: Handle::None, favorites_button: Handle::None, cancel_operation: Handle::None, status: Handle::None,
             saved: files::BrowserState::default(), state_worker, state_ready, restore_location, operation: files::OperationWorker::new()?,
+            find: Handle::None, trash: Handle::None, page_label: Handle::None, batch: None, deferred_outcome: None,
+            page: BrowserPage::Folder, pending_listing: None, announce_listing: true, cancel_listing: Arc::new(AtomicBool::new(false)),
+            trash_root: None, trash_items: HashMap::new(),
         };
         let path_text = window.path.to_string_lossy().into_owned();
         window.path_field = window.add(TextField::new(&path_text, layout!("l:0,r:0,t:0,h:1"), textfield::Flags::ProcessEnter));
@@ -387,7 +572,10 @@ impl BrowserWindow {
         window.cancel_operation = window.add(Button::with_type("Cancel operation",layout!("x:42,y:2,w:21"),button::Type::Flat));
         window.add(Label::new("Filter (Enter):",layout!("x:0,y:3,w:15,h:1")));
         window.filter_field = window.add(TextField::new("",layout!("l:15,r:0,t:3,h:1"),textfield::Flags::ProcessEnter));
-        window.status = window.add(Label::new("F2 Rename | F5 Copy | F6 Move | Delete Trash | Ctrl+N File | Ctrl+Shift+N Folder",layout!("l:0,r:0,b:0,h:1")));
+        window.find = window.add(Button::with_type("&Find…",layout!("x:0,y:4,w:11"),button::Type::Flat));
+        window.trash = window.add(Button::with_type("&Trash",layout!("x:12,y:4,w:13"),button::Type::Flat));
+        window.page_label = window.add(Label::new("",layout!("l:26,r:0,t:4,h:1")));
+        window.status = window.add(Label::new("Space Mark | F2 Rename | F5 Copy | F6 Move | Delete Trash",layout!("l:0,r:0,b:0,h:1")));
         window.listing = window.add(BrowserEntries::new());
         // Keep directories first: user sorting is deliberately disabled for this view.
         window.timer().ok_or_else(|| anyhow::anyhow!("File Browser timer unavailable"))?.start(Duration::from_millis(40));
@@ -396,14 +584,53 @@ impl BrowserWindow {
     }
     fn navigate(&mut self, path: PathBuf) {
         let target = if path.is_absolute() { path } else { self.path.join(path) };
+        self.submit_listing(target,BrowserPage::Folder,true);
+    }
+    fn submit_listing(&mut self, path: PathBuf, page: BrowserPage, announce: bool) {
+        self.cancel_listing.store(true,Ordering::Relaxed);
+        self.cancel_listing = Arc::new(AtomicBool::new(false));
         self.pending_entries.clear();
         self.action = None;
         let handle = self.listing;
         if let Some(list) = self.control_mut(handle) { list.invalidate(); list.loading = true; }
-        self.worker.submit((target, self.hidden));
+        self.announce_listing = announce;
+        self.pending_listing = Some((path.clone(),page.clone()));
+        self.worker.submit(ListingRequest { path,page,hidden: self.hidden,trash_root: self.trash_root.clone(),canceled: Arc::clone(&self.cancel_listing) });
     }
-    fn parent(&mut self) { if let Some(parent) = self.path.parent() { self.navigate(parent.to_owned()); } }
-    fn refresh(&mut self) { self.navigate(self.path.clone()); }
+    fn parent(&mut self) {
+        if self.requested_location().1 != &BrowserPage::Folder || self.page != BrowserPage::Folder {
+            self.navigate(self.path.clone());
+        } else if let Some(parent) = self.path.parent() { self.navigate(parent.to_owned()); }
+    }
+    fn requested_location(&self) -> (&PathBuf,&BrowserPage) {
+        self.pending_listing.as_ref().map(|(path,page)| (path,page)).unwrap_or((&self.path,&self.page))
+    }
+    fn reload(&mut self, announce: bool) {
+        let (path,page) = self.requested_location();
+        self.submit_listing(path.clone(),page.clone(),announce);
+    }
+    fn refresh(&mut self) { self.reload(true); }
+    fn refresh_after_operation(&mut self) { self.reload(self.pending_listing.is_some() && self.announce_listing); }
+    pub(crate) fn find_shortcut(&mut self) -> EventProcessStatus {
+        if self.page == BrowserPage::Trash || self.closing { return EventProcessStatus::Ignored; }
+        self.show_search();
+        EventProcessStatus::Processed
+    }
+    fn show_search(&mut self) {
+        let initial = match &self.page { BrowserPage::Search(query) => Some(query.clone()), _ => None };
+        if let Some(query) = dialogs::input::<String>("Find filenames","Search the current folder and its subfolders",initial,None) {
+            if query.trim().is_empty() || query.len() > 512 { self.set_status("Enter a filename query of 1–512 bytes"); return; }
+            self.set_status("Searching subfolders…");
+            self.submit_listing(self.path.clone(),BrowserPage::Search(query),true);
+        }
+    }
+    fn toggle_trash(&mut self) {
+        if self.requested_location().1 == &BrowserPage::Trash { self.navigate(self.path.clone()); }
+        else {
+            self.set_status("Loading Trash…");
+            self.submit_listing(self.path.clone(),BrowserPage::Trash,true);
+        }
+    }
     fn toggle_hidden(&mut self) {
         self.hidden = !self.hidden;
         let button = self.hidden_button;
@@ -418,6 +645,8 @@ impl BrowserWindow {
     pub fn shutdown(&mut self) { self.cleanup(); self.close(); }
     fn cleanup(&mut self) {
         self.operation.cancel();
+        self.cancel_listing.store(true,Ordering::Relaxed);
+        self.batch = None; self.deferred_outcome = None;
         self.closing = true; self.worker.close(); self.action = None; self.pending_entries.clear();
         let handle = self.listing;
         if let Some(list) = self.control_mut(handle) { list.invalidate(); }
@@ -443,6 +672,18 @@ impl BrowserWindow {
             Some(EntryRequest::Information(entry)) => { FileInformationDialog::new(&entry).show(); }
             Some(EntryRequest::Refresh) => self.refresh(), Some(EntryRequest::Hidden) => self.toggle_hidden(),
             Some(EntryRequest::Mutate(mutation,entry)) => self.mutate(mutation,entry),
+            Some(EntryRequest::Batch(mutation,paths)) => self.mutate_batch(mutation,paths),
+            Some(EntryRequest::Find) => self.show_search(),
+            Some(EntryRequest::TrashView) => self.toggle_trash(),
+            Some(EntryRequest::Restore(paths)) => self.restore_items(paths),
+            Some(EntryRequest::TrashInfo(mut entry)) => {
+                if let Some(item) = self.trash_items.get(&entry.path) {
+                    entry.path = item.original_path().to_owned();
+                    entry.name = entry.path.file_name().unwrap_or(entry.path.as_os_str()).to_string_lossy().into_owned();
+                    FileInformationDialog::with_labels("Trash information","Original path","Deleted",&entry).show();
+                }
+            }
+            Some(EntryRequest::Notice(message)) => self.set_status(message),
             Some(EntryRequest::Favorite) => self.toggle_favorite(), Some(EntryRequest::Favorites) => self.show_favorites(), None => {}
         }
         let mode = self.control(handle).map(|list| list.mode);
@@ -479,8 +720,119 @@ impl BrowserWindow {
     fn start_operation(&mut self, operation: files::Operation) {
         match self.operation.submit(operation) { Ok(()) => self.set_status("Working… Cancel operation stops before publication"), Err(error) => self.set_status(&format!("{error:#}")) }
     }
+    fn begin_batch(&mut self, operations: VecDeque<files::Operation>) {
+        if operations.is_empty() { return; }
+        self.batch = Some(Batch { total: operations.len(), finished: 0, pending: operations });
+        self.start_next_operation();
+    }
+    fn start_next_operation(&mut self) {
+        let next = self.batch.as_mut().and_then(|batch| batch.pending.pop_front());
+        match next {
+            Some(operation) => {
+                if let Err(error) = self.operation.submit(operation) { self.deferred_outcome = Some(files::Outcome::Failed(format!("{error:#}"))); }
+            }
+            None => self.finish_batch(None),
+        }
+    }
+    fn operation_busy(&self) -> bool { self.batch.is_some() || self.operation.busy() }
+    fn finish_batch(&mut self, reason: Option<&str>) {
+        let Some(batch) = self.batch.take() else { return; };
+        let summary = format!("{} of {} items completed",batch.finished,batch.total);
+        self.refresh_after_operation();
+        if let Some(reason) = reason {
+            let message = format!("{summary}. {reason}");
+            self.set_status(&message);
+            dialogs::error("Batch stopped",&message);
+        } else { self.set_status(&summary); }
+    }
+    fn mutate_batch(&mut self, mutation: Mutation, entries: Vec<Entry>) {
+        if self.operation_busy() { self.set_status("Another file operation is running; cancel it or wait"); return; }
+        if entries.iter().any(|entry| entry.identity.is_none()) {
+            self.set_status("A marked item is unavailable. Refresh and select it again"); return;
+        }
+        let selected = entries.iter().map(|entry| entry.path.as_path()).collect::<BTreeSet<_>>();
+        if selected.iter().any(|path| path.ancestors().skip(1).any(|parent| selected.contains(parent))) {
+            self.set_status("Select a folder or its contents for a batch, separately"); return;
+        }
+        let operations = if mutation == Mutation::Trash {
+            if !dialogs::validate("Move to Trash?",&format!("Move {} selected items to the user Trash?",entries.len())) { return; }
+            entries.into_iter().map(|entry| files::Operation::Trash { source: entry.path,root: self.trash_root.clone(),expected_source: entry.identity }).collect()
+        } else {
+            let names = entries.iter().filter_map(|entry| entry.path.file_name()).collect::<BTreeSet<_>>();
+            if names.len() != entries.len() { self.set_status("Selected items must have distinct filenames"); return; }
+            let title = if mutation == Mutation::Copy { "Copy selected items" } else { "Move selected items" };
+            let Some(folder) = DestinationDialog::folder(title,&self.path,&self.saved.favorites).show() else { return; };
+            let folder = if folder.is_absolute() { folder } else { self.path.join(folder) };
+            entries.into_iter().filter_map(|entry| {
+                let destination = folder.join(entry.path.file_name()?);
+                Some(files::Operation::Transfer { source: entry.path,destination,moving: mutation == Mutation::Move,approval: None,expected_source: entry.identity })
+            }).collect()
+        };
+        self.begin_batch(operations);
+    }
+    fn restore_items(&mut self, paths: Vec<PathBuf>) {
+        if self.operation_busy() { self.set_status("Another file operation is running; cancel it or wait"); return; }
+        let items = paths.iter().filter_map(|path| self.trash_items.get(path).cloned()).collect::<Vec<_>>();
+        let question = match items.as_slice() {
+            [] => return,
+            [item] => format!("Restore to {}?",item.original_path().display()),
+            _ => format!("Restore {} items to their original locations?",items.len()),
+        };
+        if !dialogs::validate("Restore from Trash?",&question) { return; }
+        if let [item] = items.as_slice() { self.start_operation(files::Operation::Restore(item.clone())); }
+        else { self.begin_batch(items.into_iter().map(files::Operation::Restore).collect()); }
+    }
+    fn poll_operation(&mut self) -> bool {
+        use files::Outcome;
+        if let Some(outcome) = self.deferred_outcome.take().or_else(|| self.operation.poll()) {
+            let canceled = self.operation.is_canceled();
+            match outcome {
+                Outcome::Complete(message) => {
+                    if let Some(batch) = &mut self.batch {
+                        batch.finished += 1;
+                        if canceled && !batch.pending.is_empty() { self.finish_batch(Some("Canceled. Published work was retained.")); }
+                        else { self.start_next_operation(); }
+                    } else { self.set_status(&message); self.refresh_after_operation(); }
+                }
+                Outcome::Confirm(operation) => {
+                    let destination = match &operation { files::Operation::Transfer { destination, .. } => destination.display().to_string(), _ => String::new() };
+                    if !canceled && dialogs::validate("Replace existing file?",&format!("Replace {destination}? The source and destination will be checked again before publication.")) {
+                        if let Err(error) = self.operation.submit(operation) { self.report_operation_issue(&format!("{error:#}"),false); }
+                    } else if self.batch.is_some() { self.finish_batch(Some("Replacement canceled. Published work was retained.")); }
+                    else { self.set_status("Replacement canceled; source and destination preserved"); }
+                }
+                Outcome::Warning(message) => self.report_operation_issue(&message,true),
+                Outcome::Failed(message) => self.report_operation_issue(&message,false),
+            }
+            return true;
+        }
+        if !self.operation.busy() { return false; }
+        let (entries,bytes) = self.operation.progress();
+        let progress = self.batch.as_ref().map(|batch| format!("Item {}/{} | ",batch.finished+1,batch.total)).unwrap_or_default();
+        self.set_status(&format!("{progress}Working: {entries} entries, {bytes} bytes | Cancel operation to stop"));
+        true
+    }
+    fn poll_hidden_batch(&mut self) {
+        let Some(batch) = &mut self.batch else { return; };
+        if self.deferred_outcome.is_some() { return; }
+        match self.operation.poll() {
+            Some(files::Outcome::Complete(_)) if !batch.pending.is_empty() && !self.operation.is_canceled() => {
+                batch.finished += 1;
+                self.start_next_operation();
+            }
+            outcome => self.deferred_outcome = outcome,
+        }
+    }
+    fn report_operation_issue(&mut self, message: &str, published: bool) {
+        if self.batch.is_some() { self.finish_batch(Some(message)); }
+        else {
+            if published { self.refresh_after_operation(); }
+            self.set_status(message);
+            dialogs::error(if published { "File operation needs attention" } else { "File operation stopped" },message);
+        }
+    }
     fn mutate(&mut self, mutation: Mutation, entry: Option<Entry>) {
-        if self.operation.busy() { self.set_status("Another file operation is running; cancel it or wait"); return; }
+        if self.operation_busy() { self.set_status("Another file operation is running; cancel it or wait"); return; }
         if matches!(mutation,Mutation::NewFile | Mutation::NewFolder) {
             let title = if mutation == Mutation::NewFolder { "Create folder" } else { "Create empty file" };
             if let Some(name) = dialogs::input::<String>(title,"Name in the current folder (spaces are preserved)",None,None) {
@@ -492,22 +844,65 @@ impl BrowserWindow {
         let Some(entry) = entry else { self.set_status("Select an entry first"); return; };
         if mutation == Mutation::Trash {
             if dialogs::validate("Move to user trash?",&format!("Move {} to the user trash? Restoration metadata will be retained. No permanent deletion fallback is used.",entry.path.display())) {
-                self.start_operation(files::Operation::Trash { source: entry.path, root: None });
+                self.start_operation(files::Operation::Trash { source: entry.path, root: self.trash_root.clone(), expected_source: entry.identity });
             }
             return;
         }
         let destination = if mutation == Mutation::Rename {
+            let parent = entry.path.parent().unwrap_or(&self.path).to_owned();
             let original = entry.path.file_name().map(PathBuf::from).unwrap_or_default();
             let initial = original.to_string_lossy().into_owned();
             dialogs::input::<String>("Rename entry","New filename (unchanged opaque names retain exact bytes)",Some(initial),None).and_then(|text| {
                 if text.is_empty() || text == "." || text == ".." || text.contains('/') || text.contains('\0') { self.set_status("Enter one filename without / or NUL"); None }
-                else { Some(self.path.join(dialog_path(&original,&text))) }
+                else { Some(parent.join(dialog_path(&original,&text))) }
             })
         } else { DestinationDialog::new(if mutation == Mutation::Copy { "Copy to folder and filename" } else { "Move to folder and filename" },&entry.path,&self.saved.favorites).show() };
         if let Some(destination) = destination {
             let destination = if destination.is_absolute() { destination } else { self.path.join(destination) };
-            self.start_operation(files::Operation::Transfer { source: entry.path, destination, moving: mutation != Mutation::Copy, approval: None });
+            self.start_operation(files::Operation::Transfer { source: entry.path, destination, moving: mutation != Mutation::Copy, approval: None, expected_source: entry.identity });
         }
+    }
+    fn present_listing(&mut self, result: BrowserListing) {
+        let BrowserListing { listing,page,trash_items,status } = result;
+        let page_changed = self.page != page;
+        self.path = listing.path;
+        self.page = page;
+        self.trash_items = trash_items;
+        let path = self.path.to_string_lossy().into_owned();
+        let field = self.path_field;
+        if let Some(field) = self.control_mut(field) { field.set_text(&path); }
+        let folder = self.page == BrowserPage::Folder;
+        let trash = self.page == BrowserPage::Trash;
+        let page_text = match &self.page {
+            BrowserPage::Folder => String::new(),
+            BrowserPage::Search(query) => format!("{} | Find: {}",status.as_deref().unwrap_or("Search"),clipped(query,80)),
+            BrowserPage::Trash => format!("{} | Enter Restore",status.as_deref().unwrap_or("Trash")),
+        };
+        let label = self.page_label;
+        if let Some(label) = self.control_mut(label) { label.set_caption(&page_text.replace('&',"&&")); }
+        let button = self.up;
+        if let Some(button) = self.control_mut(button) { button.set_caption(if folder { "&Up" } else { "Back (&U)" }); }
+        let button = self.trash;
+        if let Some(button) = self.control_mut(button) { button.set_caption(if trash { "Close &Trash" } else { "&Trash" }); }
+        let filter = self.filter_field;
+        if let Some(filter) = self.control_mut(filter) { filter.set_enabled(folder); }
+        for button in [self.find,self.hidden_button,self.favorite_button,self.favorites_button] {
+            if let Some(button) = self.control_mut(button) { button.set_enabled(!trash); }
+        }
+        let handle = self.listing;
+        if let Some(list) = self.control_mut(handle) {
+            list.clear();
+            list.loading = !listing.entries.is_empty();
+            list.trash = trash;
+            list.search = !trash && !folder;
+            list.request_focus();
+        }
+        self.pending_entries = listing.entries.into();
+        if self.announce_listing && !self.operation_busy() {
+            if let Some(status) = status { self.set_status(&status); }
+            else if page_changed { self.set_status("Space Mark | F2 Rename | F5 Copy | F6 Move | Delete Trash"); }
+        }
+        if folder { self.save_view(); }
     }
 }
 impl TextFieldEvents for BrowserWindow {
@@ -530,7 +925,11 @@ impl ButtonEvents for BrowserWindow {
         else if handle == self.hidden_button { self.toggle_hidden(); }
         else if handle == self.favorite_button { self.toggle_favorite(); }
         else if handle == self.favorites_button { self.show_favorites(); }
-        else if handle == self.cancel_operation { self.operation.cancel(); self.set_status("Cancellation requested; already published work is retained"); }
+        else if handle == self.find { self.show_search(); }
+        else if handle == self.trash { self.toggle_trash(); }
+        else if handle == self.cancel_operation && self.operation_busy() {
+            self.operation.cancel(); self.set_status("Cancellation requested; already published work is retained");
+        }
         else if handle == self.mode_button {
             let handle = self.listing;
             if let Some(list) = self.control_mut(handle) { list.set_mode(if list.mode == ViewMode::Grid { ViewMode::Details } else { ViewMode::Grid }); list.request_focus(); }
@@ -542,7 +941,8 @@ impl ButtonEvents for BrowserWindow {
 }
 impl TimerEvents for BrowserWindow {
     fn on_update(&mut self, _: u64) -> EventProcessStatus {
-        if self.closing || !self.is_visible() { return EventProcessStatus::Ignored; }
+        if self.closing { return EventProcessStatus::Ignored; }
+        if !self.is_visible() { self.poll_hidden_batch(); return EventProcessStatus::Ignored; }
         let mut changed = self.poll_request();
         if let Some(result) = self.state_worker.as_mut().and_then(|worker| worker.poll()) {
             match result {
@@ -553,53 +953,43 @@ impl TimerEvents for BrowserWindow {
                     let handle = self.filter_field; let filter = self.saved.filter.clone(); if let Some(field) = self.control_mut(handle) { field.set_text(&filter); }
                     let handle = self.hidden_button; if let Some(button) = self.control_mut(handle) { button.set_caption(if hidden { "&Hidden: on" } else { "&Hidden: off" }); }
                     let target = if self.restore_location { self.saved.location.clone().unwrap_or_else(|| self.path.clone()) } else { self.path.clone() };
-                    self.navigate(target);
+                    if self.page == BrowserPage::Folder && self.requested_location().1 == &BrowserPage::Folder {
+                        self.navigate(target);
+                    } else { self.refresh(); }
                 }
                 Ok(None) => {},
                 Err(error) => { self.set_status(&format!("Browser state: {error}")); if !self.state_ready { self.state_worker = None; self.state_ready = true; } }
             }
             changed = true;
         }
-        if let Some(outcome) = self.operation.poll() {
-            match outcome {
-                files::Outcome::Complete(message) => { self.set_status(&message); self.refresh(); }
-                files::Outcome::Failed(error) => { self.set_status(&error); dialogs::error("File operation stopped",&error); }
-                files::Outcome::Confirm(operation) => {
-                    let destination = match &operation { files::Operation::Transfer { destination, .. } => destination.display().to_string(), _ => String::new() };
-                    if dialogs::validate("Replace existing file?",&format!("Replace {destination}? The source and destination will be checked again before publication.")) { self.start_operation(operation); }
-                    else { self.set_status("Replacement canceled; source and destination preserved"); }
-                }
-            }
-            changed = true;
-        } else if self.operation.busy() {
-            let (entries,bytes) = self.operation.progress(); self.set_status(&format!("Working: {entries} entries, {bytes} bytes | Cancel operation to stop")); changed = true;
-        }
+        changed |= self.poll_operation();
         match self.worker.poll() {
-            Some(Ok(listing)) => {
-                self.path = listing.path;
-                let field = self.path_field;
-                let text = self.path.to_string_lossy().into_owned();
-                if let Some(field) = self.control_mut(field) { field.set_text(&text); }
-                let handle = self.listing;
-                if let Some(list) = self.control_mut(handle) { list.clear(); list.loading = false; list.request_focus(); }
-                self.pending_entries = listing.entries.into();
-                self.save_view();
+            Some(Ok(result)) => {
+                self.pending_listing = None;
+                self.present_listing(result);
                 changed = true;
             }
             Some(Err(error)) => {
+                let title = match self.pending_listing.take().map(|(_,page)| page) {
+                    Some(BrowserPage::Search(_)) => "Cannot search subfolders",
+                    Some(BrowserPage::Trash) => "Cannot read Trash",
+                    _ => "Cannot read directory",
+                };
                 let handle = self.listing;
                 if let Some(list) = self.control_mut(handle) { list.loading = false; }
-                dialogs::error("Cannot read directory", &format!("{error}\nUse the path field, Up, or Refresh to try again."));
+                self.set_status(&error);
+                dialogs::error(title,&format!("{error}\nUse the path field, Up, or Refresh to try again."));
                 changed = true;
             }
             None => {}
         }
         if !self.pending_entries.is_empty() {
             // Large directories are inserted incrementally to keep callbacks short.
-            let filter = self.saved.filter.to_lowercase();
+            let filter = if self.page == BrowserPage::Folder { self.saved.filter.to_lowercase() } else { String::new() };
             let batch = self.pending_entries.drain(..self.pending_entries.len().min(256)).filter(|entry| filter.is_empty() || entry.name.to_lowercase().contains(&filter)).collect();
             let handle = self.listing;
-            if let Some(list) = self.control_mut(handle) { list.add_items(batch); }
+            let loading = !self.pending_entries.is_empty();
+            if let Some(list) = self.control_mut(handle) { list.add_items(batch); list.loading = loading; }
             changed = true;
         }
         if changed { EventProcessStatus::Processed } else { EventProcessStatus::Ignored }
@@ -712,9 +1102,133 @@ mod tests {
         window.shutdown(); app.run();
     }
     #[test]
+    fn marked_entries_survive_keyboard_navigation_and_batch_through_the_context_menu() {
+        let _lock = UI_LOCK.lock().unwrap();
+        let app = App::debug(80,24,"Paint.Enable(false)").build().unwrap();
+        let mut list = BrowserEntries::new();
+        list.viewport = Size::new(48,15);
+        list.set_mode(ViewMode::Details);
+        list.add_items(grid_tests::entries());
+        assert!(list.input(key!("Space").into()) == EventProcessStatus::Processed);
+        list.input(key!("Down").into());
+        list.input(key!("Space").into());
+        list.context_at(0,2);
+        let menu = list.menu;
+        MenuEvents::on_command(&mut list,menu,Handle::None,browserentries::Commands::Trash);
+        assert!(matches!(list.request.take(),Some(EntryRequest::Batch(Mutation::Trash,entries))
+            if entries.iter().map(|entry| entry.path.as_path()).eq([Path::new("/tmp/0"),Path::new("/tmp/1")])));
+        list.clear_marks();
+        list.selected = Some(0);
+        OnMouseEvent::on_mouse_event(&mut list,&MouseEvent::Pressed(MouseEventData {
+            x: 0,y: 3,button: MouseButton::Left,modifier: KeyModifier::Ctrl,
+        }));
+        list.input(key!("F5").into());
+        assert!(matches!(list.request.take(),Some(EntryRequest::Batch(Mutation::Copy,entries))
+            if entries.iter().map(|entry| entry.path.as_path()).eq([Path::new("/tmp/0"),Path::new("/tmp/2")])));
+        list.input(key!("Shift+Down").into());
+        list.input(key!("F6").into());
+        assert!(matches!(list.request.take(),Some(EntryRequest::Batch(Mutation::Move,entries))
+            if entries.iter().map(|entry| entry.path.as_path()).eq([Path::new("/tmp/2"),Path::new("/tmp/3")])));
+        list.release_menu(); app.run();
+    }
+    #[test]
+    fn find_shortcut_searches_subfolders_and_back_restores_the_folder_filter() {
+        let _lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let match_path = nested.join("Result.txt");
+        std::fs::write(&match_path,b"match").unwrap();
+        std::fs::write(dir.path().join("local.txt"),b"local").unwrap();
+        let app = App::debug(80,24,"Paint.Enable(false)\nKey.TypeText('RESULT')\nKey.Pressed(Enter)").build().unwrap();
+        let mut window = BrowserWindow::at(dir.path().to_owned()).unwrap();
+        let listing = window.listing;
+        let filter = window.filter_field;
+        TextFieldEvents::on_validate(&mut window,filter,"local");
+        pump_until(&mut window,|w| w.control(listing).unwrap().entries.len() == 1);
+        assert!(window.find_shortcut() == EventProcessStatus::Processed);
+        pump_until(&mut window,|w| w.control(listing).unwrap().search && w.control(listing).unwrap().entries.len() == 1);
+        assert_eq!(window.control(listing).unwrap().entries[0].path,match_path);
+        window.control_mut(listing).unwrap().input(key!("Enter").into());
+        window.poll_request();
+        assert_eq!(window.take_action(),Some(BrowserAction::Open(match_path)));
+        let up = window.up;
+        ButtonEvents::on_pressed(&mut window,up);
+        pump_until(&mut window,|w| w.pending_listing.is_none() && w.control(listing).unwrap().entries.len() == 1);
+        assert_eq!(window.control(listing).unwrap().entries[0].path,dir.path().join("local.txt"));
+        assert_eq!(window.saved.filter,"local");
+        window.shutdown(); app.run();
+    }
+    #[test]
+    fn renaming_a_search_result_keeps_it_in_its_original_parent() {
+        let _lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let source = nested.join("result.txt");
+        let replacement = nested.join("renamed.txt");
+        std::fs::write(&source,b"nested").unwrap();
+        std::fs::write(dir.path().join("renamed.txt"),b"root").unwrap();
+        let app = App::debug(80,24,"Paint.Enable(false)\nKey.Pressed(Ctrl+A)\nKey.TypeText('renamed.txt')\nKey.Pressed(Enter)").build().unwrap();
+        let mut window = BrowserWindow::at(dir.path().to_owned()).unwrap();
+        let listing = window.listing;
+        window.submit_listing(dir.path().to_owned(),BrowserPage::Search("result".into()),true);
+        pump_until(&mut window,|w| w.control(listing).unwrap().search && w.control(listing).unwrap().entries.len() == 1);
+        window.control_mut(listing).unwrap().input(key!("F2").into());
+        pump_until(&mut window,|w| !source.exists() && w.pending_listing.is_none() && w.control(listing).unwrap().entries.is_empty());
+        assert_eq!(std::fs::read(&replacement).unwrap(),b"nested");
+        assert_eq!(std::fs::read(dir.path().join("renamed.txt")).unwrap(),b"root");
+        window.shutdown(); app.run();
+    }
+    #[test]
+    fn batch_trash_and_restore_run_from_the_listing_and_refresh_the_view() {
+        let _lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let project = dir.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let a = project.join("a.txt");
+        let b = project.join("b.txt");
+        std::fs::write(&a,b"a").unwrap();
+        std::fs::write(&b,b"b").unwrap();
+        let app = App::debug(80,24,"Paint.Enable(false)\nKey.Pressed(Alt+Y,2)").build().unwrap();
+        let mut window = BrowserWindow::at(project.clone()).unwrap();
+        window.trash_root = Some(dir.path().join("Trash"));
+        let listing = window.listing;
+        pump_until(&mut window,|w| w.control(listing).unwrap().entries.len() == 2);
+        let list = window.control_mut(listing).unwrap();
+        list.input(key!("Ctrl+A").into());
+        list.input(key!("Delete").into());
+        window.poll_request();
+        assert!(window.operation.busy(),"batch trash was not accepted");
+        window.set_visible(false);
+        pump_until(&mut window,|w| w.deferred_outcome.is_some() && !a.exists() && !b.exists());
+        window.set_visible(true);
+        pump_until(&mut window,|w| w.batch.is_none() && w.pending_listing.is_none() && w.control(listing).unwrap().entries.is_empty());
+        assert!(!a.exists() && !b.exists());
+        window.shutdown(); app.run();
+
+        let app = App::debug(80,24,"Paint.Enable(false)\nKey.Pressed(Alt+Y,2)").build().unwrap();
+        let mut window = BrowserWindow::at(project).unwrap();
+        window.trash_root = Some(dir.path().join("Trash"));
+        let listing = window.listing;
+        let trash = window.trash;
+        ButtonEvents::on_pressed(&mut window,trash);
+        pump_until(&mut window,|w| w.control(listing).unwrap().trash && w.control(listing).unwrap().entries.len() == 2);
+        let list = window.control_mut(listing).unwrap();
+        list.input(key!("Ctrl+A").into());
+        list.input(key!("Enter").into());
+        window.poll_request();
+        assert!(window.operation.busy(),"restore was not accepted");
+        pump_until(&mut window,|w| w.batch.is_none() && w.pending_listing.is_none() && w.control(listing).unwrap().entries.is_empty());
+        assert_eq!(std::fs::read(&a).unwrap(),b"a");
+        assert_eq!(std::fs::read(&b).unwrap(),b"b");
+        assert!(window.control(listing).unwrap().trash);
+        window.shutdown(); app.run();
+    }
+    #[test]
     fn native_mutation_requests_preserve_target_path_in_both_views() {
         let _lock = UI_LOCK.lock().unwrap(); let app = App::debug(80,24,"Paint.Enable(false)").build().unwrap();
-        let mut list = BrowserEntries::new(); list.viewport = Size::new(48,15); list.add_items((0..2).map(|index| Entry { path: PathBuf::from(format!("/tmp/{index}")),name: index.to_string(),kind: FileKind::File,size: "1".into(),modified: "—".into() }).collect());
+        let mut list = BrowserEntries::new(); list.viewport = Size::new(48,15); list.add_items((0..2).map(|index| Entry { path: PathBuf::from(format!("/tmp/{index}")),name: index.to_string(),kind: FileKind::File,size: "1".into(),modified: "—".into(),identity: None }).collect());
         for mode in [ViewMode::Grid,ViewMode::Details] {
             list.set_mode(mode); list.selected = Some(1); list.input(key!("F2").into());
             assert!(matches!(list.request.take(),Some(EntryRequest::Mutate(Mutation::Rename,Some(entry))) if entry.path == std::path::Path::new("/tmp/1")));
@@ -768,7 +1282,7 @@ mod tests {
         let _lock = UI_LOCK.lock().unwrap();
         let path = PathBuf::from(std::ffi::OsString::from_vec(b"/tmp/long name \xff <FILE_PATH>".to_vec()));
         let mut entry = Entry { path: path.clone(), name: "long name � <FILE_PATH>".into(), kind: FileKind::File,
-            size: "42".into(), modified: "2026-10-31 00:30".into() };
+            size: "42".into(), modified: "2026-10-31 00:30".into(), identity: None };
         for (kind,label,size) in [(FileKind::File,"File","42 bytes"),(FileKind::Directory,"Folder","—"),(FileKind::Other,"Other","—")] {
             entry.kind = kind;
             let app = App::debug(80,24,"Key.Pressed(Enter)").build().unwrap();
@@ -895,8 +1409,8 @@ mod tests {
 mod grid_tests {
     use super::*;
     use crate::test_support::UI_LOCK;
-    fn entries() -> Vec<Entry> {
-        (0..23).map(|i| Entry { path: PathBuf::from(format!("/tmp/{i}")), name: format!("{i} 文 long filename"), kind: FileKind::File, size: "42".into(), modified: "today".into() }).collect()
+    pub(super) fn entries() -> Vec<Entry> {
+        (0..23).map(|i| Entry { path: PathBuf::from(format!("/tmp/{i}")), name: format!("{i} 文 long filename"), kind: FileKind::File, size: "42".into(), modified: "today".into(), identity: None }).collect()
     }
     #[test]
     fn information_actions_keep_the_clicked_or_selected_entry_in_both_views() {

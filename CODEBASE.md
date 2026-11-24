@@ -476,6 +476,21 @@ topology are not preserved. Trash writes FreeDesktop restore metadata in the
 owner-checked user Trash and refuses cross-filesystem moves without permanent
 fallback. Linux /proc/self/fd and renameat2 are required.
 
+The browser marks entries by their listing index and clears marks when it
+applies a new listing. A batch queues up to 1,000 items through the same
+single-operation worker, retaining completed work and stopping when an item
+fails, needs attention, or is canceled. Source fingerprints from the listing
+prevent a delayed item from mutating a replacement file. Hidden batches
+advance through successful items and defer prompts and results until visible.
+Recursive filename search reuses the latest-request listing worker with cooperative cancellation and bounded
+depth, traversal, and result counts. It scans anchored directory descriptors
+and skips symlinked directories. Search and Trash are transient views.
+
+The Trash view reads the per-user Trash's owned, bounded metadata and pairs it
+with payloads, keeping exact decoded Unix path bytes. Restore revalidates the
+selected pair and uses no-replace rename into an existing, anchored original
+parent directory. It removes the matching metadata only after publication.
+
 A bounded coalescing state worker reads/writes last location, view, hidden toggle,
 512-byte filter and up to 64 favorites. Browser state is capped at 128 KiB and
 stores exact Unix path bytes, with 4,096-byte path limits. Saves use synced,
@@ -487,8 +502,8 @@ cleanup. Malformed initial state disables writes for that window and displays
 an error. Native windows and all tracked terminal instances participate in
 arrangement, palette updates, Terminal Lock visibility snapshots, and desktop shutdown.
 
-Native timer callbacks defer result polling while hidden, including during Terminal
-Lock. Failed terminal launch dialogs are also deferred until the window is visible.
+Native app dialogs and terminal launch errors wait until the window is visible,
+including after Terminal Lock.
 
 PDF Reader uses `PdfWorker` around the latest-request queue, retaining a join
 handle for shutdown after AppCUI releases its controls. Poppler's `pdfinfo` and

@@ -283,22 +283,31 @@ after configured templates are resolved. Display labels may replace
 invalid UTF-8 bytes; navigation and launch arguments retain them.
 Special files are not opened as documents.
 
+Press Space or Ctrl+Click to mark items, Shift+Click or Shift+Arrow to
+mark a range, Ctrl+A to mark all listed items (up to 1,000), and Escape to
+clear the marks. An asterisk identifies each marked item. F5, F6, and Delete
+act on the marks when present. Right-click a marked item for batch actions.
+
 With the listing focused, Ctrl+N creates an empty file and Ctrl+Shift+N
 creates a folder. F2 renames, F5 copies, F6 moves, and Delete asks to move
-the entry to trash. These actions are also in context menus. Copy/Move
-use separate destination folder and filename fields; unchanged opaque
-names keep their exact bytes. Existing files/symlinks require confirmation;
-existing destination folders cannot be merged/replaced. A background
-worker reports progress; Cancel operation stops pending work. Already
-published content remains. Failed transfers preserve the source;
-incomplete cleanup reports retained source/backup paths.
+the entry to Trash. These actions are also in context menus. Copy/Move
+accept a new destination filename for a single item. A batch uses the
+original filenames and one destination folder. Select folders separately
+from their contents and pick distinct filenames for Copy/Move. Replacing
+a file or symlink requires confirmation. Choose a new name or location
+when a destination folder already exists. A background
+worker reports progress. A batch stops at a failure, declined replacement,
+or cancellation. Already published content remains. Failed transfers
+preserve the source, and incomplete cleanup reports retained source/backup paths.
 
 Recursive copies preserve symlinks without following them and reject
 special files. Limits are 100,000 entries and depth 128. Basic permissions
 are copied; timestamps, ownership, ACLs, extended attributes and hardlink
-relationships are not preserved. Trash uses the user's FreeDesktop Trash
-with restore metadata and never falls back to permanent deletion. Trash
-across filesystems is unsupported; use system trash tools to restore.
+relationships are not preserved. Trash (Alt+T) opens the user's Trash.
+Details shows original locations and deletion dates. Enter restores the
+focused or marked items after confirmation, and Alt+Enter shows the full original path.
+The original folder must exist and the destination must be vacant.
+Trash and restore use a same-filesystem move. Back (Alt+U) returns to the folder.
 
 Use Add/remove favorite and Favorites for up to 64 folders.
 Favorites also appear in destination dialogs. In the browser Favorites chooser,
@@ -308,6 +317,12 @@ Enter; matching ignores case. Last location, view, hidden toggle, filter
 (up to 512 bytes) and favorites persist separately in state/browser.toml
 under the application state directory. State errors are visible and
 malformed state is not overwritten.
+
+Find (Ctrl+F from the listing) searches the current folder and its subfolders
+for a filename substring, ignoring case. Results show relative paths and
+respect the Hidden toggle. The search skips symlinked directories and reports
+unreadable entries and limits in the status bar. Back (Alt+U) returns to the
+folder and its current filter.
 
 ## Image Viewer
 

@@ -1,6 +1,8 @@
 mod operations;
+mod search;
 mod state;
-pub(crate) use operations::{Operation, OperationWorker, Outcome};
+pub(crate) use operations::{Operation, OperationWorker, Outcome, TrashItem, list_trash};
+pub(crate) use search::search_filenames;
 pub(crate) use state::{BrowserState, default_state_path, StateJob, StateWorker};
 #[cfg(test)]
 pub(crate) use state::{load as load_state, save as save_state};
@@ -20,6 +22,7 @@ pub(crate) struct Entry {
     pub kind: FileKind,
     pub size: String,
     pub modified: String,
+    pub identity: Option<operations::Fingerprint>,
 }
 pub(crate) struct Listing { pub path: PathBuf, pub entries: Vec<Entry> }
 
@@ -30,20 +33,32 @@ pub(crate) fn list_directory(path: &Path, hidden: bool) -> anyhow::Result<Listin
         let entry = entry.with_context(|| format!("Cannot read an entry in {}", path.display()))?;
         use std::os::unix::ffi::OsStrExt;
         if !hidden && entry.file_name().as_bytes().starts_with(b".") { continue; }
-        let metadata = std::fs::metadata(entry.path());
-        let kind = match &metadata {
-            Ok(metadata) if metadata.is_dir() => FileKind::Directory,
-            Ok(metadata) if metadata.is_file() => FileKind::File,
-            _ => FileKind::Other,
-        };
-        let size = metadata.as_ref().ok().filter(|m| m.is_file()).map(|m| m.len().to_string()).unwrap_or_else(|| "—".into());
-        let modified = metadata.ok().and_then(|m| m.modified().ok()).map(|time| {
-            chrono::DateTime::<chrono::Local>::from(time).format("%Y-%m-%d %H:%M").to_string()
-        }).unwrap_or_else(|| "—".into());
-        entries.push(Entry { path: entry.path(), name: entry.file_name().to_string_lossy().into_owned(), kind, size, modified });
+        let metadata = std::fs::symlink_metadata(entry.path()).ok();
+        let followed = metadata.as_ref().filter(|metadata| metadata.is_symlink()).and_then(|_| std::fs::metadata(entry.path()).ok());
+        let mut details = entry_details(entry.path(),entry.file_name().to_string_lossy().into_owned(),followed.as_ref().or(metadata.as_ref()));
+        details.identity = metadata.as_ref().map(operations::Fingerprint::of);
+        entries.push(details);
     }
     entries.sort_by(|a, b| (a.kind != FileKind::Directory).cmp(&(b.kind != FileKind::Directory)).then_with(|| a.path.file_name().cmp(&b.path.file_name())));
     Ok(Listing { path, entries })
+}
+fn entry_details(path: PathBuf, name: String, metadata: Option<&std::fs::Metadata>) -> Entry {
+    let kind = match metadata {
+        Some(metadata) if metadata.is_dir() => FileKind::Directory,
+        Some(metadata) if metadata.is_file() => FileKind::File,
+        _ => FileKind::Other,
+    };
+    let size = metadata.filter(|m| m.is_file()).map(|m| m.len().to_string()).unwrap_or_else(|| "—".into());
+    let modified = metadata.and_then(|m| m.modified().ok()).map(|time| {
+        chrono::DateTime::<chrono::Local>::from(time).format("%Y-%m-%d %H:%M").to_string()
+    }).unwrap_or_else(|| "—".into());
+    Entry { path, name, kind, size, modified, identity: metadata.map(operations::Fingerprint::of) }
+}
+fn path_caption(path: &Path) -> String {
+    let name = path.file_name().unwrap_or(path.as_os_str()).to_string_lossy();
+    if let Some(folder) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        format!("{name} — {}",folder.display())
+    } else { name.into_owned() }
 }
 pub(crate) fn is_image(path: &Path) -> bool {
     path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| ["png", "jpg", "jpeg", "webp", "gif", "bmp"].iter().any(|candidate| ext.eq_ignore_ascii_case(candidate)))

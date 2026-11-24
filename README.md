@@ -39,6 +39,7 @@ Features:
 - [x] Searchable command palette, independent terminals, and normal child Ctrl+C
 - [x] Bounded terminal history, Unicode selection/search, and clipboard fallback
 - [x] Background file operations, favorites, and saved Open with choices
+- [x] File multi-select, recursive filename search, and Trash restore
 - [x] Launcher editing/reload, working directories, and noninteractive diagnostics
 - [x] Four workspaces with an offered restore after restart
 - [x] Managed Carboxyl browser launcher and grapheme-aware Unicode terminals
@@ -479,22 +480,35 @@ text and Close button. Close or Escape dismisses the dialog. Information uses
 the most recent directory listing; Refresh updates it. Folder/special-entry
 sizes display as unavailable.
 
+Use **Space** or **Ctrl+Click** to mark items. **Shift+Click** or **Shift+Arrow**
+marks a range, **Ctrl+A** marks all listed items, and **Escape** clears the marks.
+Marked rows show an asterisk in Grid and Details. You can mark up to 1,000 items.
+**F5**, **F6**, and **Delete** act on the marks, or on the focused entry when
+there are no marks. Right-click a marked item to see batch actions.
+
 File/entry menus also offer **New file / Ctrl+N**, **New folder / Ctrl+Shift+N**,
 **Rename / F2**, **Copy to / F5**, **Move to / F6**, and **Move to trash / Delete**
-while the listing is focused. Copy/Move dialogs have separate destination-folder
-and filename fields; unchanged opaque names keep their original bytes. Existing
-files/symlinks require replacement confirmation; existing destination folders
-are rejected rather than merged. Operations run in the background with progress
-and **Cancel operation**; already published work remains after cancellation.
+while the listing is focused. Copy and Move accept a new destination filename
+for a single item. Batch items keep their original filenames, including raw OS
+bytes, and share a destination folder. Select each folder separately from its
+contents and use distinct filenames when copying or moving a batch. Replacing
+a file or symlink requires confirmation. Choose a new name or location when
+a destination folder already exists. Operations run in the background with progress
+and **Cancel operation**. A batch stops at the first failure, declined
+replacement, or cancellation. Already published work remains.
+Hidden batches keep processing until an item needs a prompt or reports a
+problem. Prompts wait until the window is visible again.
 Failed transfers preserve the source; incomplete cleanup reports any retained
 source/backup path. Recursive copies reject special files, preserve symlinks
 without following them, and are limited to 100,000 entries and depth 128. Basic
 permissions are retained; ownership, ACLs, extended attributes, timestamps and
 hardlink relationships are not copied.
 
-Trash requires confirmation and uses the user's FreeDesktop Trash with restore
-metadata; it never falls back to permanent deletion. Trash across filesystems
-is unsupported and leaves the source intact. Use system trash tools to restore.
+**Trash** (Alt+T) shows the user's Trash entries. Details includes original
+locations and deletion dates. Press **Enter** to restore the focused or marked
+items, or **Alt+Enter** to inspect the original location. Restoring requires an existing
+original parent folder and a vacant destination. Trash and restore use a
+same-filesystem move. **Back** (Alt+U) returns to the folder.
 
 **Add/remove favorite** adds/removes the current folder; **Favorites** chooses
 a saved folder, including in destination dialogs. The browser Favorites chooser
@@ -503,6 +517,13 @@ and press Enter; matching is case-insensitive. Location, Grid/Details, hidden
 files, filter and up to 64 favorites persist in `state/browser.toml` under the
 application state directory, outside shortcut discovery. The filter is limited
 to 512 bytes. State errors appear in the browser; malformed state is preserved.
+
+**Find** (**Ctrl+F** from the listing) searches filenames in the current folder
+and its subfolders for a case-insensitive substring. Search respects the Hidden
+toggle, skips symlinked directories, and shows relative paths. The background
+search visits at most 100,000 entries, searches up to 128 levels deep, and returns
+up to 5,000 matches. Unreadable or limited results are reported in the status
+line. **Back** returns to the current folder and its saved filter.
 
 **Open with…** lists compatible native viewers and all configured Desktop-TUI
 shortcuts, labeled as native or shortcut. Choose with Enter or double-click;

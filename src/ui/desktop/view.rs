@@ -927,9 +927,17 @@ impl DesktopEvents for MyDesktop {
     fn on_preview_key_pressed(&mut self, key: Key, _: char) -> EventProcessStatus {
         if self.saving_exit || self.exit_waiting || self.exit_saved { return EventProcessStatus::Processed; }
         if self.pending_desktop.is_some() { return EventProcessStatus::Ignored; }
-        if self.terminal_locked || key != self.preferences.workflow.palette_shortcut.key() { return EventProcessStatus::Ignored; }
-        self.show_palette();
-        EventProcessStatus::Processed
+        if self.terminal_locked { return EventProcessStatus::Ignored; }
+        if key == self.preferences.workflow.palette_shortcut.key() {
+            self.show_palette();
+            return EventProcessStatus::Processed;
+        }
+        if key.value() == key!("Ctrl+F")
+            && let Some(WindowTarget::Browser(handle)) = self.active_target()
+            && let Some(browser) = self.window_mut(handle) {
+            return browser.find_shortcut();
+        }
+        EventProcessStatus::Ignored
     }
     fn on_start(&mut self) {
         let shortcuts = self.shortcuts.clone();
