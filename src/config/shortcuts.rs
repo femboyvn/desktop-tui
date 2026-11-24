@@ -107,13 +107,15 @@ impl Shortcut {
 pub fn parse_shortcut_dir(shortcut_path: PathBuf, settings_path: &Path) -> anyhow::Result<Vec<Shortcut>> {
     let directory = if shortcut_path.is_absolute() { shortcut_path } else { env::current_dir()?.join(shortcut_path) };
     if !directory.is_dir() { bail!("Launcher directory is missing or inaccessible: {}", directory.display()); }
+    let ai_settings = crate::config::ai::AiSettingsStore::path_next_to(settings_path);
     let settings_path = settings_path.canonicalize().unwrap_or_else(|_| settings_path.to_owned());
+    let ai_settings = ai_settings.canonicalize().unwrap_or(ai_settings);
     let mut shortcuts = Vec::new();
     for entry in WalkDir::new(&directory).sort_by_file_name() {
         let entry = entry.with_context(|| format!("Cannot traverse launcher directory {}", directory.display()))?;
         let path = entry.path();
         if entry.file_type().is_dir() || path.extension() != Some(std::ffi::OsStr::new("toml")) { continue; }
-        if path.canonicalize().as_deref().unwrap_or(path) == settings_path { continue; }
+        if path.canonicalize().as_deref().unwrap_or(path) == settings_path || path.canonicalize().as_deref().unwrap_or(path) == ai_settings { continue; }
         let source = fs::read_to_string(path).with_context(|| format!("Cannot read launcher {}", path.display()))?;
         let mut shortcut = Shortcut::parse_draft(&source).with_context(|| format!("Cannot load launcher {}", path.display()))?;
         shortcut.source_path = Some(path.to_owned());
@@ -130,6 +132,24 @@ pub fn parse_shortcut_dir(shortcut_path: PathBuf, settings_path: &Path) -> anyho
 mod tests {
     use super::*;
     use crate::test_support::TestDir;
+    #[test]
+    fn ai_settings_exclusion_uses_original_config_directory_and_keeps_ai_named_launchers() {
+        let dir = crate::test_support::TestDir::new(); let config = dir.path().join("config"); std::fs::create_dir(&config).unwrap();
+        let preferences = config.join("preferences.toml"); let target = dir.path().join("other-preferences.toml"); std::fs::write(&target,"not a launcher").unwrap();
+        std::os::unix::fs::symlink(target,&preferences).unwrap(); let ai = crate::config::ai::AiSettingsStore::path_next_to(&preferences);
+        std::fs::create_dir_all(ai.parent().unwrap()).unwrap(); std::fs::write(ai,"not launcher TOML").unwrap();
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"),"/shortcuts/helix.toml")); std::fs::write(config.join("ai.toml"),source).unwrap();
+        let shortcuts = parse_shortcut_dir(config,&preferences).unwrap(); assert_eq!(shortcuts.len(),1); assert_eq!(shortcuts[0].source_path.as_ref().unwrap().file_name().unwrap(),"ai.toml");
+    }
+
+    #[test]
+    fn application_ai_configuration_is_not_loaded_as_a_launcher() {
+        let dir = crate::test_support::TestDir::new(); let preferences = dir.path().join("preferences.toml");
+        let ai = crate::config::ai::AiSettingsStore::path_next_to(&preferences); std::fs::create_dir_all(ai.parent().unwrap()).unwrap();
+        std::fs::write(ai,"this is deliberately invalid AI TOML").unwrap();
+        assert!(parse_shortcut_dir(dir.path().to_owned(),&preferences).unwrap().is_empty());
+    }
+
     #[test]
     fn optional_category_preserves_legacy_shortcuts() {
         let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/shortcuts/helix.toml")).lines()

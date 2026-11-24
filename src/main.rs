@@ -59,6 +59,7 @@ async fn main() -> anyhow::Result<()> {
 
     app.run();
 
+    runtime::ai::finish_shutdown();
     runtime::files::finish_shutdown();
     runtime::clipboard::finish_shutdown();
     runtime::pdf::finish_shutdown();

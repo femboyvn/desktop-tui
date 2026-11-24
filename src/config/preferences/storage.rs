@@ -13,17 +13,17 @@ impl Preferences {
     pub fn load(path: &Path) -> (Self, Option<String>) {
         match read_settings(path) {
             Ok(None) => (Self::default(), None),
-            Ok(Some(contents)) => match toml::from_str::<Self>(&contents).and_then(|preferences| {
+            Ok(Some(contents)) => match parse_preferences(&contents).and_then(|preferences| {
                 if preferences.terminal_lock.is_some() {
                     check_private_storage(path).map_err(serde::de::Error::custom)?;
                 }
                 Ok(preferences)
             }) {
                 Ok(preferences) => (preferences, None),
-                Err(error) => (
+                Err(_error) => (
                     Self::default(),
                     Some(format!(
-                        "Could not load {}: {error}\nUsing Femboy defaults. The original file has been kept.",
+                        "Could not load {}: invalid settings or unsafe private-storage permissions.\nUsing Femboy defaults. The original file has been kept.",
                         path.display()
                     )),
                 ),
@@ -50,7 +50,7 @@ impl Preferences {
             return Ok(None);
         };
         let security: SecurityOnly = toml::from_str(&contents)
-            .context("Cannot read Terminal Lock settings. Repair the settings file before changing passwords or locking.")?;
+            .map_err(|_| anyhow::anyhow!("Cannot read Terminal Lock settings. Repair the settings file before changing passwords or locking."))?;
         if security.terminal_lock.is_some() {
             check_private_storage(path)?;
         }
@@ -64,7 +64,14 @@ impl Preferences {
         path: &Path,
         expected: Option<&Option<LockCredential>>,
     ) -> anyhow::Result<()> {
-        let contents = toml::to_string_pretty(self)?;
+        self.save_document(path, expected, None)
+    }
+
+    /// Retire only the imported legacy section; preserve the current system document under its lock.
+    pub(crate) fn retire_legacy_ai(path: &Path, legacy: &toml::Value) -> anyhow::Result<()> {
+        Self::default().save_document(path, None, Some(legacy))
+    }
+    fn save_document(&self, path: &Path, expected: Option<&Option<LockCredential>>, retire: Option<&toml::Value>) -> anyhow::Result<()> {
         let parent = path
             .parent()
             .context("Settings path has no parent directory")?;
@@ -92,6 +99,22 @@ impl Preferences {
                 "The saved password changed in another instance. Cancel and reopen Preference before saving."
             );
         }
+        let mut document = toml::Value::try_from(self)?;
+        if let Some(original) = read_settings(path)? {
+            let current: toml::Value = toml::from_str(&original).map_err(|_| anyhow::anyhow!("Cannot read settings. The original file is kept."))?;
+            if let Some(legacy) = current.get("ai") {
+                if let Some(expected) = retire {
+                    anyhow::ensure!(legacy == expected,"Legacy AI settings changed; original settings kept.");
+                    document = current;
+                    if let Some(table) = document.as_table_mut() { table.remove("ai"); }
+                } else {
+                    // Preserve old keys until AI Chat imports them into its own configuration.
+                    document.as_table_mut().unwrap().insert("ai".into(),legacy.clone());
+                }
+            } else if retire.is_some() { return Ok(()); }
+        } else if retire.is_some() { return Ok(()); }
+        let contents = zeroize::Zeroizing::new(toml::to_string_pretty(&document)?);
+        anyhow::ensure!(contents.len() <= 65536, "Settings file exceeds 64 KiB.");
         match std::fs::symlink_metadata(path) {
             Ok(metadata) => anyhow::ensure!(
                 metadata.is_file() && metadata.uid() == effective_uid(),
@@ -123,6 +146,12 @@ impl Preferences {
         }
         result.with_context(|| format!("Could not save {}", path.display()))
     }
+}
+
+fn parse_preferences(contents: &str) -> Result<Preferences,toml::de::Error> {
+    let mut document: toml::Value = toml::from_str(contents)?;
+    if let Some(table) = document.as_table_mut() { table.remove("ai"); }
+    document.try_into()
 }
 
 struct SettingsLock(std::fs::File);
@@ -187,7 +216,7 @@ fn check_private_storage(path: &Path) -> anyhow::Result<()> {
         let metadata = std::fs::symlink_metadata(entry)?;
         anyhow::ensure!(
             metadata.uid() == effective_uid() && metadata.mode() & 0o077 == 0,
-            "Saved password storage must be owned by you and private. Run chmod 700 on the application configuration directory and chmod 600 on preferences.toml, then try again."
+            "Secret settings storage must be owned by you and private. Run chmod 700 on the application configuration directory and chmod 600 on preferences.toml, then try again."
         );
     }
     Ok(())
@@ -204,6 +233,19 @@ mod tests {
     use super::*;
     use super::super::model::{DateFormat, PanelPreferences, Rgb};
     use crate::test_support::TestDir;
+
+    #[test]
+    fn legacy_ai_does_not_participate_in_system_preferences() {
+        let dir = TestDir::new(); let path = dir.path().join("preferences.toml");
+        Preferences::default().save(&path,None).unwrap();
+        let mut document: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        document.as_table_mut().unwrap().insert("ai".into(),toml::Value::String("invalid AI config".into()));
+        std::fs::write(&path,toml::to_string(&document).unwrap()).unwrap();
+        let (preferences,warning) = Preferences::load(&path); assert!(warning.is_none());
+        preferences.save(&path,Some(&None)).unwrap();
+        let after: toml::Value = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(after["ai"],document["ai"],"system edits preserve unimported legacy data");
+    }
 
     #[test]
     fn ascii_background_is_loaded_and_saved_with_existing_preferences() {

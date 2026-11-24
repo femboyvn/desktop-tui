@@ -324,3 +324,14 @@ and Minesweeper under **Application > Games**. See
 controls, ASCII Paint projects/text export, and Text editor document handling. PDF Reader needs Poppler's
 `pdfinfo` and `pdftoppm` on PATH (`poppler-utils` on Debian/Ubuntu or `poppler`
 on Arch); rendering runs outside the UI and needs no graphical session.
+
+## Use AI Chat
+
+Open Application > Utility > AI Chat and click Settings. Configure a provider API
+key and model ID, select Replace key, paste the key, and Save. AI Chat has its own
+settings dialog and ai.toml, independent of system Preferences. Keys are
+recoverable, unencrypted local secrets protected by owner-only permissions. Old
+keys/model choices are imported from the former system AI section automatically.
+The shortcut directory does not change the AI settings location.
+See the [AI Chat guide](README.md#ai-chat) for provider switching, attachments,
+conversation storage, keyboard controls and recovery behavior.

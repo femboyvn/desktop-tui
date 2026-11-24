@@ -18,6 +18,7 @@ pub(crate) enum AppId {
     ImageViewer,
     MusicPlayer,
     PdfReader,
+    AiChat,
     AsciiPaint,
     Kanban,
     Game(GameKind),
@@ -55,6 +56,7 @@ pub(crate) fn with_starters(mut shortcuts: Vec<Shortcut>) -> Vec<Shortcut> {
 
 pub(crate) fn applications(shortcuts: &[Shortcut]) -> Vec<Application> {
     let mut apps = vec![
+        Application { id: AppId::AiChat, name: "AI Chat".into(), category: "Utility".into() },
         Application { id: AppId::Kanban, name: "Kanban".into(), category: "Utility".into() },
         Application { id: AppId::AsciiPaint, name: "ASCII Paint".into(), category: "Utility".into() },
         Application { id: AppId::FileBrowser, name: "File Browser".into(), category: "System".into() },
@@ -82,6 +84,11 @@ pub(crate) fn categories(apps: &[Application]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn ai_chat_is_native_utility_without_shortcuts() {
+        assert!(applications(&[]).iter().any(|app| app.name == "AI Chat" && app.category == "Utility"));
+    }
+
     #[test]
     fn browser_starter_uses_quadrants_and_preserves_same_name_overrides() {
         let starters = with_starters(vec![]);
@@ -152,7 +159,7 @@ mod tests {
     fn starters_and_categories_are_available_without_shortcuts() {
         let shortcuts = with_starters(vec![]);
         let apps = applications(&shortcuts);
-        assert_eq!(apps.len(), 13);
+        assert_eq!(apps.len(), 14);
         assert!(apps.iter().any(|app| app.id == AppId::AsciiPaint && app.name == "ASCII Paint" && app.category == "Utility"));
         assert!(apps.iter().any(|app| app.id == AppId::PdfReader && app.category == "Utility"));
         assert_eq!(categories(&apps), ["System", "Utility", "User", "Games"]);

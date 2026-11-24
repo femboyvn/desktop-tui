@@ -153,6 +153,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn system_preferences_do_not_serialize_ai_settings() {
+        let contents = toml::to_string_pretty(&Preferences::default()).unwrap();
+        let value: toml::Value = toml::from_str(&contents).unwrap();
+        assert!(value.get("ai").is_none(), "AI Chat configuration belongs to its own file and dialog");
+        assert_eq!(toml::from_str::<Preferences>(&contents).unwrap(), Preferences::default());
+    }
+
+    #[test]
     fn defaults_are_light_femboy() {
         let p = Preferences::default();
         assert_eq!(p.desktop.background, Rgb(246, 217, 238));

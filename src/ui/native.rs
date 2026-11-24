@@ -15,3 +15,8 @@ mod ascii_paint;
 pub(crate) use ascii_paint::PaintWindow;
 pub(crate) mod kanban;
 pub(crate) use kanban::{KanbanWindow,KanbanAction};
+
+mod ai_chat;
+pub(crate) use ai_chat::AiChatWindow;
+
+mod ai_settings;

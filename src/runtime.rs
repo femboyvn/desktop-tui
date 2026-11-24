@@ -14,3 +14,5 @@ pub(crate) mod pdf;
 
 pub(crate) mod clipboard;
 pub(crate) mod kanban;
+
+pub(crate) mod ai;

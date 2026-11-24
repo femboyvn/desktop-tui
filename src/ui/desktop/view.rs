@@ -10,7 +10,7 @@ use crate::ui::locking::{LockSetupDialog, TerminalLockScreen};
 use crate::ui::preferences::PreferencesDialog;
 use crate::ui::terminal::{TuiWindow, LaunchContext, TerminalAction};
 use super::open_with::OpenWithDialog;
-use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow, PdfWindow, PaintWindow, KanbanWindow, KanbanAction};
+use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow, PdfWindow, PaintWindow, KanbanWindow, KanbanAction, AiChatWindow};
 use crate::ui::build_theme;
 use appcui::prelude::appbar::MenuButton;
 use appcui::prelude::menu::{Command, SingleChoice};
@@ -80,6 +80,7 @@ pub struct MyDesktop {
     browser_window: Handle<BrowserWindow>,
     music_window: Handle<MusicWindow>,
     pdf_window: Handle<PdfWindow>,
+    ai_window: Handle<AiChatWindow>,
     paint_window: Handle<PaintWindow>,
     kanban_windows: Vec<Handle<KanbanWindow>>,
     kanban_files: crate::runtime::kanban::OpenFiles,
@@ -96,7 +97,7 @@ pub struct MyDesktop {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum WindowTarget {
-    Kanban(Handle<KanbanWindow>), Paint(Handle<PaintWindow>), Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Pdf(Handle<PdfWindow>), Game(Handle<GameWindow>), Help(Handle<HelpWindow>),
+    AiChat(Handle<AiChatWindow>), Kanban(Handle<KanbanWindow>), Paint(Handle<PaintWindow>), Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Pdf(Handle<PdfWindow>), Game(Handle<GameWindow>), Help(Handle<HelpWindow>),
 }
 #[derive(Clone, PartialEq)]
 struct WindowInfo { target: WindowTarget, caption: String, visible: bool, shortcut: Option<usize> }
@@ -114,6 +115,7 @@ fn taskbar_caption(title: &str) -> String {
 enum DesktopIntent { Exit, Power(SystemAction) }
 
 struct LockVisibility {
+    ai: Option<(Handle<AiChatWindow>,bool)>,
     kanban: Vec<(Handle<KanbanWindow>, bool)>,
     paint: Option<(Handle<PaintWindow>, bool)>,
     terminals: Vec<(Handle<TuiWindow>, bool)>,
@@ -167,6 +169,7 @@ impl MyDesktop {
             browser_window: Handle::None,
             music_window: Handle::None,
             pdf_window: Handle::None,
+            ai_window: Handle::None,
             paint_window: Handle::None, pending_desktop: None,
             kanban_windows: Vec::new(), kanban_files: Default::default(), last_kanban: None,
             guard_queue: Default::default(), guard_current: None,
@@ -220,6 +223,10 @@ impl MyDesktop {
                 let caption = if title == "Image Viewer" { title.to_owned() } else { format!("Image Viewer: {title}") };
                 (caption, window.is_visible(), None)
             }
+            WindowTarget::AiChat(handle) => {
+                let window = self.windowt(handle)?; if window.is_closing() { return None; }
+                (window.title().to_owned(),window.is_visible(),None)
+            }
             WindowTarget::Kanban(handle) => {
                 let window = self.windowt(handle)?;
                 if window.is_closing() { return None; }
@@ -260,6 +267,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
+            WindowTarget::AiChat(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Kanban(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
@@ -275,6 +283,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
+            WindowTarget::AiChat(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Kanban(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); window.set_visible(false); },
             WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); window.set_visible(false); },
             WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
@@ -283,7 +292,7 @@ impl MyDesktop {
         }
     }
     fn close_window(&mut self, target: WindowTarget) {
-        if matches!(target,WindowTarget::Paint(_)|WindowTarget::Kanban(_)) {
+        if matches!(target,WindowTarget::Paint(_)|WindowTarget::Kanban(_)|WindowTarget::AiChat(_)) {
             if self.pending_desktop.is_some() { return; }
             self.focus_window(target);
         }
@@ -292,6 +301,7 @@ impl MyDesktop {
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
+            WindowTarget::AiChat(handle) => if let Some(window) = self.window_mut(handle) { window.request_close(); },
             WindowTarget::Kanban(handle) => if let Some(window) = self.window_mut(handle) { window.request_close(); },
             WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.request_close(); },
             WindowTarget::Pdf(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
@@ -411,13 +421,14 @@ impl MyDesktop {
     }
     fn hide_for_terminal_lock(&mut self) -> LockVisibility {
         self.terminal_locked = true;
-        let mut visibility = LockVisibility { kanban: Vec::new(), paint: None, terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None, pdf: None, games: Vec::new() };
+        let mut visibility = LockVisibility { ai: None, kanban: Vec::new(), paint: None, terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None, pdf: None, games: Vec::new() };
         for handle in self.terminal_handles() {
             if let Some(window) = self.window_mut(handle) {
                 visibility.terminals.push((handle, window.is_visible()));
                 window.set_visible(false);
             }
         }
+        let handle = self.ai_window; if let Some(window) = self.window_mut(handle) { visibility.ai = Some((handle,window.is_visible())); window.set_visible(false); }
         for handle in self.kanban_windows.clone() {
             if let Some(window) = self.window_mut(handle) { visibility.kanban.push((handle,window.is_visible())); window.suspend(); window.set_visible(false); }
         }
@@ -459,6 +470,7 @@ impl MyDesktop {
         visibility
     }
     fn restore_after_terminal_unlock(&mut self, visibility: LockVisibility) {
+        if let Some((handle,visible)) = visibility.ai && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         for (handle,visible) in visibility.kanban { if let Some(window) = self.window_mut(handle) { window.set_visible(visible); } }
         if let Some((handle, visible)) = visibility.paint
             && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
@@ -524,12 +536,13 @@ impl MyDesktop {
     }
 
     fn set_document_holds(&mut self,held: bool) {
+        let handle = self.ai_window; if let Some(window) = self.window_mut(handle) { window.set_guard_hold(held); }
         let paint = self.paint_window; if let Some(window) = self.window_mut(paint) { window.set_guard_hold(held); }
         for handle in self.kanban_windows.clone() { if let Some(window) = self.window_mut(handle) { window.set_guard_hold(held); } }
     }
     fn guard_desktop(&mut self, intent: DesktopIntent) {
         if self.pending_desktop.is_some() { return; }
-        self.guard_queue = self.window_order.iter().copied().filter(|target| matches!(target,WindowTarget::Paint(_)|WindowTarget::Kanban(_)) && self.window_info(*target).is_some()).collect();
+        self.guard_queue = self.window_order.iter().copied().filter(|target| matches!(target,WindowTarget::Paint(_)|WindowTarget::Kanban(_)|WindowTarget::AiChat(_)) && self.window_info(*target).is_some()).collect();
         self.pending_desktop = Some(intent); self.set_document_holds(true); self.next_document_guard();
     }
     fn next_document_guard(&mut self) {
@@ -537,6 +550,7 @@ impl MyDesktop {
             self.guard_current = Some(target); self.focus_window(target);
             match target {
                 WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.request_guard(); },
+                WindowTarget::AiChat(handle) => if let Some(window) = self.window_mut(handle) { window.request_guard(); },
                 WindowTarget::Kanban(handle) => if let Some(window) = self.window_mut(handle) { window.request_guard(); }, _ => {}
             }
         } else if let Some(intent) = self.pending_desktop.take() {
@@ -553,6 +567,7 @@ impl MyDesktop {
             },
             DesktopIntent::Exit => {
                 self.exit_saved = true;
+                let ai = self.ai_window; if let Some(window) = self.window_mut(ai) { window.shutdown(); }
                 for handle in self.kanban_windows.clone() { if let Some(window) = self.window_mut(handle) { window.shutdown(); } }
                 let paint = self.paint_window;
                 if let Some(window) = self.window_mut(paint) { window.shutdown(); }
@@ -581,6 +596,7 @@ impl MyDesktop {
         if self.pending_desktop.is_none() { return; }
         let result = match self.guard_current {
             Some(WindowTarget::Paint(handle)) => match self.window_mut(handle) { Some(window) if !window.is_closing() => window.take_guard_result(),_ => Some(true) },
+            Some(WindowTarget::AiChat(handle)) => match self.window_mut(handle) { Some(window) if !window.is_closing() => window.take_guard_result(),_ => Some(true) },
             Some(WindowTarget::Kanban(handle)) => match self.window_mut(handle) { Some(window) if !window.is_closing() => window.take_guard_result(),_ => Some(true) },
             _ => Some(true),
         };
@@ -588,6 +604,15 @@ impl MyDesktop {
             Some(true) => self.next_document_guard(),
             Some(false) => { self.pending_desktop = None; self.guard_current = None; self.guard_queue.clear(); self.set_document_holds(false); },
             None => {},
+        }
+    }
+    fn open_ai_chat(&mut self) {
+        if self.pending_desktop.is_some() { return; }
+        let handle = self.ai_window;
+        if self.windowt(handle).is_some_and(|window| !window.is_closing()) { self.focus_window(WindowTarget::AiChat(handle)); return; }
+        match AiChatWindow::new() {
+            Ok(mut window) => { window.constrain_to(self.desktop_rect().size()); let handle = self.add_window(window); self.ai_window = handle; self.track_window(WindowTarget::AiChat(handle)); },
+            Err(error) => dialogs::error("Cannot open AI Chat",&format!("{error:#}")),
         }
     }
     fn open_kanban(&mut self,path: Option<PathBuf>) {
@@ -738,6 +763,7 @@ impl MyDesktop {
                 self.launch_independent(index,LaunchContext::File(&path),&title)?;
             }
             AppId::ImageViewer => self.open_image(Some(path)), AppId::PdfReader => self.open_pdf(Some(path)),
+            AppId::AiChat => self.open_ai_chat(),
             AppId::Kanban => self.open_kanban(Some(path)),
             AppId::MusicPlayer => self.open_music(Some(path)), AppId::AsciiPaint => self.open_paint(Some(path)),
             _ => return Err(anyhow::anyhow!("This application cannot open files.")),
@@ -797,6 +823,7 @@ impl MyDesktop {
             AppId::ImageViewer => self.open_image(None),
             AppId::FileBrowser => self.open_browser(),
             AppId::MusicPlayer => self.open_music(None),
+            AppId::AiChat => self.open_ai_chat(),
             AppId::Kanban => self.open_kanban(None),
             AppId::AsciiPaint => self.open_paint(None),
             AppId::PdfReader => self.open_pdf(None),
@@ -873,6 +900,7 @@ impl OnPaint for MyDesktop {
 impl OnResize for MyDesktop {
     fn on_resize(&mut self, _old_size: Size, _new_size: Size) {
         let available = self.desktop_rect().size();
+        let handle = self.ai_window; if let Some(window) = self.window_mut(handle) { window.constrain_to(available); }
         for handle in self.kanban_windows.clone() { if let Some(window) = self.window_mut(handle) { window.constrain_to(available); } }
         let paint = self.paint_window;
         if let Some(window) = self.window_mut(paint) { window.constrain_to(available); }
@@ -1093,6 +1121,7 @@ impl MenuEvents for MyDesktop {
                 WindowTarget::Browser(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Image(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Music(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
+                WindowTarget::AiChat(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Kanban(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Paint(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Pdf(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
@@ -1281,6 +1310,28 @@ mod tests {
     use crate::config::preferences::Rgb;
     use crate::test_support::{TestDir, UI_LOCK};
     use virtual_terminal::{Input, Output};
+    #[test]
+    fn ai_chat_tracks_singleton_workspaces_lock_and_session_without_relaunching_requests() {
+        let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new();
+        let mut desktop = MyDesktop::new(vec![],Preferences::default(),dir.path().join("preferences.toml"),None,Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
+        DesktopEvents::on_start(&mut desktop);
+        let preferences = crate::config::ai::AiPreferences::default();
+        let service = crate::runtime::ai::ChatService::new_at(dir.path().join("ai"),preferences.clone()).unwrap();
+        let window = AiChatWindow::with_service(service,preferences).unwrap();
+        let handle = desktop.add_window(window); desktop.ai_window = handle; desktop.track_window(WindowTarget::AiChat(handle));
+        desktop.hide_window(WindowTarget::AiChat(handle)); desktop.launch_application(AppId::AiChat);
+        assert_eq!(desktop.ai_window,handle); assert!(desktop.windowt(handle).unwrap().is_visible());
+        assert!(desktop.window_tasks.iter().any(|task| task.info.target == WindowTarget::AiChat(handle)));
+        desktop.move_to_workspace(WindowTarget::AiChat(handle),1); desktop.focus_window(WindowTarget::AiChat(handle));
+        assert_eq!(desktop.active_workspace,1);
+        let visibility = desktop.hide_for_terminal_lock(); assert!(!desktop.windowt(handle).unwrap().is_visible());
+        desktop.restore_after_terminal_unlock(visibility); assert!(desktop.windowt(handle).unwrap().is_visible());
+        let saved = desktop.session_snapshot();
+        assert!(saved.windows.iter().any(|window| matches!(&window.launch,SavedLaunch::Native { app,path: None } if app == "ai_chat")));
+        desktop.window_mut(handle).unwrap().shutdown(); app.run();
+    }
+
     #[test]
     fn restored_documents_keep_the_original_launch_directory_after_launcher_changes() {
         let _lock = UI_LOCK.lock().unwrap(); let runtime = tokio::runtime::Runtime::new().unwrap(); let _entered = runtime.enter();
@@ -1803,7 +1854,7 @@ mod tests {
         let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
         let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
         DesktopEvents::on_start(&mut desktop);
-        assert_eq!(desktop.application_commands.len(), 13);
+        assert_eq!(desktop.application_commands.len(), 14);
         let browser_command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::FileBrowser).unwrap().0;
         MenuEvents::on_command(&mut desktop, Handle::None, browser_command, Commands::LaunchApplication);
         let browser = desktop.browser_window;

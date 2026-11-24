@@ -375,3 +375,35 @@ before Exit; a later Cancel or failed save must keep all apps and dirty contents
 Use the mock system runner for Shutdown/Restart, never host power commands.
 Restore saved board paths in another session; exclude untitled and unsaved content.
 Headless tests do not replace this real-terminal matrix.
+
+## AI Chat regressions
+
+Run focused offline tests before the full Rust gates:
+
+```sh
+cargo test --locked ai
+cargo test --locked config::preferences
+```
+
+Fixtures cover provider authentication/request schemas, mixed-provider history,
+SSE byte splits/Unicode/errors/refusals/EOF, size limits, immutable attachment
+copies, private atomic storage, corruption, symlinks, concurrent instances,
+interrupted recovery, cancellation/late results, flush acknowledgements, retries,
+secret redaction, independent settings saves, migration and settings draft preservation. AppCUI debug tests exercise
+composer snapshots, model edits, transcript wrapping/scroll anchoring and guards.
+Automated tests use no live provider credentials or paid API calls.
+
+In an attended terminal with explicit sample shortcuts, check AI Chat at 80x24,
+120x36 and 40x12: menu/palette launch, singleton restore, the separate AI Chat Settings dialog,
+key paste/Keep/Replace/Remove/Save/Cancel, multiline compose, keyboard/mouse,
+streaming scroll, provider/model switching, Attach/Files/Copy, and readable errors.
+Exercise supported and unsupported files, exclusion of a historical attachment,
+Stop/Retry, New/Delete, hide/show, workspaces, tiling, lock/unlock, resize, close,
+restart and Exit. Test save failure with Retry/Discard/Cancel and verify other
+windows stay open after cancellation. Use separate authorized test keys for any
+live provider smoke checks; headless fixtures do not establish real API or terminal
+appearance. No API request should occur merely on opening settings or history. Verify system
+Preferences has its original five tabs and no AI controls. AI Save/Cancel must
+leave system preferences unchanged; system Save must preserve ai.toml even when
+it is invalid. Test one-time migration, existing standalone-file precedence,
+missing keys, stale AI saves, public/symlinked AI files, and shortcut scanning.

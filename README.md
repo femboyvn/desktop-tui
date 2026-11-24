@@ -588,6 +588,58 @@ and verification steps.
 
 The MIT license for this project can be seen [here](./LICENSE)
 
+## AI Chat
+
+Open **Application > Utility > AI Chat**, or search for AI Chat in the desktop
+command palette. Click **Settings** inside the AI Chat window to choose the
+provider for new chats and enter a model ID for OpenAI, Claude, or Gemini. Select **Replace
+key**, paste your provider API key into the masked field, and Save. Keep preserves
+an existing key; Remove deletes it. Keys are saved in recoverable, unencrypted
+form in AI Chat's own `ai.toml` (0600, configuration directory 0700), normally
+`~/.config/desktop-tui/ai-chat/ai.toml`. This dialog saves independently of system
+Preferences; Cancel discards its edits. Existing keys and model choices from the
+old system `[ai]` section are imported automatically when AI Chat first opens.
+
+Chat supports multiple locally saved conversations. Enter adds a newline;
+**Alt+S** sends, **Alt+A** attaches a file, **Alt+X** stops a reply, and **Ctrl+N**
+starts a chat. Chats selects saved conversations; Delete asks before removing a
+conversation and its copied attachments. Wide windows also show the conversation
+list beside the transcript. Scroll with arrows, Page Up/Down, Home/End, or the
+wheel; streaming follows new output only while at the bottom. Copy copies the
+latest reply to the shared internal clipboard (256 KiB maximum).
+
+Change the provider or model in the chat header; **Use model** applies a typed
+model ID. Switching sends nothing by itself. The next Send replays conversation
+text and included files to the displayed provider. Replies retain their original
+provider/model labels. Stop the active reply before changing providers/models;
+one reply runs at a time, while other chats remain browsable. Retry repeats an
+incomplete answer without adding the same user message again. Partial answers
+remain visible and are excluded from subsequent requests.
+
+The file picker allows any extension. Each selected regular file is copied into
+the chat's private local storage; changing or deleting the original does not
+change that snapshot. UTF-8 text and code work across providers. Other supported
+inputs depend on the provider/model: common images and PDFs, OpenAI Office
+inputs, and Gemini audio/video. Unsupported inputs show an explanation and block
+Send. **Files** lets you include/exclude attachments from future requests, or
+remove pending files; files are never silently omitted. No attachment is sent
+until Send. There are no file-conversion or AI command-execution tools.
+
+Limits are 10 MiB per file, 20 MiB of included file data, 32 MiB per encoded
+request, 64 KiB of composed text, 1 MiB per reply, and 4 MiB per transcript.
+Provider/model limits can be stricter. A missing key/model, authentication error,
+rate limit, oversized context, unsupported input, or interrupted connection is
+reported in the chat; retries are explicit.
+
+Chats and attachment snapshots live under the application state directory's
+`ai/chats` folder (normally `$XDG_STATE_HOME/desktop-tui/ai/chats` or
+`~/.local/state/desktop-tui/ai/chats`). History is private and saved atomically.
+A second instance opens the same history read-only. Hiding, switching workspaces,
+or Terminal Lock keeps a reply running. Closing stops generation and saves its
+partial output. If saving fails, Retry / Discard / Cancel protects unsaved work
+before Close, Exit, Shutdown, or Restart. Restoring a saved workspace opens the
+chat window without resuming an old network request.
+
 ## Desktop menu and preferences
 
 Linux is the supported target. **Desktop** contains Help, the command palette,
@@ -600,7 +652,7 @@ details on the right; its contents are also available in [HELP.md](HELP.md).
 
 The default Femboy palette uses pale pink `#F6D9EE`, white `#FFF7FC`, plum `#3F2A4A`, pink accents `#E8A4C9`, and lavender selection `#C8B5EA`. **Reset to Femboy** changes the color draft and preserves password settings. **Save** validates and persists all edits, then immediately recolors the desktop and running terminal windows, including hidden windows. **Cancel** or Escape discards edits. Failed saves leave the active palette and saved password unchanged.
 
-Settings live in `preferences.toml` in the application configuration folder, normally `~/.config/desktop-tui` on Linux (or `$XDG_CONFIG_HOME/desktop-tui`). A custom shortcut folder does not change this location. Only that exact settings file is excluded from shortcut discovery. Missing settings use defaults. Invalid settings produce one startup warning and use default colors without overwriting the original file. Terminal Lock refuses to start when password settings are malformed or unreadable.
+Settings live in `preferences.toml` in the application configuration folder, normally `~/.config/desktop-tui` on Linux (or `$XDG_CONFIG_HOME/desktop-tui`). A custom shortcut folder does not change this location. The system preferences file and AI Chat’s own `ai-chat/ai.toml` are excluded from shortcut discovery. Missing settings use defaults. Invalid settings produce one startup warning and use default colors without overwriting the original file. Terminal Lock refuses to start when password settings are malformed or unreadable.
 
 The **Security** tab lets you set, change, or remove a persistent Terminal Lock password. Choose **Set / change saved password**, enter and confirm the new password, then **Save**. Changing or removing an existing password requires the current password. **Keep current setting** preserves it while editing colors. Cancel or Escape discards every tab's edits. Saved passwords are reused for Terminal Lock after restarting Desktop-TUI; when none is saved, locking asks for a temporary password each time. This setting does not change your Linux account password.
 

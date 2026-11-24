@@ -14,6 +14,18 @@ mod tests {
     use crate::test_support::{TestDir, UI_LOCK};
 
     #[test]
+    fn ai_app_settings_are_reserved_but_existing_ai_named_launchers_remain_available() {
+        let dir = TestDir::new(); let settings = dir.path().join("preferences.toml");
+        assert!(new_destination(dir.path(),"ai.toml",&settings).is_ok());
+        let ai = crate::config::ai::AiSettingsStore::path_next_to(&settings); fs::create_dir(ai.parent().unwrap()).unwrap();
+        assert!(new_destination(ai.parent().unwrap(),"ai.toml",&settings).is_err());
+        let equivalent = ai.parent().unwrap().join("../ai-chat");
+        assert!(new_destination(&equivalent,"ai.toml",&settings).is_err());
+        let source = include_str!(concat!(env!("CARGO_MANIFEST_DIR"),"/shortcuts/helix.toml"));
+        assert!(save_draft(dir.path(),&settings,&ai,source,None).is_err()); assert!(!ai.exists());
+    }
+
+    #[test]
     fn invalid_drafts_and_duplicate_names_preserve_existing_files() {
         let dir = TestDir::new();
         let path = dir.path().join("editor.toml");
@@ -101,13 +113,24 @@ mod tests {
     }
 }
 
+fn destination_identity(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        path.parent().and_then(|parent| parent.canonicalize().ok())
+            .zip(path.file_name()).map(|(parent,name)| parent.join(name)).unwrap_or_else(|| path.to_owned())
+    })
+}
+fn reserved_settings(path: &Path,settings: &Path) -> bool {
+    let path = destination_identity(path);
+    [settings.to_owned(),crate::config::ai::AiSettingsStore::path_next_to(settings)].iter().any(|reserved| path == destination_identity(reserved))
+}
+
 fn new_destination(directory: &Path, filename: &str, settings: &Path) -> anyhow::Result<PathBuf> {
     let name = Path::new(filename);
     if filename.is_empty() || name.file_name() != Some(name.as_os_str()) || name.extension() != Some(std::ffi::OsStr::new("toml")) {
         bail!("Enter a filename ending in .toml, without a directory path");
     }
     let path = directory.join(name);
-    if path == settings || path.canonicalize().ok().is_some_and(|path| settings.canonicalize().ok().as_ref() == Some(&path)) {
+    if reserved_settings(&path,settings) {
         bail!("The application settings file cannot be used as a launcher");
     }
     Ok(path)
@@ -116,6 +139,7 @@ fn new_destination(directory: &Path, filename: &str, settings: &Path) -> anyhow:
 /// Validate the complete candidate catalog before atomically replacing any source.
 /// An existing draft must still match the loaded source; a new draft never overwrites.
 fn save_draft(directory: &Path, settings: &Path, path: &Path, text: &str, original: Option<&str>) -> anyhow::Result<()> {
+    if reserved_settings(path,settings) { bail!("Application settings cannot be replaced with a launcher"); }
     let mut draft = Shortcut::parse_draft(text)?;
     draft.source_path = Some(path.to_owned());
     let mut shortcuts = parse_shortcut_dir(directory.to_owned(),settings)?;

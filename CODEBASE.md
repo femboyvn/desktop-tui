@@ -144,7 +144,7 @@ modules and expose shared types and entry points through crate-scoped re-exports
    directory does not change the settings location. The shortcut directory is
    created if necessary.
 2. `parse_shortcut_dir` recursively walks the selected directory, deserializes
-   exact `.toml` files in sorted path order, excludes the exact settings file,
+   exact `.toml` files in sorted path order, excludes the system settings file and AI Chat’s own settings file,
    reports traversal/read/TOML errors, rejects duplicate names/IDs and sorts by
    taskbar position. Source-relative launcher working directories become absolute.
 3. `MyDesktop::new` merges external starters without replacing user shortcuts.
@@ -516,3 +516,39 @@ shows visible instances and groups them under Apps when necessary. Hiding a
 window retains it for Application > Background windows; closing unregisters its
 popup and removes its app-bar item. Overflow lists paginate beyond100 entries
 to stay within AppCUI keyboard navigation bounds.
+
+## Native AI Chat
+
+`config::ai` owns provider identities, AI preferences, redacted zeroizing API
+keys, and the independent `AiSettingsStore`. AI Chat Settings is a native app
+dialog with its own worker for loading/saving `ai.toml` and a separate writer
+lock. It has Keep/Replace/Remove key actions, private atomic writes, sanitized
+errors and stale-save protection. System Preferences retains its original five
+tabs and has no AI model or credential state. Legacy `[ai]` settings are copied
+to the separate file before removal; system saves preserve unimported legacy
+data without validating it. Shortcut discovery excludes both settings files.
+
+`runtime::ai::ChatService` owns a bounded command queue and coalesced versioned
+snapshots. Its worker owns local history and an asynchronous HTTP generation;
+AppCUI only polls snapshots and submits commands. AI configuration is loaded
+by the chat worker before creating the first conversation; snapshots expose only
+model defaults, never keys. The AI window applies its own Settings results
+directly to that service, with no desktop preferences event. The actor runs while windows
+are hidden/locked. Provider adapters encode OpenAI Responses, Claude Messages,
+and Gemini streaming requests, with one incremental SSE decoder. Keys use only
+authentication headers; errors avoid raw request/response bodies. Attachments use
+immutable private local copies and provider-native inline request parts.
+
+`ui::native::ai_chat` provides the singleton window, transcript scroll anchoring,
+composer, provider/model controls and conversation/attachment selectors. The
+composer is polled because AppCUI exposes no TextArea change event; Send and close
+guards capture its latest value explicitly. The desktop tracks AI Chat through
+menus, taskbar, workspaces, theme and Terminal Lock. Close/Exit/Power guards await
+a runtime flush acknowledgement, with Retry/Discard/Cancel on storage failure.
+Main joins tracked AI workers after the UI releases controls.
+
+History is versioned JSON under ProjectDirs state_dir/data_local_dir fallback,
+`ai/chats/<generated-id>`, separate from shortcut discovery. A nonblocking writer
+lease makes other instances read-only. Restored streaming answers become
+Interrupted; no generation starts on startup. No hosted analysis tools, local
+converters, custom provider endpoints or implicit command execution are enabled.

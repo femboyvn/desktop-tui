@@ -40,8 +40,8 @@ impl PreferencesDialog {
     pub fn new(preferences: &Preferences, path: PathBuf) -> Self {
         let draft = PaletteDraft::new(preferences);
         let (security, security_error) = match Preferences::stored_credential(&path) {
-            Ok(credential) => (Some(SecurityDraft::new(credential)), None),
-            Err(error) => (None, Some(format!("{error:#}"))),
+            Ok(credential) => (Some(SecurityDraft::new(credential)),None),
+            Err(error) => (None,Some(format!("{error:#}"))),
         };
         let mut dialog = Self {
             base: ModalWindow::new("Preference", layout!("a:c,w:66,h:20"), window::Flags::None),
@@ -179,7 +179,7 @@ impl PreferencesDialog {
             dialog.passwords[index] = tabs.add(2, input);
         }
         let security_status = if dialog.security_error.is_some() {
-            "Password settings unavailable. Repair preferences.toml\nbefore saving. The original file is kept."
+            "Private settings unavailable. Repair preferences.toml\nbefore saving. The original file is kept."
         } else if dialog
             .security
             .as_ref()

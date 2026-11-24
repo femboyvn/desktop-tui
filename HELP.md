@@ -593,3 +593,23 @@ disposable VM.
 
 Desktop > Exit saves the workspace snapshot, then closes Desktop-TUI and
 its managed applications. It does not lock, shut down, or restart the computer.
+
+## AI Chat
+
+Launch Application > Utility > AI Chat and click its Settings button to configure
+keys and model IDs. Choose Replace key before pasting, then Save. AI Chat Settings
+is independent of system Preferences and saves to its own ai.toml. Existing keys
+from the old system AI section are imported automatically. Keys are stored locally
+in recoverable form with owner-only permissions. Keep
+preserves a key; Remove deletes it; Cancel discards edits.
+
+Enter adds a newline; Alt+S sends, Alt+A attaches, Alt+X stops, Ctrl+N starts a
+chat. Chats selects saved conversations; Files includes/excludes attachments.
+Use model applies the header's model ID. Changing providers/models sends nothing;
+the next Send sends conversation text and included files to that provider.
+Unsupported files block sending with an explanation. Any file extension can be
+selected, but provider/model support and size limits apply. Copy copies the latest
+reply to the internal clipboard. Retry replaces an incomplete answer.
+
+Chats survive restart. Hide, workspaces and Terminal Lock keep generation running;
+Close cancels and saves partial output. Failed saves offer Retry / Discard / Cancel.

@@ -119,6 +119,7 @@ impl MyDesktop {
                 WindowTarget::Image(handle) => SavedLaunch::Native { app: "image".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
                 WindowTarget::Pdf(handle) => SavedLaunch::Native { app: "pdf".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
                 WindowTarget::Music(handle) => SavedLaunch::Native { app: "music".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
+                WindowTarget::AiChat(_) => SavedLaunch::Native { app: "ai_chat".into(),path: None },
                 WindowTarget::Kanban(handle) => SavedLaunch::Native { app: "kanban".into(),path: Some(SavedPath::new(&self.windowt(handle)?.document_path()?)) },
                 WindowTarget::Paint(handle) => SavedLaunch::Native { app: "paint".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
                 WindowTarget::Help(_) => SavedLaunch::Native { app: "help".into(),path: None },
@@ -246,6 +247,7 @@ impl MyDesktop {
                 "image" => { anyhow::ensure!(self.windowt(self.image_window).is_none(),"Image Viewer is already open; existing window kept"); anyhow::ensure!(path.is_some(),"Saved image has no path"); self.open_image(path); WindowTarget::Image(self.image_window) },
                 "pdf" => { anyhow::ensure!(self.windowt(self.pdf_window).is_none(),"PDF Reader is already open; existing window kept"); self.open_pdf(path); WindowTarget::Pdf(self.pdf_window) },
                 "music" => { anyhow::ensure!(self.windowt(self.music_window).is_none(),"Music Player is already open; existing window kept"); self.open_music(path); WindowTarget::Music(self.music_window) },
+                "ai_chat" => { anyhow::ensure!(self.windowt(self.ai_window).is_none(),"AI Chat is already open"); self.open_ai_chat(); WindowTarget::AiChat(self.ai_window) },
                 "kanban" => {
                     anyhow::ensure!(path.is_some(),"Saved Kanban board has no path"); self.open_kanban(path);
                     WindowTarget::Kanban(self.last_kanban.ok_or_else(|| anyhow::anyhow!("Could not restore Kanban board"))?)
