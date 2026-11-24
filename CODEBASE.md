@@ -333,6 +333,22 @@ Explicit Reload matches stable IDs and leaves existing windows alive.
 Diagnostics shares one read-only report between the CLI and a worker-backed
 modal, with fatal configuration/Terminal errors and optional-feature warnings.
 
+## File Transfer
+
+The native File Transfer window owns a worker for the local/remote panes, saved
+sites, and a single copy batch. The worker in `src/runtime/transfer.rs` sends
+listing and prompt events and coalesces progress. Network access and child
+reaping run outside UI callbacks. After the UI exits, main drains transfer
+workers. Workspace snapshots hold only the window identity and layout.
+
+FTP uses SuppaFTP with passive binary transfers. Modern SSH runs the SFTP wire
+protocol on system OpenSSH pipes. Legacy SSH uses a private multiplexed system
+SSH connection, shell metadata commands, and one `scp -O` per regular file.
+SSH askpass sends prompts over a socket in a private temporary directory.
+Each destination file is staged before publication. Downloads reuse the local
+File Browser's checked replacement logic. Saved sites are an independent,
+atomically updated JSON file under the project configuration directory.
+
 ## Native application workers
 
 Music Player's nonblocking audio callback captures recently played, post-volume

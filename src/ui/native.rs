@@ -1,5 +1,7 @@
 mod image_viewer;
 mod browser;
+mod file_transfer;
+pub(crate) use file_transfer::TransferWindow;
 mod music_player;
 mod games;
 mod pdf_reader;

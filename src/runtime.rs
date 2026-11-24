@@ -8,6 +8,7 @@ pub(crate) use terminal::{TerminalParser, TerminalMouseKind, TerminalMouseButton
 pub(crate) mod latest;
 pub(crate) mod images;
 pub(crate) mod files;
+pub(crate) mod transfer;
 pub(crate) mod processes;
 pub(crate) mod music;
 pub(crate) mod pdf;

@@ -248,7 +248,20 @@ fn restore_backup(backup: &Path, destination: &Path) -> anyhow::Result<()> {
     rename_new(backup,destination).with_context(|| format!("Previous destination is preserved at {} because its original path changed",recovery_path(backup).display()))?; Ok(())
 }
 fn publish(staged: &Path, destination: &Path, expected: Option<&Fingerprint>, control: &Control) -> anyhow::Result<Option<PathBuf>> {
-    control.check()?;
+    publish_checked(staged,destination,expected,||control.check())
+}
+
+/// Publish a staged regular file using the same identity and recovery checks as local copies.
+pub(crate) fn publish_download(staged:&Path, destination:&Path, original:Option<&std::fs::Metadata>,
+                               check:impl Fn() -> anyhow::Result<()>) -> anyhow::Result<()> {
+    let expected = original.map(Fingerprint::of);
+    if let Some(backup) = publish_checked(staged,destination,expected.as_ref(),check)? {
+        std::fs::remove_file(&backup).with_context(|| format!("Download published. Previous destination retained at {}",recovery_path(&backup).display()))?;
+    }
+    Ok(())
+}
+fn publish_checked(staged:&Path,destination:&Path,expected:Option<&Fingerprint>,check:impl Fn() -> anyhow::Result<()>) -> anyhow::Result<Option<PathBuf>> {
+    check()?;
     ensure!(maybe_fingerprint(destination)?.as_ref() == expected,"Destination changed; transfer stopped");
     let backup = if let Some(expected) = expected {
         let backup = unique(destination.parent().context("No destination parent")?,"replaced");
@@ -258,7 +271,7 @@ fn publish(staged: &Path, destination: &Path, expected: Option<&Fingerprint>, co
         }
         Some(backup)
     } else { None };
-    if let Err(error) = control.check().and_then(|_| rename_new(staged,destination).context("Cannot publish destination; source preserved")) {
+    if let Err(error) = check().and_then(|_| rename_new(staged,destination).context("Cannot publish destination; source preserved")) {
         if let Some(backup) = &backup { restore_backup(backup,destination)?; }
         return Err(error);
     }

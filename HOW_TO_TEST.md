@@ -390,6 +390,26 @@ Use the mock system runner for Shutdown/Restart, never host power commands.
 Restore saved board paths in another session; exclude untitled and unsaved content.
 Headless tests do not replace this real-terminal matrix.
 
+## File Transfer
+
+Run `cargo test --locked transfer` for the copy worker, loopback FTP fixtures,
+site persistence, pane controls, and desktop integration. FTP fixtures bind
+ephemeral loopback ports. For the optional system SSH round trip, provide two
+private test aliases called `test-sftp` and `test-scp` pointing to isolated
+servers on the development machine that share its temporary directory. Give
+the first access only to the SFTP subsystem and the second a shell with SCP and
+SFTP disabled. Configure a test identity and known hosts, then run
+`cargo test --locked runtime::transfer::tests::ssh_endpoint_round_trip -- --exact --ignored`.
+The test uses fresh temporary directories for its binary file and folder tree.
+
+In a real terminal at 80×24, launch Application > Utility > File Transfer.
+Create and reopen a saved site, test both copy directions, and compare binary
+file contents. Include a folder with an empty subdirectory, spaces and quotes,
+a same-name file, and unrelated destination files. Exercise Replace, Skip,
+Cancel, bad credentials, host-key prompts, connection loss, hide/show, lock,
+workspace restore, and closing during a transfer. Shrink the window until only
+one pane fits and check that Tab and F5 still select the intended direction.
+
 ## AI Chat regressions
 
 Run focused offline tests before the full Rust gates:

@@ -1,7 +1,7 @@
 mod operations;
 mod search;
 mod state;
-pub(crate) use operations::{Operation, OperationWorker, Outcome, TrashItem, list_trash};
+pub(crate) use operations::{Operation, OperationWorker, Outcome, TrashItem, list_trash, publish_download};
 pub(crate) use search::search_filenames;
 pub(crate) use state::{BrowserState, default_state_path, StateJob, StateWorker};
 #[cfg(test)]

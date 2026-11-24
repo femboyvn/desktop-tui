@@ -56,6 +56,7 @@ impl MyDesktop {
     }
     fn suspend_target(&mut self, target: WindowTarget) {
         match target {
+            WindowTarget::Transfer(h) => if let Some(w) = self.window_mut(h) { w.suspend(); },
             WindowTarget::Kanban(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); },
             WindowTarget::Paint(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); },
             WindowTarget::Game(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); },
@@ -119,6 +120,7 @@ impl MyDesktop {
                 WindowTarget::Image(handle) => SavedLaunch::Native { app: "image".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
                 WindowTarget::Pdf(handle) => SavedLaunch::Native { app: "pdf".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
                 WindowTarget::Music(handle) => SavedLaunch::Native { app: "music".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
+                WindowTarget::Transfer(_) => SavedLaunch::Native { app: "file_transfer".into(),path: None },
                 WindowTarget::AiChat(_) => SavedLaunch::Native { app: "ai_chat".into(),path: None },
                 WindowTarget::Kanban(handle) => SavedLaunch::Native { app: "kanban".into(),path: Some(SavedPath::new(&self.windowt(handle)?.document_path()?)) },
                 WindowTarget::Paint(handle) => SavedLaunch::Native { app: "paint".into(),path: self.windowt(handle)?.document_path().as_deref().map(SavedPath::new) },
@@ -248,6 +250,10 @@ impl MyDesktop {
                 "image" => { anyhow::ensure!(self.windowt(self.image_window).is_none(),"Image Viewer is already open; existing window kept"); anyhow::ensure!(path.is_some(),"Saved image has no path"); self.open_image(path); WindowTarget::Image(self.image_window) },
                 "pdf" => { anyhow::ensure!(self.windowt(self.pdf_window).is_none(),"PDF Reader is already open; existing window kept"); self.open_pdf(path); WindowTarget::Pdf(self.pdf_window) },
                 "music" => { anyhow::ensure!(self.windowt(self.music_window).is_none(),"Music Player is already open; existing window kept"); self.open_music(path); WindowTarget::Music(self.music_window) },
+                "file_transfer" => {
+                    anyhow::ensure!(self.windowt(self.transfer_window).is_none(),"File Transfer is already open");
+                    self.open_file_transfer()?; WindowTarget::Transfer(self.transfer_window)
+                }
                 "ai_chat" => { anyhow::ensure!(self.windowt(self.ai_window).is_none(),"AI Chat is already open"); self.open_ai_chat(); WindowTarget::AiChat(self.ai_window) },
                 "kanban" => {
                     anyhow::ensure!(path.is_some(),"Saved Kanban board has no path"); self.open_kanban(path);

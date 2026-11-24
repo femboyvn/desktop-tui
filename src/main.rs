@@ -19,6 +19,7 @@ use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if let Some(status) = runtime::transfer::askpass_if_requested() { std::process::exit(status); }
     let args = Args::parse();
 
     let settings_path = preferences::settings_path()?;
@@ -61,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
 
     runtime::ai::finish_shutdown();
     runtime::files::finish_shutdown();
+    runtime::transfer::finish_shutdown();
     runtime::clipboard::finish_shutdown();
     runtime::pdf::finish_shutdown();
     runtime::music::finish_shutdown();

@@ -13,7 +13,7 @@ Hover another category to switch an opened submenu without clicking.
 System, Utility, User, and Games are always present; extra categories
 follow alphabetically. Empty categories show No apps yet.
 
-File Browser, Terminal (sh), System Performance (btm / bottom),
+File Browser, File Transfer, AI Chat, Terminal (sh), System Performance (btm / bottom),
 Image Viewer, PDF Reader, Text editor (nano), Web Browser (Carboxyl), native Music Player, ASCII Paint, Kanban, and the games
 Snake, 2048, and Minesweeper are
 available with an empty shortcut folder. External tools must be installed separately.
@@ -232,6 +232,31 @@ The compiled audio engine uses the system's sound device and audio
 session. If output is unavailable, check system sound and reopen the file.
 The optional shortcuts/mp3blaster.toml example is an independent external
 player; only that example requires mp3blaster to be installed separately.
+
+## File Transfer
+
+Open Application > Utility > File Transfer. F2 connects to a saved site or opens
+Quick connect. F3 opens Sites, where New, Edit, and Delete change the list.
+Save applies those changes. Set a local or remote starting folder for a site,
+or leave the fields empty to browse your current local folder and remote login folder.
+
+Choose FTP (unencrypted), Modern OpenSSH (SFTP), or Legacy SCP. FTP sends the
+username, password, and data in clear text. A blank FTP username uses anonymous
+login. SSH uses your system configuration. Leave the SSH username and port empty
+to use the values configured for the host. Respond to login or trust prompts in the window.
+
+Tab switches between Local and Remote. Arrows and the mouse select entries.
+Enter or double-click opens a folder, Backspace goes up, and Space marks files
+or folders. F5 copies marked entries, or the focused entry, into the opposite
+pane. Upload and Download follow the active pane, including in a narrow window.
+Folders merge. Choose Replace, Skip, or Cancel for a same-name file. Unrelated
+files stay in place and recognizable links and special files are skipped.
+
+F8 cancels a copy. F2 disconnects. Closing the window cancels current work.
+A hidden or locked window keeps copying until it needs an answer. Return to
+the window for the prompt. F1 shows the complete status, including any staging
+location to inspect after an interrupted upload. Ctrl+R refreshes the active folder.
+Restoring a workspace opens File Transfer disconnected.
 
 ## File Browser
 

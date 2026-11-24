@@ -37,6 +37,7 @@ impl MyDesktop {
     pub(super) fn target_base(&self, target: WindowTarget) -> Option<&Window> {
         match target {
             WindowTarget::Terminal(h) => self.windowt(h).map(|w| &**w),
+            WindowTarget::Transfer(h) => self.windowt(h).map(|w| &**w),
             WindowTarget::Browser(h) => self.windowt(h).map(|w| &**w),
             WindowTarget::Image(h) => self.windowt(h).map(|w| &**w),
             WindowTarget::Music(h) => self.windowt(h).map(|w| &**w),
@@ -51,6 +52,7 @@ impl MyDesktop {
     pub(super) fn target_base_mut(&mut self, target: WindowTarget) -> Option<&mut Window> {
         match target {
             WindowTarget::Terminal(h) => self.window_mut(h).map(|w| &mut **w),
+            WindowTarget::Transfer(h) => self.window_mut(h).map(|w| &mut **w),
             WindowTarget::Browser(h) => self.window_mut(h).map(|w| &mut **w),
             WindowTarget::Image(h) => self.window_mut(h).map(|w| &mut **w),
             WindowTarget::Music(h) => self.window_mut(h).map(|w| &mut **w),

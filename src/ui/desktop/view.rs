@@ -11,7 +11,7 @@ use crate::ui::locking::{LockSetupDialog, TerminalLockScreen};
 use crate::ui::preferences::PreferencesDialog;
 use crate::ui::terminal::{TuiWindow, LaunchContext, TerminalAction};
 use super::open_with::OpenWithDialog;
-use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow, PdfWindow, PaintWindow, KanbanWindow, KanbanAction, AiChatWindow};
+use crate::ui::native::{self, ImageWindow, BrowserWindow, MusicWindow, GameWindow, PdfWindow, PaintWindow, KanbanWindow, KanbanAction, AiChatWindow, TransferWindow};
 use crate::ui::build_theme;
 use appcui::prelude::appbar::MenuButton;
 use appcui::prelude::menu::{Command, SingleChoice};
@@ -83,6 +83,7 @@ pub struct MyDesktop {
     browser_window: Handle<BrowserWindow>,
     music_window: Handle<MusicWindow>,
     pdf_window: Handle<PdfWindow>,
+    transfer_window: Handle<TransferWindow>,
     ai_window: Handle<AiChatWindow>,
     paint_window: Handle<PaintWindow>,
     kanban_windows: Vec<Handle<KanbanWindow>>,
@@ -100,7 +101,7 @@ pub struct MyDesktop {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum WindowTarget {
-    AiChat(Handle<AiChatWindow>), Kanban(Handle<KanbanWindow>), Paint(Handle<PaintWindow>), Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Pdf(Handle<PdfWindow>), Game(Handle<GameWindow>), Help(Handle<HelpWindow>),
+    Transfer(Handle<TransferWindow>), AiChat(Handle<AiChatWindow>), Kanban(Handle<KanbanWindow>), Paint(Handle<PaintWindow>), Terminal(Handle<TuiWindow>), Browser(Handle<BrowserWindow>), Image(Handle<ImageWindow>), Music(Handle<MusicWindow>), Pdf(Handle<PdfWindow>), Game(Handle<GameWindow>), Help(Handle<HelpWindow>),
 }
 #[derive(Clone, PartialEq)]
 struct WindowInfo { target: WindowTarget, caption: String, visible: bool, shortcut: Option<usize> }
@@ -118,6 +119,7 @@ fn taskbar_caption(title: &str) -> String {
 enum DesktopIntent { Exit, Power(SystemAction) }
 
 struct LockVisibility {
+    transfer: Option<(Handle<TransferWindow>,bool)>,
     ai: Option<(Handle<AiChatWindow>,bool)>,
     kanban: Vec<(Handle<KanbanWindow>, bool)>,
     paint: Option<(Handle<PaintWindow>, bool)>,
@@ -173,6 +175,7 @@ impl MyDesktop {
             browser_window: Handle::None,
             music_window: Handle::None,
             pdf_window: Handle::None,
+            transfer_window: Handle::None,
             ai_window: Handle::None,
             paint_window: Handle::None, pending_desktop: None,
             kanban_windows: Vec::new(), kanban_files: Default::default(), last_kanban: None,
@@ -227,6 +230,10 @@ impl MyDesktop {
                 let caption = if title == "Image Viewer" { title.to_owned() } else { format!("Image Viewer: {title}") };
                 (caption, window.is_visible(), None)
             }
+            WindowTarget::Transfer(handle) => {
+                let window = self.windowt(handle)?; if window.is_closing() { return None; }
+                ("File Transfer".into(),window.is_visible(),None)
+            }
             WindowTarget::AiChat(handle) => {
                 let window = self.windowt(handle)?; if window.is_closing() { return None; }
                 (window.title().to_owned(),window.is_visible(),None)
@@ -268,6 +275,7 @@ impl MyDesktop {
         self.reveal_workspace(target);
         match target {
             WindowTarget::Terminal(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
+            WindowTarget::Transfer(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(true); window.request_focus(); },
@@ -284,6 +292,7 @@ impl MyDesktop {
         if let Some(member) = self.members.iter_mut().find(|member| member.target == target) { member.hidden = true; }
         match target {
             WindowTarget::Terminal(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
+            WindowTarget::Transfer(handle) => if let Some(window) = self.window_mut(handle) { window.suspend(); window.set_visible(false); },
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.set_visible(false); },
@@ -302,6 +311,7 @@ impl MyDesktop {
         }
         match target {
             WindowTarget::Terminal(handle) => if let Some(window) = self.window_mut(handle) { window.close_command(); },
+            WindowTarget::Transfer(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Browser(handle) => if let Some(window) = self.window_mut(handle) { window.close(); },
             WindowTarget::Image(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
             WindowTarget::Music(handle) => if let Some(window) = self.window_mut(handle) { window.shutdown(); },
@@ -432,13 +442,14 @@ impl MyDesktop {
     }
     fn hide_for_terminal_lock(&mut self) -> LockVisibility {
         self.terminal_locked = true;
-        let mut visibility = LockVisibility { ai: None, kanban: Vec::new(), paint: None, terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None, pdf: None, games: Vec::new() };
+        let mut visibility = LockVisibility { transfer: None, ai: None, kanban: Vec::new(), paint: None, terminals: Vec::new(), help: Vec::new(), image: None, browser: None, music: None, pdf: None, games: Vec::new() };
         for handle in self.terminal_handles() {
             if let Some(window) = self.window_mut(handle) {
                 visibility.terminals.push((handle, window.is_visible()));
                 window.set_visible(false);
             }
         }
+        let handle = self.transfer_window; if let Some(window) = self.window_mut(handle) { visibility.transfer = Some((handle,window.is_visible())); window.suspend(); window.set_visible(false); }
         let handle = self.ai_window; if let Some(window) = self.window_mut(handle) { visibility.ai = Some((handle,window.is_visible())); window.set_visible(false); }
         for handle in self.kanban_windows.clone() {
             if let Some(window) = self.window_mut(handle) { visibility.kanban.push((handle,window.is_visible())); window.suspend(); window.set_visible(false); }
@@ -481,6 +492,7 @@ impl MyDesktop {
         visibility
     }
     fn restore_after_terminal_unlock(&mut self, visibility: LockVisibility) {
+        if let Some((handle,visible)) = visibility.transfer && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         if let Some((handle,visible)) = visibility.ai && let Some(window) = self.window_mut(handle) { window.set_visible(visible); }
         for (handle,visible) in visibility.kanban { if let Some(window) = self.window_mut(handle) { window.set_visible(visible); } }
         if let Some((handle, visible)) = visibility.paint
@@ -578,6 +590,7 @@ impl MyDesktop {
             },
             DesktopIntent::Exit => {
                 self.exit_saved = true;
+                let transfer = self.transfer_window; if let Some(window) = self.window_mut(transfer) { window.shutdown(); }
                 let ai = self.ai_window; if let Some(window) = self.window_mut(ai) { window.shutdown(); }
                 for handle in self.kanban_windows.clone() { if let Some(window) = self.window_mut(handle) { window.shutdown(); } }
                 let paint = self.paint_window;
@@ -617,6 +630,19 @@ impl MyDesktop {
             None => {},
         }
     }
+    fn open_file_transfer(&mut self) -> anyhow::Result<()> {
+        let handle = self.transfer_window;
+        if self.windowt(handle).is_some_and(|window| !window.is_closing()) {
+            self.focus_window(WindowTarget::Transfer(handle));
+        } else {
+            let mut window = TransferWindow::new()?;
+            window.constrain_to(self.desktop_rect().size());
+            self.transfer_window = self.add_window(window);
+            self.track_window(WindowTarget::Transfer(self.transfer_window));
+        }
+        Ok(())
+    }
+
     fn open_ai_chat(&mut self) {
         if self.pending_desktop.is_some() { return; }
         let handle = self.ai_window;
@@ -832,6 +858,7 @@ impl MyDesktop {
                 self.launch_external(index, shortcut.command, shortcut.args);
             }
             AppId::ImageViewer => self.open_image(None),
+            AppId::FileTransfer => if let Err(error) = self.open_file_transfer() { dialogs::error("Cannot open File Transfer",&format!("{error:#}")); },
             AppId::FileBrowser => self.open_browser(),
             AppId::MusicPlayer => self.open_music(None),
             AppId::AiChat => self.open_ai_chat(),
@@ -911,6 +938,7 @@ impl OnPaint for MyDesktop {
 impl OnResize for MyDesktop {
     fn on_resize(&mut self, _old_size: Size, _new_size: Size) {
         let available = self.desktop_rect().size();
+        let handle = self.transfer_window; if let Some(window) = self.window_mut(handle) { window.constrain_to(available); }
         let handle = self.ai_window; if let Some(window) = self.window_mut(handle) { window.constrain_to(available); }
         for handle in self.kanban_windows.clone() { if let Some(window) = self.window_mut(handle) { window.constrain_to(available); } }
         let paint = self.paint_window;
@@ -1138,6 +1166,7 @@ impl MenuEvents for MyDesktop {
         if let Some(task) = self.window_tasks.iter().find(|task| menu.get(task.focus).is_some()) {
             match task.info.target {
                 WindowTarget::Terminal(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
+                WindowTarget::Transfer(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Browser(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Image(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
                 WindowTarget::Music(handle) => Window::update_control(handle, |window| { window.request_focus(); }),
@@ -1331,6 +1360,28 @@ mod tests {
     use crate::config::preferences::Rgb;
     use crate::test_support::{TestDir, UI_LOCK};
     use virtual_terminal::{Input, Output};
+    #[test]
+    fn file_transfer_launch_reuses_and_restores_a_disconnected_utility_window() {
+        let _lock = UI_LOCK.lock().unwrap();
+        let dir = TestDir::new();
+        let mut desktop = MyDesktop::new(vec![],Preferences::default(),dir.path().join("preferences.toml"),None,Arc::new(NoSystemActions));
+        let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
+        DesktopEvents::on_start(&mut desktop);
+        let command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::FileTransfer).unwrap().0;
+        MenuEvents::on_command(&mut desktop,Handle::None,command,Commands::LaunchApplication);
+        let handle = desktop.transfer_window;
+        let target = WindowTarget::Transfer(handle);
+        desktop.move_to_workspace(target,1); desktop.hide_window(target);
+        desktop.launch_application(AppId::FileTransfer);
+        assert_eq!(desktop.transfer_window,handle); assert!(desktop.windowt(handle).unwrap().is_visible());
+        assert_eq!(desktop.active_workspace,1);
+        let before = desktop.hide_for_terminal_lock(); assert!(!desktop.windowt(handle).unwrap().is_visible());
+        desktop.restore_after_terminal_unlock(before); assert!(desktop.windowt(handle).unwrap().is_visible());
+        let session = desktop.session_snapshot();
+        assert!(session.windows.iter().any(|w| matches!(&w.launch,SavedLaunch::Native {app,path:None} if app == "file_transfer")));
+        desktop.close_window(target); assert!(desktop.window_info(target).is_none()); app.run();
+    }
+
     #[test]
     fn ai_chat_tracks_singleton_workspaces_lock_and_session_without_relaunching_requests() {
         let _lock = UI_LOCK.lock().unwrap(); let dir = TestDir::new();
@@ -1875,7 +1926,7 @@ mod tests {
         let mut desktop = MyDesktop::new(vec![], Preferences::default(), dir.path().join("settings.toml"), None, Arc::new(NoSystemActions));
         let app = App::debug(80,24,"Paint.Enable(false)").app_bar().timers_count(32).build().unwrap();
         DesktopEvents::on_start(&mut desktop);
-        assert_eq!(desktop.application_commands.len(), 14);
+        assert_eq!(desktop.application_commands.len(), 15);
         let browser_command = desktop.application_commands.iter().find(|entry| entry.1 == AppId::FileBrowser).unwrap().0;
         MenuEvents::on_command(&mut desktop, Handle::None, browser_command, Commands::LaunchApplication);
         let browser = desktop.browser_window;

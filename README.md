@@ -265,13 +265,15 @@ visible windows when space is limited; selecting one opens its Focus/Hide/Close
 actions. The status panel remains responsive.
 External windows with additional commands expose them through **App commands...**.
 
-Thirteen starters are available even with an empty shortcut directory:
+Fifteen starters are available even with an empty shortcut directory:
 
 | Category | Application | Executable |
 | --- | --- | --- |
 | System | File Browser | Native |
 | System | Terminal | `sh` |
 | Utility | System Performance | `btm` ([bottom](https://github.com/ClementTsang/bottom)) |
+| Utility | AI Chat | Native |
+| Utility | File Transfer | Native (FTP, OpenSSH SFTP, legacy SCP) |
 | Utility | Image Viewer | Native |
 | Utility | PDF Reader | Native (Poppler rendering) |
 | Utility | Text editor | `nano` |
@@ -454,6 +456,21 @@ working sound device and audio session. Building from source needs a C compiler.
 The optional [mp3blaster shortcut](shortcuts/mp3blaster.toml)
 launches the separate external player if you prefer its interface; it is independent
 of the native Music Player and still needs mp3blaster installed on PATH.
+
+**File Transfer** opens under **Application → Utility**. Press **F2** to connect once or
+**F3** to manage saved sites. Choose **FTP (unencrypted)** for a passive, binary FTP
+connection, **Modern OpenSSH (SFTP)** for an SSH account with SFTP access, or
+**Legacy SCP** for a server with a POSIX shell and the original SCP program.
+The SSH modes use your installed OpenSSH client, including SSH aliases, identity
+files, agent keys, jump hosts, known hosts, and interactive login prompts.
+
+Browse local files on the left and remote files on the right. **Tab** changes
+panes, **Enter** opens a directory, **Backspace** goes up, and **Space** marks
+entries. **F5** uploads from the local pane or downloads from the remote pane
+into the opposite folder. Folders merge, including empty folders. At a same-name
+file, choose Replace, Skip, or Cancel. **F8** cancels the batch. Completed files
+remain available. **Ctrl+R** refreshes the active listing and **F1** shows the
+full status. Narrow windows show the active pane.
 
 **File Browser** starts in your remembered folder, using your home directory
 initially. Enter an absolute or relative path in the path field and press Enter, or open a directory in the listing.

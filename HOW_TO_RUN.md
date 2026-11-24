@@ -71,7 +71,7 @@ an explicit shortcut directory is used. Typical locations are:
 
 No sample shortcuts are copied into the default directory. Platform-specific
 configuration paths do not establish runtime support beyond the Unix PTY
-requirement. An empty directory still provides the thirteen starter apps through Application.
+requirement. An empty directory still provides the fifteen starter apps through Application.
 External starters (`sh`, `btm`, and `nano`) require separately installed tools.
 Carboxyl is included in the portable Linux package; source/Cargo installations
 can use a separately installed copy.
@@ -324,6 +324,26 @@ and Minesweeper under **Application > Games**. See
 controls, ASCII Paint projects/text export, and Text editor document handling. PDF Reader needs Poppler's
 `pdfinfo` and `pdftoppm` on PATH (`poppler-utils` on Debian/Ubuntu or `poppler`
 on Arch); rendering runs outside the UI and needs no graphical session.
+
+## Use File Transfer
+
+Choose **Application > Utility > File Transfer**, then **F2**. FTP is built in.
+Both SSH modes require the system `ssh` client. Legacy SCP also requires a local
+`scp` with the `-O` option and a server that allows SCP, a POSIX shell and
+standard file utilities. Modern mode only needs an SFTP-enabled account on the
+server. A connection can use an existing SSH alias. Leave its username and port
+blank to inherit the OpenSSH settings. FTP defaults to port 21.
+
+Use **F3** to store connection details and starting folders under
+`file-transfer/sites.json` in the Desktop-TUI configuration directory.
+Passwords and key passphrases are entered when needed. File Transfer always
+starts disconnected.
+
+Open the source folder in one pane and the destination folder in the other,
+then use **Tab**, **Space**, and **F5** to select a direction, mark items, and copy.
+When an FTP session drops during final rename, reconnect and inspect the
+destination before retrying. FTP has no portable rename operation that can
+atomically refuse a destination created by another writer.
 
 ## Use AI Chat
 
